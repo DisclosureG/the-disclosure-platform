@@ -64,9 +64,7 @@ const Infinity = () => {
             <a href="https://www.netflix.com/be-en/title/81408990" target="_blank" rel="noopener noreferrer">Watch on Netflix</a>
           </div>
         </div>
-      </section>
 
-      <section className="video-grid">
         <div className="video-card breathing-element" style={{'--delay': '2.5s'}}>
           <div className="card-inner">
             <a href="https://www.youtube.com/playlist?list=PLWXeU3K0sz2Xk62ry_rLeRKCKhXRzEd9n" target="_blank" rel="noopener noreferrer">
@@ -77,7 +75,9 @@ const Infinity = () => {
             <a href="https://www.youtube.com/playlist?list=PLWXeU3K0sz2Xk62ry_rLeRKCKhXRzEd9n" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
           </div>
         </div>
+      </section>
 
+      <section className="video-grid">
         <div className="video-card breathing-element" style={{'--delay': '3.0s'}}>
           <div className="card-inner">
             <a href="https://www.youtube.com/watch?v=Em3XplqnoF4" target="_blank" rel="noopener noreferrer">
