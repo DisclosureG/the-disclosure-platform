@@ -121,7 +121,8 @@ const Music = () => {
         backgroundColor: 'rgba(0, 0, 0, 0.8)',
         backdropFilter: 'blur(10px)',
         zIndex: 1000,
-        padding: '10px',
+        padding: '10px 10px 0 10px',
+        margin: 0,
         boxShadow: '0 -4px 20px rgba(0, 0, 0, 0.5)'
       }}>
         <iframe data-testid="embed-iframe" style={{borderRadius: '12px'}} src="https://open.spotify.com/embed/track/21KmD4GGubAmJnZFwRsHCG?utm_source=generator" width="100%" height="152" frameBorder="0" allowFullScreen="" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>
