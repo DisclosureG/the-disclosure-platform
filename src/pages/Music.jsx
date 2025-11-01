@@ -113,19 +113,12 @@ const Music = () => {
       </section>
 
       <div style={{
-        position: 'fixed',
-        bottom: 0,
-        left: 0,
-        right: 0,
         width: '100%',
-        zIndex: 1000,
-        margin: 0,
+        margin: '40px 0 0 0',
         padding: 0
       }}>
         <iframe data-testid="embed-iframe" style={{borderRadius: '0', display: 'block'}} src="https://open.spotify.com/embed/track/21KmD4GGubAmJnZFwRsHCG?utm_source=generator" width="100%" height="152" frameBorder="0" allowFullScreen="" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>
       </div>
-      
-      <div style={{height: '152px'}}></div>
     </>
   );
 };
