@@ -259,7 +259,7 @@ const Layout = ({ children }) => {
           className={isActive('/phd/easter-egg') ? 'active' : ''}
           onClick={closeSidebar}
         >
-          🥚 Easter Egg
+          🥚
         </Link>
         <Link 
           to="/phd" 

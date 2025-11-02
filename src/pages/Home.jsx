@@ -124,7 +124,7 @@ const Home = () => {
         </div>
 
         <div id="egg-container">
-          <Link id="easter-egg" className="trippy-button" to="/phd/easter-egg">🥚 Easter Egg</Link>
+          <Link id="easter-egg" className="trippy-button" to="/phd/easter-egg">🥚</Link>
         </div>
       </div>
     </>
