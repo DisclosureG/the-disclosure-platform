@@ -78,16 +78,6 @@ const Music = () => {
       </section>
 
       <section className="video-grid">
-        <div className="video-card breathing-element" style={{'--delay': '2.5s'}}>
-          <div className="card-inner">
-            <a href="https://www.youtube.com/watch?v=KnzmnTagueM&list=RDKnzmnTagueM&start_radio=1" target="_blank" rel="noopener noreferrer">
-              <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTFzmz3hRTEAqy84317sz6e4yoqd9r-TxxHpw&s" alt="Mr Traumatik - Ark of the Covenant" />
-            </a>
-            <h3>Jericho</h3>
-            <p>Iniko</p>
-            <a href="https://www.youtube.com/watch?v=KnzmnTagueM&list=RDKnzmnTagueM&start_radio=1" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
-          </div>
-        </div>
 
         <div className="video-card breathing-element" style={{'--delay': '3s'}}>
           <div className="card-inner">
@@ -108,6 +98,30 @@ const Music = () => {
             <h3>Awake My Soul</h3>
             <p>Mumford & Sons</p>
             <a href="https://www.youtube.com/watch?v=1EQzCoF7uA8" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
+          </div>
+        </div>
+
+        <div className="video-card breathing-element" style={{'--delay': '2.5s'}}>
+          <div className="card-inner">
+            <a href="https://www.youtube.com/watch?v=KnzmnTagueM&list=RDKnzmnTagueM&start_radio=1" target="_blank" rel="noopener noreferrer">
+              <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTFzmz3hRTEAqy84317sz6e4yoqd9r-TxxHpw&s" alt="Mr Traumatik - Ark of the Covenant" />
+            </a>
+            <h3>Jericho</h3>
+            <p>Iniko</p>
+            <a href="https://www.youtube.com/watch?v=KnzmnTagueM&list=RDKnzmnTagueM&start_radio=1" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
+          </div>
+        </div>
+      </section>
+
+       <section className="video-grid">
+        <div className="video-card breathing-element" style={{'--delay': '3.0s'}}>
+          <div className="card-inner">
+            <a href="https://www.youtube.com/watch?v=SrtI7_VQYkg&list=RDSrtI7_VQYkg&start_radio=1" target="_blank" rel="noopener noreferrer">
+              <img src="https://i.scdn.co/image/ab67616d00001e02a522147972088448423bfce7" alt="Transcendental Meditation" />
+            </a>
+            <h3>Ark of the Covenant</h3>
+            <p>Mr Traumatik ॐ</p>
+            <a href="https://www.youtube.com/watch?v=SrtI7_VQYkg&list=RDSrtI7_VQYkg&start_radio=1" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
           </div>
         </div>
       </section>
