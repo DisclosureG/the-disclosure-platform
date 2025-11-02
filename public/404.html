@@ -5,24 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Interstellar Psychology</title>
   <link rel="icon" type="image/png" href="/artefacts/favicon.png" />
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "WebSite",
-    "name": "Interstellar Psychology",
-    "url": "https://interstellar-psychology.com/",
-    "description": "Exploring consciousness, cosmic psychology, and metaphysical phenomena — music, psychedelics, telepathy, remote viewing, multiverse, infinity, and more.",
-    "inLanguage": "en",
-    "potentialAction": {
-      "@type": "SearchAction",
-      "target": "https://interstellar-psychology.com/?s={search_term_string}",
-      "query-input": "required name=search_term_string"
-    }
-  }
+  <script>
+    // GitHub Pages SPA redirect - store the path and redirect to index.html
+    sessionStorage.setItem('redirect', location.pathname + location.search + location.hash);
   </script>
+  <meta http-equiv="refresh" content="0;URL='/'" />
 </head>
 <body>
-  <div id="root"></div>
-  <script type="module" src="/src/main.jsx"></script>
 </body>
 </html>
