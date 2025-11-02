@@ -56,7 +56,7 @@ const Multiverse = () => {
               <img src="https://ufo-network.com/wp-content/uploads/2022/08/Awakenings-Release-Feature-2-scaled.jpg.webp" alt="Awakenings" />
             </a>
             <h3>Awakenings ❤️</h3>
-            <p>Spiritual awakening at Awakenings 😂</p>
+            <p>Spiritual awakening at Awakenings 👽</p>
             <p>Best time of my life!</p>
             <a href="https://www.youtube.com/watch?v=c-oaLJVjVnM" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
           </div>
