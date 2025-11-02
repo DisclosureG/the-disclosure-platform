@@ -63,7 +63,7 @@ const RemoteViewing = () => {
       </section>
 
       <div className="footer">
-        <p>Visit <a href="https://www.monroeinstitute.org/" style={{color: '#00FFFF', textDecoration: 'none'}}>Monroe Institute</a></p>
+        <p>Visit <a href="https://www.monroeinstitute.org/" target="_blank" rel="noopener noreferrer" style={{color: '#00FFFF', textDecoration: 'none'}}>Monroe Institute</a></p>
       </div>
     </>
   );

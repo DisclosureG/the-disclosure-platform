@@ -63,7 +63,7 @@ const OutOfBodyExperience = () => {
       </section>
 
       <div className="footer">
-        <p>Learn Darius J. Wright's <a href="https://dariusjwright.com/my-mission" style={{color: '#00FFFF', textDecoration: 'none'}}>Mission</a></p>
+        <p>Learn Darius J. Wright's <a href="https://dariusjwright.com/my-mission" target="_blank" rel="noopener noreferrer" style={{color: '#00FFFF', textDecoration: 'none'}}>Mission</a></p>
       </div>
     </>
   );
