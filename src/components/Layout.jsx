@@ -262,18 +262,18 @@ const Layout = ({ children }) => {
           🥚 Easter Egg
         </Link>
         <Link 
-          to="/phd/multiverse/purchase" 
-          className={isActive('/phd/multiverse/purchase') ? 'active' : ''}
-          onClick={closeSidebar}
-        >
-          Purchase
-        </Link>
-        <Link 
           to="/phd" 
           className={isActive('/phd') ? 'active' : ''}
           onClick={closeSidebar}
         >
           PhD
+        </Link>
+        <Link 
+          to="/phd/multiverse/purchase" 
+          className={isActive('/phd/multiverse/purchase') ? 'active' : ''}
+          onClick={closeSidebar}
+        >
+          Purchase
         </Link>
         </div>
       </nav>
