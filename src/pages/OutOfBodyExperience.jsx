@@ -49,21 +49,10 @@ const OutOfBodyExperience = () => {
             <a href="https://www.youtube.com/@AnthonyCheneProduction/playlists" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
           </div>
         </div>
-
-        <div className="video-card">
-          <div className="card-inner">
-            <a href="https://www.youtube.com/watch?v=_aHCQnpJWMo" target="_blank" rel="noopener noreferrer">
-              <img src="https://i.ytimg.com/vi/_aHCQnpJWMo/hq720.jpg?sqp=-oaymwEhCK4FEIIDSFryq4qpAxMIARUAAAAAGAElAADIQj0AgKJD&rs=AOn4CLBi8FuFUwyEUORudIAdQqytAAX47A" alt="The nature of reality With Darius J. Wright" />
-            </a>
-            <h3>The nature of reality</h3>
-            <p>Master Out of Body Experiencer Darius J. Wright</p>
-            <a href="https://www.youtube.com/watch?v=_aHCQnpJWMo" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
-          </div>
-        </div>
       </section>
 
       <div className="footer">
-        <p>Learn Darius J. Wright's <a href="https://dariusjwright.com/my-mission" target="_blank" rel="noopener noreferrer" style={{color: '#00FFFF', textDecoration: 'none'}}>Mission</a></p>
+        <p>Visit <a href="https://www.monroeinstitute.org/" target="_blank" rel="noopener noreferrer" style={{color: '#00FFFF', textDecoration: 'none'}}>Monroe Institute</a></p>
       </div>
     </>
   );
