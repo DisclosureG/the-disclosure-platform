@@ -163,12 +163,6 @@ const Purchase = () => {
         </div>
       </div>
 
-      <div style={{textAlign: 'center', margin: '20px 0'}}>
-        <Link to="/phd/multiverse">
-          <button className="go-back-btn">Go Back</button>
-        </Link>
-      </div>
-
       <footer className="footer">
         <p>Interstellar Psychology <span className="heart">❤️</span></p>
       </footer>
