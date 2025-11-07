@@ -50,7 +50,7 @@ const Music = () => {
             </a>
             <h3>Believer</h3>
             <p>Imagine Dragons</p>
-            <a href="https://www.youtube.com/watch?v=W0DM5lcj6mw" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
+            <a href="https://www.youtube.com/watch?v=W0DM5lcj6mw" target="_blank" rel="noopener noreferrer">Listen on YouTube</a>
           </div>
         </div>
 
@@ -61,7 +61,7 @@ const Music = () => {
             </a>
             <h3>Radioactive</h3>
             <p>Imagine Dragons</p>
-            <a href="https://www.youtube.com/watch?v=w3viBe2Q0P8" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
+            <a href="https://www.youtube.com/watch?v=w3viBe2Q0P8" target="_blank" rel="noopener noreferrer">Listen on YouTube</a>
           </div>
         </div>
 
@@ -72,7 +72,7 @@ const Music = () => {
             </a>
             <h3>Natural</h3>
             <p>Imagine Dragons</p>
-            <a href="https://www.youtube.com/watch?v=V5M2WZiAy6k" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
+            <a href="https://www.youtube.com/watch?v=V5M2WZiAy6k" target="_blank" rel="noopener noreferrer">Listen on YouTube</a>
           </div>
         </div>
       </section>
@@ -86,7 +86,7 @@ const Music = () => {
             </a>
             <h3>Simon Papa Tara</h3>
             <p>Yannick Noah</p>
-            <a href="https://www.youtube.com/watch?v=fyxHLnDODbA" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
+            <a href="https://www.youtube.com/watch?v=fyxHLnDODbA" target="_blank" rel="noopener noreferrer">Listen on YouTube</a>
           </div>
         </div>
 
@@ -97,7 +97,7 @@ const Music = () => {
             </a>
             <h3>Awake My Soul</h3>
             <p>Mumford & Sons</p>
-            <a href="https://www.youtube.com/watch?v=1EQzCoF7uA8" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
+            <a href="https://www.youtube.com/watch?v=1EQzCoF7uA8" target="_blank" rel="noopener noreferrer">Listen on YouTube</a>
           </div>
         </div>
 
@@ -108,7 +108,7 @@ const Music = () => {
             </a>
             <h3>Jericho</h3>
             <p>Iniko</p>
-            <a href="https://www.youtube.com/watch?v=KnzmnTagueM&list=RDKnzmnTagueM&start_radio=1" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
+            <a href="https://www.youtube.com/watch?v=KnzmnTagueM&list=RDKnzmnTagueM&start_radio=1" target="_blank" rel="noopener noreferrer">Listen on YouTube</a>
           </div>
         </div>
       </section>
@@ -121,7 +121,7 @@ const Music = () => {
             </a>
             <h3>Ark of the Covenant</h3>
             <p>Mr Traumatik ॐ</p>
-            <a href="https://www.youtube.com/watch?v=SrtI7_VQYkg&list=RDSrtI7_VQYkg&start_radio=1" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
+            <a href="https://www.youtube.com/watch?v=SrtI7_VQYkg&list=RDSrtI7_VQYkg&start_radio=1" target="_blank" rel="noopener noreferrer">Listen on YouTube</a>
           </div>
         </div>
       </section>
