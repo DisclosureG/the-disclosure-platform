@@ -56,7 +56,17 @@ const Multiverse = () => {
               <img src="https://ufo-network.com/wp-content/uploads/2022/08/Awakenings-Release-Feature-2-scaled.jpg.webp" alt="Awakenings" />
             </a>
             <h3>Awakenings ❤️</h3>
-            <p>Spiritual awakening at Awakenings 👽</p>
+            <p>Spiritual awakening at Awakenings <svg width="50" height="35" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg" className="third-eye" style={{ verticalAlign: 'middle', margin: '0 4px' }}>
+              <path d="M60 40 Q 30 0 0 40 Q 30 80 60 40 Z" fill="rgba(142, 68, 173, 0.2)" stroke="#9b59b6" strokeWidth="2" />
+              <path d="M60 40 Q 90 0 120 40 Q 90 80 60 40 Z" fill="rgba(142, 68, 173, 0.2)" stroke="#9b59b6" strokeWidth="2" />
+              <circle cx="60" cy="40" r="18" fill="#1a0033" stroke="#8e44ad" strokeWidth="2" />
+              <path d="M60 52 L46 32 L74 32 Z" fill="none" stroke="#d2b4de" strokeWidth="1.5" />
+              <text x="60" y="46" fontSize="12" fill="#fff" textAnchor="middle" fontWeight="bold">ॐ</text>
+              <circle cx="60" cy="20" r="2.5" fill="#fff">
+                <animate attributeName="opacity" values="0.4;1;0.4" dur="2s" repeatCount="indefinite" />
+                <animate attributeName="r" values="2;3;2" dur="2s" repeatCount="indefinite" />
+              </circle>
+            </svg></p>
             <p>Best time of my life!</p>
             <a href="https://www.youtube.com/watch?v=c-oaLJVjVnM" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
           </div>
