@@ -797,7 +797,31 @@ body {
 .trippy-button.fade-in { animation: fadeInMystic 1s ease forwards; }
 .trippy-button.fade-in:hover { transform: scale(1.08) rotate(.5deg); }
 
-/* Sequential delays */
+
+/* --------------------
+   Flower of Life
+--------------------- */
+.flower-of-life {
+  width: 100%;
+  height: auto;
+  max-width: 200px;
+  margin: 0 auto;
+  display: block;
+  animation: spin 20s linear infinite, hue-cycle 10s linear infinite;
+  filter: drop-shadow(0 0 10px rgba(0, 255, 255, 0.5));
+  transition: filter 0.3s ease;
+}
+
+.flower-of-life:hover {
+  filter: drop-shadow(0 0 20px rgba(255, 0, 255, 0.8));
+  animation-duration: 10s, 5s; /* Speed up on hover */
+}
+
+@keyframes hue-cycle {
+  0% { filter: hue-rotate(0deg) drop-shadow(0 0 10px rgba(0, 255, 255, 0.5)); }
+  50% { filter: hue-rotate(180deg) drop-shadow(0 0 15px rgba(255, 0, 255, 0.5)); }
+  100% { filter: hue-rotate(360deg) drop-shadow(0 0 10px rgba(0, 255, 255, 0.5)); }
+}
 .row1 .trippy-button:nth-of-type(1) { animation-delay: 0s; }
 .row1 .trippy-button:nth-of-type(2) { animation-delay: 0.36s; }
 .row1 .trippy-button:nth-of-type(3) { animation-delay: 0.72s; }

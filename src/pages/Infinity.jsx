@@ -23,26 +23,26 @@ const Infinity = () => {
     <>
       <div className="particles" id="particles"></div>
 
-      <header className="header breathing-element" style={{"--delay": "0s"}}>
+      <header className="header breathing-element" style={{ "--delay": "0s" }}>
         <h1>
           <div className="card-inner">Infinity</div>
         </h1>
       </header>
 
-      <section className="intro breathing-element" style={{"--delay": "0.5s"}}>
+      <section className="intro breathing-element" style={{ "--delay": "0.5s" }}>
         <p>The universe spirals inward and outward, a kaleidoscope of endless mirrors.
-        Each atom hums with the echo of infinity, a fractal dance where every edge births a new universe, splitting and folding into itself.
-        Stars collapse, yet their dust weaves galaxies anew—patterns repeating, never the same, a cosmic mandala.
-        You are a fragment of this fractal, a fleeting note in an eternal symphony, where the infinite whispers: there is no end, only deeper layers of wonder.</p>
+          Each atom hums with the echo of infinity, a fractal dance where every edge births a new universe, splitting and folding into itself.
+          Stars collapse, yet their dust weaves galaxies anew—patterns repeating, never the same, a cosmic mandala.
+          You are a fragment of this fractal, a fleeting note in an eternal symphony, where the infinite whispers: there is no end, only deeper layers of wonder.</p>
       </section>
 
-      <section className="explore-intro breathing-element" style={{"--delay": "1s"}}>
+      <section className="explore-intro breathing-element" style={{ "--delay": "1s" }}>
         <p>Open your mind and explore the trippy realm of Infinity through these mind-bending videos.</p>
         <p>Dive deep into the cosmic rabbit hole and awaken your third eye!</p>
       </section>
 
       <section className="video-grid">
-        <div className="video-card breathing-element" style={{'--delay': '1.5s'}}>
+        <div className="video-card breathing-element" style={{ '--delay': '1.5s' }}>
           <div className="card-inner">
             <a href="https://www.netflix.com/be-en/title/81408994" target="_blank" rel="noopener noreferrer">
               <img src="https://images.squarespace-cdn.com/content/v1/5b144601d274cbcb6220ee14/b51443ad-5b37-469b-9a01-d8bd6aea6e9d/CloudsAreNotSpheres-ThumbClean.jpg" alt="Clouds Are Not Spheres" />
@@ -53,7 +53,7 @@ const Infinity = () => {
           </div>
         </div>
 
-        <div className="video-card breathing-element" style={{'--delay': '2.0s'}}>
+        <div className="video-card breathing-element" style={{ '--delay': '2.0s' }}>
           <div className="card-inner">
             <a href="https://www.netflix.com/be-en/title/81408990" target="_blank" rel="noopener noreferrer">
               <img src="https://m.media-amazon.com/images/S/pv-target-images/a672451a7eb628477681a2909b6aa2f63c28e80150c474f1565b4a45e5fb3e00.jpg" alt="The Colours of Infinity" />
@@ -65,7 +65,7 @@ const Infinity = () => {
           </div>
         </div>
 
-        <div className="video-card breathing-element" style={{'--delay': '2.5s'}}>
+        <div className="video-card breathing-element" style={{ '--delay': '2.5s' }}>
           <div className="card-inner">
             <a href="https://www.youtube.com/playlist?list=PLWXeU3K0sz2Xk62ry_rLeRKCKhXRzEd9n" target="_blank" rel="noopener noreferrer">
               <img src="https://i.ytimg.com/vi/IYtWsrc6Sps/hq720.jpg?sqp=-oaymwEhCK4FEIIDSFryq4qpAxMIARUAAAAAGAElAADIQj0AgKJD&rs=AOn4CLAXyd8qcmZFhgGO6cs4cVV2R-dpuA" alt="Dare to do. Motivation" />
@@ -78,7 +78,7 @@ const Infinity = () => {
       </section>
 
       <section className="video-grid">
-        <div className="video-card breathing-element" style={{'--delay': '3.0s'}}>
+        <div className="video-card breathing-element" style={{ '--delay': '3.0s' }}>
           <div className="card-inner">
             <a href="https://www.youtube.com/watch?v=Em3XplqnoF4" target="_blank" rel="noopener noreferrer">
               <img src="https://thumbs.dreamstime.com/b/white-dove-olive-branch-hovering-above-earth-globe-radiant-light-international-day-peace-world-un-global-celebration-354468401.jpg" alt="Transcendental Meditation" />
@@ -88,13 +88,20 @@ const Infinity = () => {
             <a href="https://www.youtube.com/watch?v=Em3XplqnoF4" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
           </div>
         </div>
+
+        <div className="video-card breathing-element" style={{ '--delay': '3.5s' }}>
+          <div className="card-inner">
+            <a href="https://www.youtube.com/watch?v=uetIAbLXtIw&t=635s" target="_blank" rel="noopener noreferrer">
+              <img src="/artefacts/flower_of_life.svg" alt="Flower of Life" className="flower-of-life" />
+            </a>
+            <h3>Flower of Life</h3>
+            <p>Sacred Geometry</p>
+            <a href="https://www.youtube.com/watch?v=uetIAbLXtIw&t=635s" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
+          </div>
+        </div>
       </section>
 
-      <section className="centered pad-27">
-        <a href="https://maps.app.goo.gl/yk278FVshgDKPV1g8" target="_blank" rel="noopener noreferrer">
-          <img src="/artefacts/peace.jpg" alt="Peace" className="glowing-image responsive-img breathing-element" style={{'--delay': '2.5s'}} />
-        </a>
-      </section>
+
 
       <div className="footer">
         <p>
