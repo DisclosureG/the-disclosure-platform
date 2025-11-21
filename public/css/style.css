@@ -1922,3 +1922,22 @@ body {
   filter: drop-shadow(0 0 15px #9b59b6);
   animation: pulse 4s infinite;
 }
+/* --------------------
+   Mandelbrot Icon
+--------------------- */
+.mandelbrot-icon {
+  width: 100%;
+  height: auto;
+  max-width: 200px;
+  margin: 0 auto;
+  display: block;
+  animation: spin 30s linear infinite reverse, hue-cycle 15s linear infinite;
+  filter: drop-shadow(0 0 10px rgba(0, 255, 255, 0.5));
+  transition: filter 0.3s ease, transform 0.3s ease;
+}
+
+.mandelbrot-icon:hover {
+  filter: drop-shadow(0 0 25px rgba(255, 0, 255, 0.9));
+  animation-duration: 15s, 7s; /* Speed up on hover */
+  transform: scale(1.1);
+}

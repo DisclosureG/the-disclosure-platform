@@ -99,6 +99,17 @@ const Infinity = () => {
             <a href="https://www.youtube.com/watch?v=uetIAbLXtIw&t=635s" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
           </div>
         </div>
+
+        <div className="video-card breathing-element" style={{ '--delay': '4.0s' }}>
+          <div className="card-inner">
+            <a href="/artefacts/Sacred-fractal-geometry.pdf" target="_blank" rel="noopener noreferrer">
+              <img src="/artefacts/mandelbrot.svg" alt="Mandelbrot" className="mandelbrot-icon" />
+            </a>
+            <h3>Mandelbrot</h3>
+            <p>Sacred Fractal Geometry</p>
+            <a href="/artefacts/Sacred-fractal-geometry.pdf" target="_blank" rel="noopener noreferrer">Read Paper</a>
+          </div>
+        </div>
       </section>
 
 
