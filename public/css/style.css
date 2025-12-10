@@ -1117,11 +1117,7 @@ body {
   transition: filter 0.3s ease;
 }
 
-.flower-of-life:hover {
-  filter: drop-shadow(0 0 20px rgba(255, 0, 255, 0.8));
-  animation-duration: 10s, 5s;
-  /* Speed up on hover */
-}
+
 
 @keyframes hue-cycle {
   0% {
@@ -1936,8 +1932,4 @@ body {
   transition: filter 0.3s ease, transform 0.3s ease;
 }
 
-.mandelbrot-icon:hover {
-  filter: drop-shadow(0 0 25px rgba(255, 0, 255, 0.9));
-  animation-duration: 15s, 7s; /* Speed up on hover */
-  transform: scale(1.1);
-}
+

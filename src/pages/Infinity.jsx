@@ -41,6 +41,10 @@ const Infinity = () => {
         <p>Dive deep into the cosmic rabbit hole and awaken your third eye!</p>
       </section>
 
+      <div className="symbol-container" style={{ textAlign: 'center', marginBottom: '3rem' }}>
+        <img src="/artefacts/flower_of_life.svg" alt="Flower of Life" className="flower-of-life" />
+      </div>
+
       <section className="video-grid">
         <div className="video-card breathing-element" style={{ '--delay': '1.5s' }}>
           <div className="card-inner">
@@ -89,30 +93,12 @@ const Infinity = () => {
           </div>
         </div>
 
-        <div className="video-card breathing-element" style={{ '--delay': '3.5s' }}>
-          <div className="card-inner">
-            <a href="https://www.youtube.com/watch?v=uetIAbLXtIw&t=635s" target="_blank" rel="noopener noreferrer">
-              <img src="/artefacts/flower_of_life.svg" alt="Flower of Life" className="flower-of-life" />
-            </a>
-            <h3>Flower of Life</h3>
-            <p>Sacred Geometry</p>
-            <a href="https://www.youtube.com/watch?v=uetIAbLXtIw&t=635s" target="_blank" rel="noopener noreferrer">Watch on YouTube</a>
-          </div>
-        </div>
 
-        <div className="video-card breathing-element" style={{ '--delay': '4.0s' }}>
-          <div className="card-inner">
-            <a href="/artefacts/Sacred-fractal-geometry.pdf" target="_blank" rel="noopener noreferrer">
-              <img src="/artefacts/mandelbrot.svg" alt="Mandelbrot" className="mandelbrot-icon" />
-            </a>
-            <h3>Mandelbrot</h3>
-            <p>Sacred Fractal Geometry</p>
-            <a href="/artefacts/Sacred-fractal-geometry.pdf" target="_blank" rel="noopener noreferrer">Read Paper</a>
-          </div>
-        </div>
       </section>
 
-
+      <div className="symbol-container" style={{ textAlign: 'center', marginTop: '3rem', marginBottom: '3rem' }}>
+        <img src="/artefacts/mandelbrot.svg" alt="Mandelbrot" className="mandelbrot-icon" />
+      </div>
 
       <div className="footer">
         <p>
