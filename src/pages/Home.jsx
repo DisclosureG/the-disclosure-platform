@@ -1,134 +1,321 @@
-import { useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { Sigil, MandalaBg, BrandMark } from '../components/Sigil';
+import Pillars from '../components/Pillars';
+import PurchaseModal from '../components/PurchaseModal';
+import VideoModal from '../components/VideoModal';
+import AudioBg from '../components/AudioBg';
 
-const Home = () => {
-  const videoBackgroundRef = useRef(null);
-  const playerRef = useRef(null);
-  
+function useScrollSpy(ids) {
+  const [active, setActive] = useState(ids[0]);
   useEffect(() => {
-    // Matrix text animation
-    const matrixText = document.getElementById('matrix-text');
-    
-    const animateText = () => {
-      const sequence = [
-        { text: 'Wake up, Neo...', typeClass: 'typing-neo', deleteClass: 'deleting-neo', typeDuration: 3000, deleteDuration: 3690 }
-      ];
-      
-      const displayWord = (index) => {
-        if (index >= sequence.length) { 
-          setTimeout(animateText, 600); 
-          return; 
-        }
-        const { text, typeClass, deleteClass, typeDuration, deleteDuration } = sequence[index];
-        matrixText.textContent = text;
-        matrixText.className = `matrix-text ${typeClass}`;
-        setTimeout(() => {
-          matrixText.className = `matrix-text ${deleteClass}`;
-          setTimeout(() => displayWord(index + 1), deleteDuration);
-        }, typeDuration);
-      };
-      displayWord(0);
+    const onScroll = () => {
+      const y = window.scrollY + 140;
+      let cur = ids[0];
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el && el.offsetTop <= y) cur = id;
+      }
+      setActive(cur);
     };
-    
-    setTimeout(animateText, 3900);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [ids.join(',')]);
+  return active;
+}
 
-    // YouTube video background
-    const prefersNoVideo =
-      matchMedia('(max-width: 768px)').matches ||
-      matchMedia('(pointer: coarse)').matches;
+function useFadeIn() {
+  useEffect(() => {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting) {
+          e.target.classList.add('visible');
+          io.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.12 });
 
-    if (!prefersNoVideo) {
-      const tag = document.createElement('script');
-      tag.src = "https://www.youtube.com/iframe_api";
-      tag.onload = () => {
-        window.onYouTubeIframeAPIReady = () => {
-          if (prefersNoVideo) {
-            if (videoBackgroundRef.current) {
-              videoBackgroundRef.current.style.display = 'none';
-            }
-            return;
-          }
+    const observe = () => {
+      document.querySelectorAll('.fade-in:not(.visible)').forEach((el) => io.observe(el));
+    };
+    observe();
 
-          window.player = new window.YT.Player('player', {
-            videoId: '6ouG6L-2L3Q',
-            playerVars: {
-              autoplay: 1,
-              controls: 0,
-              mute: 1,
-              loop: 1,
-              playlist: '6ouG6L-2L3Q',
-              showinfo: 0,
-              modestbranding: 1,
-              playsinline: 1
-            },
-            events: { 
-              'onReady': (event) => {
-                if (videoBackgroundRef.current) {
-                  videoBackgroundRef.current.classList.add('fade-in');
-                }
-                event.target.mute();
-                event.target.playVideo().catch(() => {});
-
-                const resizeVideo = () => {
-                  const video = document.getElementById('player');
-                  if (!video) return;
-                  const aspectRatio = 16 / 9;
-                  const windowRatio = window.innerWidth / window.innerHeight;
-                  if (windowRatio > aspectRatio) {
-                    video.style.width = '120vw';
-                    video.style.height = `${120 * windowRatio / aspectRatio}vw`;
-                  } else {
-                    video.style.width = `${120 * aspectRatio / windowRatio}vh`;
-                    video.style.height = '120vh';
-                  }
-                };
-                resizeVideo();
-                window.addEventListener('resize', resizeVideo);
-              }
-            }
-          });
-        };
-      };
-      document.head.appendChild(tag);
-    }
-
-    // Button fade-in animation
-    const buttons = document.querySelectorAll('.trippy-button');
-    buttons.forEach(btn => {
-      void btn.offsetWidth;
-      btn.classList.add('fade-in');
-    });
+    const mo = new MutationObserver(observe);
+    mo.observe(document.body, { childList: true, subtree: true });
+    return () => { io.disconnect(); mo.disconnect(); };
   }, []);
+}
+
+function Nav({ active, onBuy }) {
+  const links = [
+    { id: 'manifesto', label: 'Manifesto' },
+    { id: 'pillars', label: 'Pillars' },
+    { id: 'book', label: 'Book' },
+    { id: 'peace', label: 'Peace' },
+  ];
 
   return (
+    <nav className="nav">
+      <div className="nav-inner">
+        <a href="#top" className="brand">
+          <BrandMark />
+          <span className="brand-text">
+            Interstellar Psychology
+            <small>A Multiverse of Love</small>
+          </span>
+        </a>
+        <div className="nav-links">
+          {links.map((l) => (
+            <a
+              key={l.id}
+              href={`#${l.id}`}
+              className={active === l.id ? 'is-active' : ''}
+            >
+              {l.label}
+            </a>
+          ))}
+        </div>
+        <button className="nav-cta" onClick={onBuy}>Acquire Book →</button>
+      </div>
+    </nav>
+  );
+}
+
+function Hero({ onBuy }) {
+  return (
     <>
-      <div id="video-background" ref={videoBackgroundRef}>
-        <div id="player"></div>
-      </div>
-      <div id="matrix-text" className="matrix-text"></div>
-
-      <div id="button-container">
-        <div className="row1">
-          <Link className="trippy-button" to="/phd/music">Music</Link>
-          <Link className="trippy-button" to="/phd/psychedelics">Psychedelics</Link>
-          <Link className="trippy-button" to="/phd/telepathy">Telepathy</Link>
-          <Link className="trippy-button" to="/phd/mindsight">Mindsight</Link>
-          <Link className="trippy-button" to="/phd/remote-viewing">Remote Viewing</Link>
+      <section id="top" className="hero-sigil-section">
+        <Sigil />
+        <div className="scroll-cue">Descend</div>
+      </section>
+      <section className="hero-thesis container">
+        <div className="eyebrow hero-eyebrow fade-in">
+          ◇ A meta-scientific field ◇ Est. for the multiverse
         </div>
-
-        <div className="row2">
-          <Link className="trippy-button" to="/phd/out-of-body-experience">Out of Body Experience</Link>
-          <Link className="trippy-button" to="/phd/non-human-intelligence">Non Human Intelligence</Link>
-          <Link className="trippy-button" to="/phd/multiverse">Multiverse</Link>
-          <Link className="trippy-button" to="/phd/infinity">Infinity</Link>
+        <h1 className="display fade-in">
+          The science of <em>love</em>,<br />
+          from belief to <em>proof.</em>
+        </h1>
+        <p className="lead hero-sub fade-in">
+          Interstellar Psychology is a new meta-discipline that bridges science and spirituality —
+          gathering the rigorous evidence that we live in a multiverse of love, and that world peace
+          is the natural result of remembering it.
+        </p>
+        <div className="hero-cta-row fade-in">
+          <button className="btn btn-primary" onClick={onBuy}>
+            Read the book <span className="btn-arrow">→</span>
+          </button>
+          <a className="btn" href="#manifesto">
+            The philosophy
+          </a>
         </div>
-
-        <div id="egg-container">
-          <Link id="easter-egg" className="trippy-button" to="/phd/easter-egg">🥚</Link>
-        </div>
-      </div>
+      </section>
     </>
   );
-};
+}
 
-export default Home;
+function Manifesto() {
+  return (
+    <section id="manifesto" className="container manifesto">
+      <div className="manifesto-grid">
+        <div className="fade-in">
+          <div className="col-label">Axiom</div>
+          <p className="manifesto-quote">
+            <span className="drop">G</span>od enters its own creation through the human soul —
+            to truly see and know itself from within.
+          </p>
+          <p className="manifesto-quote" style={{ marginTop: 24 }}>
+            The soul possesses genuine free will. It is through the active <em>choice of love</em> that
+            the Creator verifies and deepens its understanding of creation.
+          </p>
+        </div>
+        <div className="manifesto-body fade-in">
+          <div className="col-label">Unfolding</div>
+          <p>
+            This unfolds as a <strong>multiverse of love</strong> — infinite realities, each an arena where
+            divine consciousness experiences itself through billions of free souls choosing love amid
+            separation, joy, and suffering.
+          </p>
+          <p>
+            <strong>Love is the fundamental relational field</strong> and the verification mechanism. It can be
+            refused. Yet when freely chosen, it confirms the reality and beauty of creation across all worlds.
+          </p>
+          <p>
+            Interstellar Psychology is the discipline that gathers, names, and honours this evidence —
+            from telepathy in non-speakers to fractal geometry in the cosmos, from out-of-body testimony
+            to the aching joy of synchronicity.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function BookSection({ onBuy, onPreview }) {
+  return (
+    <section id="book" className="container book">
+      <div className="book-grid">
+        <div className="book-cover-wrap fade-in">
+          <div className="book-halo" />
+          <img className="book-cover" src="/artefacts/book.png" alt="A Multiverse of Love — book cover" />
+        </div>
+        <div className="fade-in">
+          <div className="eyebrow">THE THESIS</div>
+          <h2 className="h2" style={{ marginTop: 12 }}>
+            A Multiverse <em style={{ color: 'var(--accent)', fontStyle: 'italic' }}>of Love</em>
+          </h2>
+          <p className="lead" style={{ marginTop: 18 }}>
+            The founding story of Interstellar Psychology. A testimony to the loving infrastructure of reality.
+          </p>
+
+          <dl className="book-meta">
+            <dt>Pages</dt><dd>98 · illustrated</dd>
+            <dt>Format</dt><dd>Hardcover</dd>
+            <dt></dt><dd></dd>
+            <dt>Currencies</dt><dd>Dogecoin · Pepe</dd>
+          </dl>
+
+          <p className="book-price">
+            $420.69 <small>USD equivalent · paid in memes</small>
+          </p>
+
+          <div className="coin-row" style={{ margin: '20px 0 28px' }}>
+            <span className="coin-pill"><span className="coin-dot doge" />DOGE accepted</span>
+            <span className="coin-pill"><span className="coin-dot pepe" />PEPE accepted</span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" onClick={onBuy}>
+              Acquire copy <span className="btn-arrow">→</span>
+            </button>
+            <button className="btn" onClick={onPreview}>
+              Watch preview <span className="btn-arrow">▶</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Peace() {
+  return (
+    <section id="peace" className="peace">
+      <MandalaBg />
+      <div className="container peace-content">
+        <div className="eyebrow fade-in">◇ The destination ◇</div>
+        <h2 className="h2 fade-in" style={{ marginTop: 16 }}>
+          The verification is <em style={{ color: 'var(--accent)', fontStyle: 'italic' }}>peace</em>.
+        </h2>
+        <p className="lead fade-in" style={{ marginTop: 18 }}>
+          When enough souls remember that they are creation seeing itself, the field tunes to coherence.
+          Peace is not a treaty — it is a frequency we agree to inhabit.
+        </p>
+
+        <div className="peace-stats">
+          <div className="stat fade-in">
+            <div className="stat-num">∞ <em>×</em></div>
+            <div className="stat-label">Realities</div>
+            <p>Each one an arena for souls to rehearse the choice of love amid separation.</p>
+          </div>
+          <div className="stat fade-in">
+            <div className="stat-num">8 <em>bn</em></div>
+            <div className="stat-label">Free souls</div>
+            <p>One species, one shared substrate, one staggering experiment in remembrance.</p>
+          </div>
+          <div className="stat fade-in">
+            <div className="stat-num"><span style={{ fontSize: '0.65em', verticalAlign: 'middle' }}>I</span> AM <em>field</em></div>
+            <div className="stat-label">Love</div>
+            <p>The relational substrate. The verifier. The thing that cannot be faked.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="foot">
+      <div className="container">
+        <div className="foot-grid">
+          <div className="foot-brand">
+            <div className="brand">
+              <BrandMark />
+              <span className="brand-text">
+                Interstellar Psychology
+                <small>Multiverse of Love</small>
+              </span>
+            </div>
+            <p>A meta-scientific field bridging spirit and science — for the verification of love and the arrival of peace.</p>
+          </div>
+          <div>
+            <h4>Pillars</h4>
+            <ul>
+              <li><a href="#pillars">Music</a></li>
+              <li><a href="#pillars">Psychedelics</a></li>
+              <li><a href="#pillars">Telepathy</a></li>
+              <li><a href="#pillars">Mindsight</a></li>
+              <li><a href="#pillars">Remote Viewing</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>More</h4>
+            <ul>
+              <li><a href="#pillars">Out of Body</a></li>
+              <li><a href="#pillars">Non-Human Intelligence</a></li>
+              <li><a href="#pillars">Multiverse</a></li>
+              <li><a href="#pillars">Infinity</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>Field</h4>
+            <ul>
+              <li><a href="#book">The book</a></li>
+              <li><a href="#manifesto">Manifesto</a></li>
+            </ul>
+          </div>
+        </div>
+        <div className="foot-bottom">
+          <span>INTERSTELLAR.PSYCHOLOGY</span>
+          <span>LOVE · BELIEF · PEACE</span>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+export default function Home() {
+  const [buyOpen, setBuyOpen] = useState(false);
+  const [videoOpen, setVideoOpen] = useState(false);
+  const audioBgRef = useRef(null);
+  const active = useScrollSpy(['top', 'manifesto', 'pillars', 'book', 'peace']);
+  useFadeIn();
+
+  const openVideo = () => { audioBgRef.current?.pauseForVideo(); setVideoOpen(true); };
+  const closeVideo = () => { setVideoOpen(false); audioBgRef.current?.resumeFromVideo(); };
+
+  useEffect(() => {
+    document.body.style.overflow = buyOpen ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [buyOpen]);
+
+  return (
+    <div className="shell">
+      <Nav active={active} onBuy={() => setBuyOpen(true)} />
+      <Hero onBuy={() => setBuyOpen(true)} />
+      <div className="divider" />
+      <Manifesto />
+      <div className="divider" />
+      <Pillars />
+      <div className="divider" />
+      <BookSection onBuy={() => setBuyOpen(true)} onPreview={openVideo} />
+      <Peace />
+      <Footer />
+
+      <PurchaseModal open={buyOpen} onClose={() => setBuyOpen(false)} />
+      <VideoModal open={videoOpen} onClose={closeVideo} />
+      <AudioBg ref={audioBgRef} />
+    </div>
+  );
+}
