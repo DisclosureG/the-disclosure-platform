@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 const PILLARS = [
   {
@@ -85,11 +85,33 @@ const PILLARS = [
 ];
 
 function PillarCard({ p, isOpen, onToggle, idx }) {
+  const ref = useRef(null);
+  const [animating, setAnimating] = useState(false);
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setDone(true);
+      return;
+    }
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) { setAnimating(true); io.disconnect(); }
+    }, { threshold: 0.12 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  const animClass = done ? '' : animating ? ' pillar-entering' : ' pillar-hidden';
+
   return (
     <article
-      className={`pillar fade-in ${isOpen ? 'is-open' : ''}`}
+      ref={ref}
+      className={`pillar${animClass}${isOpen ? ' is-open' : ''}`}
       onClick={onToggle}
-      style={{ transitionDelay: `${idx * 30}ms` }}
+      style={animating && !done ? { animationDelay: `${idx * 30}ms` } : {}}
+      onAnimationEnd={animating && !done ? () => setDone(true) : undefined}
       data-pillar={p.title.toLowerCase()}
     >
       <div className="pillar-num">
