@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 
+const slug = (s) => s.toLowerCase().replace(/\s+/g, '-');
+const EVIDENCE_BASE = '/evidence/';
+
 const PILLARS = [
   {
     n: "01",
@@ -8,7 +11,8 @@ const PILLARS = [
     blurb: "Artists weave the divine into melody — bridges of sound to the source.",
     quote: "In every note, a reminder of love's boundless light, the universe's gentle rhythm.",
     body: "Music is the first language of the multiverse — a vibration that predates form. Through harmonic resonance the soul recognises itself in the other.",
-    links: ["Imagine Dragons"]
+    links: ["Imagine Dragons"],
+    evidenceCount: 5
   },
   {
     n: "02",
@@ -17,7 +21,8 @@ const PILLARS = [
     blurb: "Substances that open you to the possibility everything you know is wrong.",
     quote: "They dissolve opinion structures and culturally laid down models of behaviour.",
     body: "Plant medicines and entheogens function as keys, not as escape. They reveal the architecture of consciousness from inside the architecture itself.",
-    links: ["Consiousness","Afterlife", "Psychedelic Ascension"]
+    links: ["Consiousness","Afterlife", "Psychedelic Ascension"],
+    evidenceCount: 5
   },
   {
     n: "03",
@@ -26,14 +31,16 @@ const PILLARS = [
     blurb: "Non-speakers with autism reveal abilities long dismissed as fantasy.",
     quote: "Love really hates when we choose money",
     body: "The Telepathy Tapes and decades of parapsychological research point to a substrate of consciousness where minds are not isolated islands.",
-    links: ["The Telepathy Tapes", "Julia Mossbridge"]
+    links: ["The Telepathy Tapes", "Julia Mossbridge"],
+    evidenceCount: 4
   },
   {
     n: "04",
     title: "Mindsight",
     tag: "Inner perception",
     blurb: "Seeing without eyes",
-    links: ["Third eye", "Energy", "Dalia Burgoin", "Mark Komissarov"]
+    links: ["Third eye", "Energy", "Dalia Burgoin", "Mark Komissarov"],
+    evidenceCount: 3
   },
   {
     n: "05",
@@ -42,7 +49,8 @@ const PILLARS = [
     blurb: "Declassified Stargate Project — the CIA's psychic intelligence program.",
     quote: "Distance is a property of matter, not of mind.",
     body: "Twenty-three years of US government research yielded statistically significant results that mainstream science has yet to integrate.",
-    links: ["Stargate Project", "Ingo Swann", "Stanford"]
+    links: ["Stargate Project", "Ingo Swann", "Stanford"],
+    evidenceCount: 4
   },
   {
     n: "06",
@@ -51,7 +59,8 @@ const PILLARS = [
     blurb: "The Monroe Institute, NDEs, and the testable claim that you are not your body.",
     quote: "I left my body and found I was still entirely myself.",
     body: "Cardiac arrest survivors describe the operating room from the ceiling. Hemi-Sync practitioners chart the territory deliberately.",
-    links: ["Monroe Institute", "Anthony Chene"]
+    links: ["Monroe Institute", "Anthony Chene"],
+    evidenceCount: 4
   },
   {
     n: "07",
@@ -61,7 +70,8 @@ const PILLARS = [
     quote: "The universe is not stranger than we suppose, but stranger than we can suppose.",
     body: "UAP disclosure, contactee reports, interdimensional hypotheses. The question is no longer whether — but how we relate.",
     links: ["AWSAP/AATIP", "David Grusch", "Ross Coulthart", "Steven Greer"],
-    tagLink: "https://x.com/UapJunky"
+    tagLink: "https://x.com/UapJunky",
+    evidenceCount: 5
   },
   {
     n: "08",
@@ -70,7 +80,8 @@ const PILLARS = [
     blurb: "Synchronicity as evidence — the universe is signalling that it sees you.",
     quote: "Coincidence is the multiverse's native vocabulary.",
     body: "The multiverse is the loving infrastructure that lets every soul rehearse the path home.",
-    links: ["Carl Jung", "Synchronicity"]
+    links: ["Carl Jung", "Synchronicity"],
+    evidenceCount: 4
   },
   {
     n: "09",
@@ -79,7 +90,8 @@ const PILLARS = [
     blurb: "There is no end, only deeper layers of wonder.",
     quote: "The fractal thumbprint of God",
     body: "Sacred geometry and chaos mathematics describe the same structure: a creation that contains itself at every scale.",
-    links: ["Mandelbrot", "Free will", "Flower of life"]
+    links: ["Mandelbrot", "Free will", "Flower of life"],
+    evidenceCount: 4
   },
 ];
 
@@ -103,6 +115,7 @@ function PillarCard({ p, isOpen, onToggle, idx }) {
   }, []);
 
   const animClass = done ? '' : animating ? ' pillar-entering' : ' pillar-hidden';
+  const evidenceHref = `${EVIDENCE_BASE}#${slug(p.title)}`;
 
   return (
     <article
@@ -134,6 +147,7 @@ function PillarCard({ p, isOpen, onToggle, idx }) {
       )}
       <h3 className="pillar-title">{p.title}</h3>
       <p className="pillar-blurb">{p.blurb}</p>
+
       <div className="pillar-detail">
         {p.quote && <p className="quote">&ldquo;{p.quote}&rdquo;</p>}
         <p>{p.body}</p>
@@ -142,7 +156,29 @@ function PillarCard({ p, isOpen, onToggle, idx }) {
             <a key={l} href="#" onClick={(e) => e.preventDefault()}>{l}</a>
           ))}
         </div>
+
+        <a
+          className="pillar-evidence-link"
+          href={evidenceHref}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span className="ev-rule" />
+          <span className="ev-label">Evidence</span>
+          {p.evidenceCount && <span className="ev-count">· {p.evidenceCount} entries</span>}
+          <span className="ev-arrow">↗</span>
+        </a>
       </div>
+
+      <a
+        className="pillar-evidence-foot"
+        href={evidenceHref}
+        onClick={(e) => e.stopPropagation()}
+        aria-label={`See evidence for ${p.title}`}
+      >
+        <span>Evidence</span>
+        {p.evidenceCount && <span className="ev-count">· {p.evidenceCount}</span>}
+        <span className="ev-arrow">↗</span>
+      </a>
     </article>
   );
 }
@@ -161,7 +197,7 @@ export default function Pillars() {
         </div>
         <p className="lead">
           Each pillar is a discipline where science and spirituality are already converging — quietly, often dismissed,
-          increasingly undeniable. Tap any to descend.
+          increasingly undeniable. Tap any to descend, or open the <a href="/evidence/" style={{ color: 'var(--accent)', textDecoration: 'underline', textUnderlineOffset: '3px' }}>evidence archive</a>.
         </p>
       </div>
 

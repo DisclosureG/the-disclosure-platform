@@ -74,6 +74,7 @@ function Nav({ active, onBuy }) {
               {l.label}
             </a>
           ))}
+          <a href="/evidence/">Evidence</a>
         </div>
         <button className="nav-cta" onClick={onBuy}>Acquire Book →</button>
       </div>
@@ -264,7 +265,7 @@ function Footer() {
                 <small>A Multiverse of Love</small>
               </span>
             </div>
-            <p>A meta-scientific field bridging science and spirituality — for the verification of love and the arrival of peace.</p>
+            <p>A meta-scientific field bridging science and spirituality — for the verification of a loving Multiverse and the arrival of peace.</p>
           </div>
           <div>
             <h4>Pillars</h4>
@@ -290,6 +291,7 @@ function Footer() {
             <ul>
               <li><a href="#manifesto">Manifesto</a></li>
               <li><a href="#book">The Thesis</a></li>
+              <li><a href="/evidence/">Evidence</a></li>
             </ul>
           </div>
         </div>

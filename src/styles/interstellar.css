@@ -2808,3 +2808,71 @@ button.citation-chip {
   opacity: 1;
   transform: translate(-50%, 0);
 }
+
+/* ─── Evidence reference on each Pillar card ─── */
+
+.pillar {
+  padding-bottom: 56px;
+  position: relative;
+}
+
+.pillar-evidence-foot {
+  position: absolute;
+  left: 32px;
+  bottom: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-decoration: none;
+  padding: 6px 10px 6px 0;
+  transition: color .25s ease;
+  z-index: 2;
+}
+.pillar-evidence-foot::before {
+  content: "";
+  width: 18px;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.5;
+  transition: width .25s ease, background .25s ease;
+}
+.pillar-evidence-foot:hover { color: var(--accent); }
+.pillar-evidence-foot:hover::before { width: 30px; background: var(--accent); opacity: 1; }
+.pillar-evidence-foot .ev-count { color: var(--ink-soft); opacity: 0.8; }
+.pillar-evidence-foot .ev-arrow { font-size: 11px; margin-left: 2px; transition: transform .25s ease; }
+.pillar-evidence-foot:hover .ev-arrow { transform: translate(2px, -2px); }
+.pillar.is-open .pillar-evidence-foot { display: none; }
+
+.pillar-evidence-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 22px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-decoration: none;
+  padding: 2px 0;
+  transition: color .25s ease;
+}
+.pillar-evidence-link .ev-rule {
+  width: 22px;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.5;
+  transition: width .25s ease, background .25s ease, opacity .25s ease;
+}
+.pillar-evidence-link .ev-label { color: var(--ink); }
+.pillar-evidence-link .ev-count { color: var(--ink-soft); opacity: 0.85; }
+.pillar-evidence-link .ev-arrow { font-size: 12px; margin-left: 2px; transition: transform .25s ease; }
+.pillar-evidence-link:hover { color: var(--accent); }
+.pillar-evidence-link:hover .ev-rule { width: 36px; background: var(--accent); opacity: 1; }
+.pillar-evidence-link:hover .ev-label { color: var(--accent); }
+.pillar-evidence-link:hover .ev-arrow { transform: translate(2px, -2px); }

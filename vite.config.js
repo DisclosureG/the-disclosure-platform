@@ -3,8 +3,6 @@ import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
 import fs from 'fs'
 
-// Serve public/artefacts/index.html for /artefacts/ in dev
-// (Vite's SPA fallback would otherwise serve the React app instead)
 const artefactsMiddleware = {
   name: 'serve-artefacts-index',
   configureServer(server) {
@@ -20,6 +18,7 @@ const artefactsMiddleware = {
   }
 }
 
+
 export default defineConfig({
   plugins: [react(), artefactsMiddleware],
   base: '/',
@@ -29,8 +28,9 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        main:  resolve(__dirname, 'index.html'),
-        admin: resolve(__dirname, 'admin/index.html'),
+        main:     resolve(__dirname, 'index.html'),
+        admin:    resolve(__dirname, 'admin/index.html'),
+        evidence: resolve(__dirname, 'evidence/index.html'),
       }
     }
   },
