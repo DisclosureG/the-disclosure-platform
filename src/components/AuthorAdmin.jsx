@@ -20,15 +20,21 @@ const SEL_UPDATE_TRACKING = "0xb8bd576c"; // updateTracking(bytes32,bytes)
 // OrderCreated(bytes32 indexed id, address indexed buyer, address token, uint256 cost, uint256 profit, bytes32 buyerPubKey)
 const TOPIC_ORDER_CREATED = "0xa30b4da0e57cd7dda9e37536547519f3ac17a06fcf6250babd9c70015c2140a8";
 
-const DISPUTE_DAYS  = 21;
+const DISPUTE_DAYS  = 99;
 const STATUS_LABEL  = ["Paid", "Fulfilled", "Released", "Refunded"];
 
 const DEPLOY_BLOCK    = import.meta.env.VITE_DEPLOY_BLOCK ?? "0";
+const BSCSCAN_KEY     = import.meta.env.VITE_BSCSCAN_API_KEY ?? "";
+const AUTHOR_SHIPPING_PUBKEY_CONFIGURED = !!import.meta.env.VITE_AUTHOR_SHIPPING_PUBKEY;
+const AUTHOR_SHIPPING_SIGN_MSG = "Interstellar Psychology author shipping key v1";
 // Public RPC used for eth_getLogs — MetaMask's provider doesn't support it reliably.
 const RPC_URL    = CHAIN_ID === "0x61"
   ? "https://bsc-testnet-rpc.publicnode.com"
   : "https://bsc-dataseed.binance.org";
-const CHUNK_SIZE = 2000;
+const BSCSCAN_API = CHAIN_ID === "0x61"
+  ? "https://api-testnet.bscscan.com/api"
+  : "https://api.bscscan.com/api";
+const CHUNK_SIZE = 49_999;
 
 /* ── Low-level helpers ────────────────────────────────────────── */
 
@@ -55,25 +61,53 @@ async function rpc(method, params = []) {
   return json.result;
 }
 
-// Fetches OrderCreated logs directly from the public BSC RPC in chunks,
-// bypassing MetaMask's provider which doesn't support eth_getLogs reliably.
-async function ethLogs() {
+// Fetches OrderCreated logs via BscScan API (full history, no pruning).
+// Falls back to chunked RPC when no API key is configured.
+async function ethLogsRpc() {
   const latest = parseInt(await rpc("eth_blockNumber"), 16);
   const parsed = parseInt(DEPLOY_BLOCK, 10);
   const from   = (parsed > 0 && parsed <= latest) ? parsed : Math.max(0, latest - CHUNK_SIZE);
 
   const all = [];
   for (let lo = from; lo <= latest; lo += CHUNK_SIZE) {
-    const hi    = Math.min(lo + CHUNK_SIZE - 1, latest);
-    const chunk = await rpc("eth_getLogs", [{
-      address:   ESCROW_ADDR,
-      topics:    [TOPIC_ORDER_CREATED],
-      fromBlock: "0x" + lo.toString(16),
-      toBlock:   "0x" + hi.toString(16),
-    }]);
-    all.push(...chunk);
+    const hi = Math.min(lo + CHUNK_SIZE - 1, latest);
+    try {
+      const chunk = await rpc("eth_getLogs", [{
+        address:   ESCROW_ADDR,
+        topics:    [TOPIC_ORDER_CREATED],
+        fromBlock: "0x" + lo.toString(16),
+        toBlock:   "0x" + hi.toString(16),
+      }]);
+      all.push(...chunk);
+    } catch {
+      // pruned range — skip
+    }
   }
   return all;
+}
+
+async function ethLogs() {
+  if (BSCSCAN_KEY) {
+    try {
+      const params = new URLSearchParams({
+        module:    "logs",
+        action:    "getLogs",
+        address:   ESCROW_ADDR,
+        topic0:    TOPIC_ORDER_CREATED,
+        fromBlock: DEPLOY_BLOCK || "0",
+        toBlock:   "latest",
+        apikey:    BSCSCAN_KEY,
+      });
+      const res  = await fetch(`${BSCSCAN_API}?${params}`);
+      const json = await res.json();
+      if (json.status === "1") return json.result;
+      if (json.message === "No records found") return [];
+      // BscScan error — fall through to RPC
+    } catch {
+      // network error — fall through to RPC
+    }
+  }
+  return ethLogsRpc();
 }
 
 // Look up a single order by ID directly via eth_call — no BscScan needed.
@@ -126,7 +160,92 @@ function parseCreatedLog(log) {
     cost:        BigInt("0x" + d.slice(64, 128)),
     profit:      BigInt("0x" + d.slice(128, 192)),
     buyerPubKey: "0x" + d.slice(192, 256),
+    txHash:      log.transactionHash,
   };
+}
+
+async function deriveAuthorKeyPair(account) {
+  const msgHex = "0x" + Array.from(new TextEncoder().encode(AUTHOR_SHIPPING_SIGN_MSG), b => b.toString(16).padStart(2, "0")).join("");
+  const sig      = await window.ethereum.request({ method: "personal_sign", params: [msgHex, account] });
+  const sigBytes = new Uint8Array(sig.slice(2).match(/.{2}/g).map(b => parseInt(b, 16)));
+  const km       = await crypto.subtle.importKey("raw", sigBytes, { name: "HKDF" }, false, ["deriveBits"]);
+  const bits     = await crypto.subtle.deriveBits(
+    { name: "HKDF", hash: "SHA-256",
+      salt: new TextEncoder().encode("nacl-box-key-v1"),
+      info: new TextEncoder().encode("author-shipping") },
+    km, 256,
+  );
+  return nacl.box.keyPair.fromSecretKey(new Uint8Array(bits));
+}
+
+async function resolveOrderTxHash(orderId) {
+  if (BSCSCAN_KEY) {
+    try {
+      const params = new URLSearchParams({
+        module:       "logs",
+        action:       "getLogs",
+        address:      ESCROW_ADDR,
+        topic0:       TOPIC_ORDER_CREATED,
+        topic0_1_opr: "and",
+        topic1:       orderId,
+        fromBlock:    DEPLOY_BLOCK || "0",
+        toBlock:      "latest",
+        apikey:       BSCSCAN_KEY,
+      });
+      const res  = await fetch(`${BSCSCAN_API}?${params}`);
+      const json = await res.json();
+      if (json.status === "1" && json.result?.length) return json.result[0].transactionHash;
+      // BscScan error or no result — fall through to RPC
+    } catch {
+      // network error — fall through to RPC
+    }
+  }
+
+  // RPC fallback — scan backwards in CHUNK_SIZE-block windows; skip pruned ranges.
+  const deployBlock = Math.max(0, parseInt(DEPLOY_BLOCK, 10));
+  const latest      = parseInt(await rpc("eth_blockNumber", []), 16);
+
+  for (let to = latest; to >= deployBlock; to -= CHUNK_SIZE) {
+    const from = Math.max(to - CHUNK_SIZE + 1, deployBlock);
+    try {
+      const logs = await rpc("eth_getLogs", [{
+        address:   ESCROW_ADDR,
+        topics:    [TOPIC_ORDER_CREATED, orderId],
+        fromBlock: "0x" + from.toString(16),
+        toBlock:   "0x" + to.toString(16),
+      }]);
+      if (logs?.length) return logs[0].transactionHash;
+    } catch {
+      // pruned range — continue scanning
+    }
+  }
+  throw new Error("Creation event not found — check VITE_DEPLOY_BLOCK.");
+}
+
+async function fetchAndDecryptShipping(orderId, txHash, authorKeyPair) {
+  const resolvedHash = txHash ?? await resolveOrderTxHash(orderId);
+  const tx = await rpc("eth_getTransactionByHash", [resolvedHash]);
+  if (!tx?.input) throw new Error("Transaction not found on-chain.");
+  // selector(4B) + 5 params(32B each) = 164 bytes = 328 hex chars; skip "0x" prefix
+  const OFFSET = 2 + (4 + 5 * 32) * 2;
+  const extra  = tx.input.slice(OFFSET);
+  if (!extra) return null;  // no extra bytes = no shipping data (not an error)
+  const jsonStr = new TextDecoder().decode(
+    new Uint8Array(extra.match(/.{2}/g).map(b => parseInt(b, 16)))
+  );
+  let parsed;
+  try { parsed = JSON.parse(jsonStr); }
+  catch { throw new Error("Calldata payload is not valid JSON — may be a pre-feature order."); }
+  if (parsed.version !== "x25519-xsalsa20-poly1305")
+    throw new Error(`Unknown payload format: ${parsed.version}`);
+  const decrypted = nacl.box.open(
+    decodeBase64(parsed.ciphertext),
+    decodeBase64(parsed.nonce),
+    decodeBase64(parsed.ephemPublicKey),
+    authorKeyPair.secretKey,
+  );
+  if (!decrypted) throw new Error("Decryption failed — keypair mismatch?");
+  return new TextDecoder().decode(decrypted);
 }
 
 async function sha256Hex(text) {
@@ -239,13 +358,26 @@ function encodeFulfill(orderId, shippingHash, encryptedJsonStr) {
 
 /* ── Fulfill modal ────────────────────────────────────────────── */
 
-function FulfillModal({ order, account, onClose, onDone }) {
-  const [tracking,  setTracking]  = useState("");
-  const [proofHash, setProofHash] = useState(null);
-  const [encrypted, setEncrypted] = useState(null); // JSON string to store on-chain
-  const [phase,     setPhase]     = useState("idle");
-  const [txHash,    setTxHash]    = useState(null);
-  const [err,       setErr]       = useState(null);
+function FulfillModal({ order, account, authorKeyPair, onSign, onClose, onDone }) {
+  const [tracking,        setTracking]        = useState("");
+  const [proofHash,       setProofHash]       = useState(null);
+  const [encrypted,       setEncrypted]       = useState(null);
+  const [phase,           setPhase]           = useState("idle");
+  const [txHash,          setTxHash]          = useState(null);
+  const [err,             setErr]             = useState(null);
+  const [shipping,        setShipping]        = useState(null);
+  const [loadingShipping, setLoadingShipping] = useState(false);
+  const [shippingErr,     setShippingErr]     = useState(null);
+
+  useEffect(() => {
+    if (!authorKeyPair) return;
+    setLoadingShipping(true);
+    setShippingErr(null);
+    fetchAndDecryptShipping(order.id, order.txHash, authorKeyPair)
+      .then(s => setShipping(s))
+      .catch(e => setShippingErr(e.message))
+      .finally(() => setLoadingShipping(false));
+  }, [authorKeyPair, order.id]);
 
   const zeroPubKey = !order.buyerPubKey || order.buyerPubKey === "0x" + "0".repeat(64);
 
@@ -308,6 +440,15 @@ function FulfillModal({ order, account, onClose, onDone }) {
             <span>Encryption</span>
             <span>{zeroPubKey ? "⚠ No pubkey — tracking stored as plaintext" : "✓ Buyer pubkey on-chain"}</span>
           </div>
+        </div>
+
+        <div className="admin-shipping-box">
+          <span className="dapp-eyebrow">Ship to</span>
+          {!authorKeyPair && <button className="btn" style={{ marginTop: 6 }} onClick={onSign}>Sign to decrypt →</button>}
+          {authorKeyPair && loadingShipping && <p className="dapp-sub" style={{ marginTop: 6 }}>Decrypting…</p>}
+          {authorKeyPair && !loadingShipping && shipping && <pre className="admin-shipping-addr">{shipping}</pre>}
+          {authorKeyPair && !loadingShipping && !shipping && !shippingErr && <p className="dapp-sub" style={{ marginTop: 6, opacity: 0.6 }}>Buyer did not enter a shipping address.</p>}
+          {authorKeyPair && shippingErr && <p className="admin-err" style={{ marginTop: 6 }}>{shippingErr}</p>}
         </div>
 
         <label className="dapp-field">
@@ -441,12 +582,25 @@ function UpdateTrackingModal({ order, account, onClose, onDone }) {
   );
 }
 
-function OrderCard({ order, account, onRefresh }) {
-  const [fulfillOpen,  setFulfillOpen]  = useState(false);
-  const [updateOpen,   setUpdateOpen]   = useState(false);
-  const [releasing,    setReleasing]    = useState(false);
-  const [relTx,        setRelTx]        = useState(null);
-  const [err,          setErr]          = useState(null);
+function OrderCard({ order, account, authorKeyPair, onSign, onRefresh }) {
+  const [fulfillOpen,     setFulfillOpen]     = useState(false);
+  const [updateOpen,      setUpdateOpen]      = useState(false);
+  const [releasing,       setReleasing]       = useState(false);
+  const [relTx,           setRelTx]           = useState(null);
+  const [err,             setErr]             = useState(null);
+  const [shipping,        setShipping]        = useState(null);
+  const [loadingShipping, setLoadingShipping] = useState(false);
+  const [shippingErr,     setShippingErr]     = useState(null);
+
+  useEffect(() => {
+    if (!authorKeyPair) return;
+    setLoadingShipping(true);
+    setShippingErr(null);
+    fetchAndDecryptShipping(order.id, order.txHash, authorKeyPair)
+      .then(s => setShipping(s))
+      .catch(e => setShippingErr(e.message))
+      .finally(() => setLoadingShipping(false));
+  }, [authorKeyPair, order.id]);
 
   const { symbol, decimals } = tokenInfo(order.token);
   const tl       = order.status === 1 && order.fulfilledAt ? windowLeft(order.fulfilledAt) : null;
@@ -498,6 +652,15 @@ function OrderCard({ order, account, onRefresh }) {
 
         <dt>Profit (escrowed)</dt>
         <dd><strong>{fmtWei(order.profit, decimals)} {symbol}</strong></dd>
+
+        <dt>Ship to</dt>
+        <dd>
+          {!authorKeyPair && <em style={{ opacity: 0.5 }}>Sign required</em>}
+          {authorKeyPair && loadingShipping && <em style={{ opacity: 0.5 }}>Decrypting…</em>}
+          {authorKeyPair && !loadingShipping && shipping && <pre className="admin-shipping-addr">{shipping}</pre>}
+          {authorKeyPair && !loadingShipping && !shipping && !shippingErr && <em style={{ opacity: 0.5 }}>—</em>}
+          {authorKeyPair && shippingErr && <em style={{ color: "var(--warn, #f87171)", fontSize: 11 }}>{shippingErr}</em>}
+        </dd>
 
         <dt>Created</dt>
         <dd>{fmtTs(order.createdAt)}</dd>
@@ -572,6 +735,8 @@ function OrderCard({ order, account, onRefresh }) {
         <FulfillModal
           order={order}
           account={account}
+          authorKeyPair={authorKeyPair}
+          onSign={onSign}
           onClose={() => setFulfillOpen(false)}
           onDone={() => { setFulfillOpen(false); onRefresh(); }}
         />
@@ -640,13 +805,15 @@ function ManualLookup({ account, onFound }) {
 /* ── Root ─────────────────────────────────────────────────────── */
 
 export default function AuthorAdmin() {
-  const [account,    setAccount]    = useState(null);
-  const [authErr,    setAuthErr]    = useState(null);
-  const [connecting, setConnecting] = useState(false);
-  const [orders,     setOrders]     = useState([]);
-  const [loading,    setLoading]    = useState(false);
-  const [logErr,     setLogErr]     = useState(null);
-  const [tab,        setTab]        = useState("pending");
+  const [account,        setAccount]        = useState(null);
+  const [authErr,        setAuthErr]        = useState(null);
+  const [connecting,     setConnecting]     = useState(false);
+  const [orders,         setOrders]         = useState([]);
+  const [loading,        setLoading]        = useState(false);
+  const [logErr,         setLogErr]         = useState(null);
+  const [tab,            setTab]            = useState("pending");
+  const [authorKeyPair,  setAuthorKeyPair]  = useState(null);
+  const [authorPubKeyHex,setAuthorPubKeyHex]= useState(null);
 
   const connect = async () => {
     setConnecting(true);
@@ -664,6 +831,12 @@ export default function AuthorAdmin() {
         return;
       }
       setAccount(acc);
+      try {
+        const kp     = await deriveAuthorKeyPair(acc);
+        const pubHex = "0x" + Array.from(kp.publicKey, b => b.toString(16).padStart(2, "0")).join("");
+        setAuthorKeyPair(kp);
+        setAuthorPubKeyHex(pubHex);
+      } catch { /* user rejected signing — panel still works, shipping just won't decrypt */ }
     } catch (e) {
       setAuthErr(e.message || "Connection failed.");
     } finally {
@@ -721,6 +894,15 @@ export default function AuthorAdmin() {
   ];
 
   const shown = groups[tab] ?? [];
+
+  const handleSign = async () => {
+    try {
+      const kp     = await deriveAuthorKeyPair(account);
+      const pubHex = "0x" + Array.from(kp.publicKey, b => b.toString(16).padStart(2, "0")).join("");
+      setAuthorKeyPair(kp);
+      setAuthorPubKeyHex(pubHex);
+    } catch {}
+  };
 
   return (
     <div className="admin-shell">
@@ -780,6 +962,15 @@ export default function AuthorAdmin() {
 
         ) : (
           <>
+            {!authorKeyPair && (
+              <div className="admin-setup-banner" style={{ marginBottom: 20 }}>
+                <strong>Shipping decryption locked.</strong> The MetaMask signing prompt was skipped during connect — approve it now to decrypt shipping addresses.
+                <button className="btn" style={{ alignSelf: "flex-start" }} onClick={handleSign}>
+                  Sign to unlock →
+                </button>
+              </div>
+            )}
+
             <div className="admin-tabs">
               {TABS.map(t => (
                 <button
@@ -807,12 +998,23 @@ export default function AuthorAdmin() {
             {loading  && shown.length === 0 && <p className="admin-empty">Loading orders from chain…</p>}
             {!loading && shown.length === 0 && !logErr && <p className="admin-empty">No orders in this category.</p>}
 
+            {!AUTHOR_SHIPPING_PUBKEY_CONFIGURED && authorPubKeyHex && (
+              <div className="admin-setup-banner">
+                <strong>One-time setup:</strong> Add this to your <code>.env</code> so buyers can encrypt their shipping address to you, then rebuild and redeploy.
+                <CopyChip value={`VITE_AUTHOR_SHIPPING_PUBKEY=${authorPubKeyHex}`} label="env var">
+                  <code style={{ fontSize: 11, wordBreak: "break-all" }}>VITE_AUTHOR_SHIPPING_PUBKEY={shorten(authorPubKeyHex, 14, 12)}</code>
+                </CopyChip>
+              </div>
+            )}
+
             <div className="admin-grid">
               {shown.map(o => (
                 <OrderCard
                   key={o.id}
                   order={o}
                   account={account}
+                  authorKeyPair={authorKeyPair}
+                  onSign={handleSign}
                   onRefresh={loadOrders}
                 />
               ))}

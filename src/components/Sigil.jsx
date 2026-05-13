@@ -6,8 +6,8 @@ function MandelbrotCanvas() {
   useEffect(() => {
     const cvs = canvasRef.current;
     if (!cvs) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const size = 520;
+    const dpr = 1;
+    const size = 380;
     cvs.width = size * dpr;
     cvs.height = size * dpr;
     const ctx = cvs.getContext('2d');
@@ -29,7 +29,7 @@ function MandelbrotCanvas() {
       const zoom = 1.6 + Math.sin(t * 0.15) * 0.25;
       const cx = -0.745 + Math.cos(t * 0.08) * 0.04;
       const cy = 0.105 + Math.sin(t * 0.10) * 0.03;
-      const maxIter = 64;
+      const maxIter = 48;
 
       for (let py = 0; py < H; py++) {
         for (let px = 0; px < W; px++) {
@@ -80,12 +80,13 @@ function MandelbrotCanvas() {
     render();
     if (!reduced) {
       let last = performance.now();
+      const FRAME_MS = 1000 / 15;
       const tick = (now) => {
-        const dt = (now - last) / 1000;
-        last = now;
-        phase += dt * 0.4;
-        render();
         raf = requestAnimationFrame(tick);
+        if (now - last < FRAME_MS) return;
+        phase += ((now - last) / 1000) * 0.4;
+        last = now;
+        render();
       };
       raf = requestAnimationFrame(tick);
     }
@@ -151,17 +152,22 @@ export function Sigil() {
 }
 
 export function MandalaBg() {
+  const R = 40;
+  const points = [];
+  for (let q = -2; q <= 2; q++) {
+    for (let r = -2; r <= 2; r++) {
+      if (Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) <= 2) {
+        points.push([R * (q + r / 2), R * (r * Math.sqrt(3) / 2)]);
+      }
+    }
+  }
   return (
     <svg className="peace-mandala" viewBox="-200 -200 400 400" aria-hidden="true">
       <g>
-        {Array.from({ length: 24 }).map((_, i) => (
-          <g key={i} transform={`rotate(${(i * 360) / 24})`}>
-            <circle cx="0" cy="-100" r="60" fill="none" stroke="currentColor" strokeWidth="0.6" />
-          </g>
+        {points.map(([x, y], i) => (
+          <circle key={i} cx={x} cy={y} r={R} fill="none" stroke="currentColor" strokeWidth="0.6" />
         ))}
-        <circle r="160" fill="none" stroke="currentColor" strokeWidth="0.6" />
-        <circle r="100" fill="none" stroke="currentColor" strokeWidth="0.6" />
-        <circle r="40" fill="none" stroke="currentColor" strokeWidth="0.6" />
+        <circle r={R * 3} fill="none" stroke="currentColor" strokeWidth="0.6" />
       </g>
     </svg>
   );

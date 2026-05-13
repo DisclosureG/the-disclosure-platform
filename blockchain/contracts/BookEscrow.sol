@@ -15,20 +15,29 @@ pragma solidity ^0.8.20;
  *   4. Buyer has DISPUTE_WINDOW days after fulfillment to call claimProfitRefund().
  *      If they do nothing, anyone can call releaseProfit() after the window.
  *   5. If the author never fulfills within FULFILLMENT_DEADLINE, buyer can emergencyRefund().
+ *
+ * Accepted payment tokens are fixed at deployment time (tokenA and tokenB, both immutable).
+ * On BSC mainnet these must be set to the DOGE and PEPE BEP-20 addresses.
  */
 interface IERC20 {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function transfer(address to, uint256 amount) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
 }
 
 contract BookEscrow {
     /* ─── Constants ─────────────────────────────────────────────────── */
-    uint64 public constant DISPUTE_WINDOW       = 21 days;
+    uint64 public constant DISPUTE_WINDOW       = 99 days;
     uint64 public constant FULFILLMENT_DEADLINE = 30 days;
 
-    /* ─── State ──────────────────────────────────────────────────────── */
+    /* ─── Immutables ─────────────────────────────────────────────────── */
     address public immutable author;
+    // Two whitelisted payment tokens, set once at deployment and never changeable.
+    // On BSC mainnet: tokenA = DOGE, tokenB = PEPE.
+    address public immutable tokenA;
+    address public immutable tokenB;
 
+    /* ─── State ──────────────────────────────────────────────────────── */
     enum Status { Paid, Fulfilled, Released, Refunded }
 
     struct Order {
@@ -66,17 +75,23 @@ contract BookEscrow {
     error DeadlineNotReached();
     error TransferFailed();
     error ZeroAmount();
+    error TokenNotAllowed();
 
-    constructor(address _author) {
-        require(_author != address(0), "Zero author");
+    constructor(address _author, address _tokenA, address _tokenB) {
+        require(_author  != address(0), "Zero author");
+        require(_tokenA  != address(0), "Zero tokenA");
+        require(_tokenB  != address(0), "Zero tokenB");
+        require(_tokenA  != _tokenB,    "Duplicate token");
         author = _author;
+        tokenA = _tokenA;
+        tokenB = _tokenB;
     }
 
     /* ─── Buyer: create order ─────────────────────────────────────────── */
 
     /**
      * @param id           Unique order ID (random bytes32).
-     * @param token        BEP-20 token address (DOGE or PEPE on BSC).
+     * @param token        Must be tokenA (DOGE) or tokenB (PEPE).
      * @param cost         Amount covering production + shipping (released on fulfillment).
      * @param profit       Amount locked for the dispute window.
      * @param buyerPubKey  Buyer's X25519 public key from MetaMask eth_getEncryptionPublicKey,
@@ -89,13 +104,13 @@ contract BookEscrow {
         uint256 profit,
         bytes32 buyerPubKey
     ) external {
+        if (token != tokenA && token != tokenB) revert TokenNotAllowed();
         if (orders[id].buyer != address(0)) revert OrderExists();
         if (cost == 0 && profit == 0) revert ZeroAmount();
 
         uint256 total = cost + profit;
-        bool ok = IERC20(token).transferFrom(msg.sender, address(this), total);
-        if (!ok) revert TransferFailed();
 
+        // Write state before the external call (CEI pattern — prevents reentrancy)
         orders[id] = Order({
             buyer:        msg.sender,
             token:        token,
@@ -107,6 +122,12 @@ contract BookEscrow {
             buyerPubKey:  buyerPubKey,
             status:       Status.Paid
         });
+
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
+        bool ok = IERC20(token).transferFrom(msg.sender, address(this), total);
+        if (!ok) revert TransferFailed();
+        // Guard against fee-on-transfer tokens — contract must receive the full declared amount
+        if (IERC20(token).balanceOf(address(this)) - balanceBefore < total) revert TransferFailed();
 
         emit OrderCreated(id, msg.sender, token, cost, profit, buyerPubKey);
     }
@@ -224,6 +245,10 @@ contract BookEscrow {
 
     function getOrder(bytes32 id) external view returns (Order memory) {
         return orders[id];
+    }
+
+    function isAllowedToken(address token) external view returns (bool) {
+        return token == tokenA || token == tokenB;
     }
 
     function disputeWindowEnd(bytes32 id) external view returns (uint64) {

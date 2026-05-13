@@ -1,16 +1,17 @@
 import { useState, useEffect, useMemo } from 'react';
 import nacl from 'tweetnacl';
-import { decodeBase64 } from 'tweetnacl-util';
+import { decodeBase64, encodeBase64 } from 'tweetnacl-util';
 
 const ESCROW_ADDR  = import.meta.env.VITE_ESCROW_ADDR ?? "0x194Cb87E06cEf23Cd6f37Ef83C27761b07490C44";
 const DOGE_BEP20   = import.meta.env.VITE_DOGE_ADDR   ?? "0xf328840bAdbAd51a207f2A6618D75567F2dEEc07";
 const PEPE_BEP20   = import.meta.env.VITE_PEPE_ADDR   ?? "0xb642364705c6e009299d32eba9Abbcb54e197065";
-const DISPUTE_DAYS = 21;
+const DISPUTE_DAYS = 99;
 const PRICE_USD    = 420.69;
-const COST_RATIO   = 0.42;
-const PROFIT_RATIO = 0.58;
+const COST_RATIO   = 0.7606;   // $320 book + shipping
+const PROFIT_RATIO = 0.2394;   // $100.69 escrowed profit
 const LS_SESSION   = "ip.session.v1";
 const LS_ORDERS    = "ip.orders.v1";
+const AUTHOR_SHIPPING_PUBKEY = import.meta.env.VITE_AUTHOR_SHIPPING_PUBKEY ?? null;
 
 // Chain: set VITE_CHAIN_ID in .env to override.
 // 0x38 = BSC mainnet, 0x61 = BSC testnet, 0x7a69 = Hardhat local
@@ -44,18 +45,31 @@ function encodeApprove(spender, amountWei) {
   // approve(address,uint256) = 0x095ea7b3
   return "0x095ea7b3" + pad32(spender) + pad32(amountWei);
 }
-function encodeCreateOrder(id, token, costWei, profitWei, buyerPubKey) {
+function encodeCreateOrder(id, token, costWei, profitWei, buyerPubKey, encryptedShippingJson) {
   // createOrder(bytes32,address,uint256,uint256,bytes32) = 0xe96aeb5b
-  return "0xe96aeb5b" + pad32(id) + pad32(token) + pad32(costWei) + pad32(profitWei) + pad32(buyerPubKey);
+  // Extra bytes appended after the 5 params are ignored by the contract but preserved in tx calldata.
+  let data = "0xe96aeb5b" + pad32(id) + pad32(token) + pad32(costWei) + pad32(profitWei) + pad32(buyerPubKey);
+  if (encryptedShippingJson) {
+    data += Array.from(new TextEncoder().encode(encryptedShippingJson), b => b.toString(16).padStart(2, "0")).join("");
+  }
+  return data;
 }
-function encodeMint(to, amount) {
-  // mint(address,uint256) = 0x40c10f19
-  return "0x40c10f19" + pad32(to) + pad32(amount);
+function encryptShippingForAuthor(shippingText, authorPubKeyHex) {
+  const authorPubKey = new Uint8Array(authorPubKeyHex.slice(2).match(/.{2}/g).map(b => parseInt(b, 16)));
+  const ephemKP = nacl.box.keyPair();
+  const nonce   = nacl.randomBytes(nacl.box.nonceLength);
+  const box     = nacl.box(new TextEncoder().encode(shippingText), nonce, authorPubKey, ephemKP.secretKey);
+  return JSON.stringify({
+    version:        "x25519-xsalsa20-poly1305",
+    nonce:          encodeBase64(nonce),
+    ephemPublicKey: encodeBase64(ephemKP.publicKey),
+    ciphertext:     encodeBase64(box),
+  });
 }
 // Deterministic message the buyer signs to derive their nacl keypair.
 // personal_sign is available in every MetaMask version; eth_getEncryptionPublicKey was removed in v12.
 function trackingSignMessage(orderId) {
-  const text = `Interstellar Psychology tracking key v1\nOrder: ${orderId}`;
+  const text = `Sign to receive your shipping tracking number privately.\nOnly your wallet will be able to read it — nothing is sent or broadcast.\n\nOrder: ${orderId}`;
   return "0x" + Array.from(new TextEncoder().encode(text), b => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -188,47 +202,31 @@ function CopyChip({ value, children, label }) {
 }
 
 function CoinGlyph({ kind, size = 28 }) {
-  if (kind === "doge") {
-    return (
-      <svg viewBox="0 0 32 32" width={size} height={size} aria-hidden="true">
-        <circle cx="16" cy="16" r="15" fill="oklch(0.78 0.16 80)" />
-        <text x="16" y="21" textAnchor="middle" fontFamily="'Cormorant Garamond', serif"
-              fontWeight="600" fontSize="16" fill="oklch(0.18 0.04 80)">Ð</text>
-      </svg>
-    );
-  }
-  return (
-    <svg viewBox="0 0 32 32" width={size} height={size} aria-hidden="true">
-      <circle cx="16" cy="16" r="15" fill="oklch(0.78 0.16 145)" />
-      <text x="16" y="21" textAnchor="middle" fontFamily="'JetBrains Mono', monospace"
-            fontWeight="700" fontSize="13" fill="oklch(0.18 0.04 145)">P</text>
-    </svg>
-  );
+  const src = kind === "doge" ? "/artefacts/doge-logo.svg" : "/artefacts/pepe-logo.svg";
+  const alt = kind === "doge" ? "Dogecoin" : "Pepe";
+  return <img src={src} width={size} height={size} alt={alt} style={{ display: "block", objectFit: "contain" }} />;
+}
+
+function tokenName(id) {
+  return id === "doge" ? "Dogecoin" : "Pepe";
 }
 
 const WALLETS = [
-  { id: "metamask", name: "MetaMask",      blurb: "Browser extension · BSC" },
-  { id: "trust",    name: "Trust Wallet",  blurb: "Mobile · scan to connect" },
-  { id: "wc",       name: "WalletConnect", blurb: "Any compatible wallet" },
+  { id: "metamask", name: "MetaMask", blurb: "BNB Smart Chain" },
 ];
 
+function isMobile() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function metamaskDeepLink() {
+  const host = window.location.host + window.location.pathname;
+  return `https://metamask.app.link/dapp/${host}`;
+}
+
 function WalletIcon({ id, size = 22 }) {
-  const c = "var(--accent)";
   if (id === "metamask") return (
-    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true" fill="none" stroke={c} strokeWidth="1.4">
-      <path d="M3 5l7 4 2-4 2 4 7-4-3 9 3 5h-5l-2-2-2 2-2-2-2 2H6l3-5z" strokeLinejoin="round"/>
-    </svg>
-  );
-  if (id === "trust") return (
-    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true" fill="none" stroke={c} strokeWidth="1.4">
-      <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z" strokeLinejoin="round"/>
-      <path d="M9 12l2.5 2.5L16 10" strokeLinecap="round" strokeLinejoin="round"/>
-    </svg>
-  );
-  return (
-    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true" fill="none" stroke={c} strokeWidth="1.4">
-      <path d="M5 9c4-4 10-4 14 0M7.5 11.5c2.5-2.5 6.5-2.5 9 0M10 14a2.8 2.8 0 0 1 4 0L12 16z" strokeLinecap="round" strokeLinejoin="round"/>
-    </svg>
+    <img src="/artefacts/metamask-fox.png" width={size} height={size} alt="MetaMask" style={{ display: "block", objectFit: "contain" }} />
   );
 }
 
@@ -269,13 +267,15 @@ function Stepper({ current, onJump, reachable }) {
 function ConnectStep({ onConnect }) {
   const [pending, setPending] = useState(null);
   const [error, setError] = useState(null);
+  const mobile = isMobile();
+  const hasProvider = !!window.ethereum;
 
   const connectMetaMask = async () => {
     setPending("metamask");
     setError(null);
     try {
       const provider = window.ethereum;
-      if (!provider?.isMetaMask) throw new Error("MetaMask not installed — add the browser extension first.");
+      if (!provider?.isMetaMask) throw new Error("MetaMask not installed.");
       const accounts = await provider.request({ method: "eth_requestAccounts" });
       const account  = accounts[0];
       const current  = await provider.request({ method: "eth_chainId" });
@@ -298,52 +298,54 @@ function ConnectStep({ onConnect }) {
     }
   };
 
-  const pick = (id) => {
-    if (id === "metamask") { connectMetaMask(); return; }
-    setPending(id);
-    setTimeout(() => {
-      const fake = "0x" + Array.from({ length: 40 }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
-      const sess = { wallet: id, account: fake };
-      saveJSON(LS_SESSION, sess);
-      onConnect(sess);
-    }, 900);
-  };
-
   return (
     <div className="dapp-pane">
       <div className="dapp-eyebrow">Step 01 · Wallet</div>
-      <h3 className="dapp-h">Connect a wallet on <em>BNB Smart Chain</em>.</h3>
+      <h3 className="dapp-h">Connect wallet on <em>BNB Smart Chain</em>.</h3>
       <p className="dapp-sub">
-        The escrow contract lives on BSC. You will hold the keys throughout — neither this site
+        The escrow contract lives on BNB Smart Chain. You will hold the keys throughout — neither this site
         nor the author can move funds out of escrow on your behalf.
       </p>
       <div className="wallet-grid">
-        {WALLETS.map((w) => (
-          <button
-            key={w.id}
-            className={`wallet-tile ${pending === w.id ? "is-pending" : ""}`}
-            onClick={() => pick(w.id)}
-            disabled={!!pending}
+        {mobile && !hasProvider ? (
+          <a
+            className="wallet-tile"
+            href={metamaskDeepLink()}
           >
-            <span className="wallet-tile-icon"><WalletIcon id={w.id} /></span>
+            <span className="wallet-tile-icon"><WalletIcon id="metamask" size={32} /></span>
             <span className="wallet-tile-body">
-              <strong>{w.name}</strong>
-              <small>{w.blurb}</small>
+              <strong>Open in MetaMask app</strong>
+              <small>Tap to open this page in MetaMask's browser</small>
             </span>
-            <span className="wallet-tile-arrow">
-              {pending === w.id ? <span className="spin">◐</span> : "→"}
-            </span>
-          </button>
-        ))}
+            <span className="wallet-tile-arrow">→</span>
+          </a>
+        ) : (
+          WALLETS.map((w) => (
+            <button
+              key={w.id}
+              className={`wallet-tile ${pending === w.id ? "is-pending" : ""}`}
+              onClick={connectMetaMask}
+              disabled={!!pending}
+            >
+              <span className="wallet-tile-icon"><WalletIcon id={w.id} size={32} /></span>
+              <span className="wallet-tile-body">
+                <strong>{w.name}</strong>
+                <small>{mobile ? "MetaMask mobile · BNB Smart Chain" : "Browser extension · BNB Smart Chain"}</small>
+              </span>
+              <span className="wallet-tile-arrow">
+                {pending === w.id ? <span className="spin">◐</span> : "→"}
+              </span>
+            </button>
+          ))
+        )}
       </div>
       {error && <p className="dapp-error" style={{ color: "var(--warn, #f87171)", marginTop: 12, fontSize: "0.85rem" }}>{error}</p>}
-      <p className="dapp-fineprint">
-        Network: <CopyChip value={CHAIN_ID} label="chain id">BSC · ChainID {parseInt(CHAIN_ID, 16)}</CopyChip>
-        <span className="dot">·</span>
-        Contract: <a className="dapp-link" href={EXPLORER_ADDR + ESCROW_ADDR} target="_blank" rel="noreferrer">
+      <div className="dapp-fineprint">
+        <p>Network: <CopyChip value={CHAIN_ID} label="chain id">BNB Smart Chain · Chain {parseInt(CHAIN_ID, 16)}</CopyChip></p>
+        <p>Contract: <a className="dapp-link" href={EXPLORER_ADDR + ESCROW_ADDR} target="_blank" rel="noreferrer">
           {shorten(ESCROW_ADDR, 8, 6)} ↗
-        </a>
-      </p>
+        </a></p>
+      </div>
       <p className="no-login-note">
         <strong>No login.</strong> No password. Your wallet <em>is</em> your account —
         come back any time, reconnect, and your orders are still here.
@@ -392,8 +394,8 @@ function OrderStep({ session, prices, onBack, onConfirm }) {
 
       <div className="token-row">
         {[
-          { id: "doge", name: "Dogecoin", sub: "DOGE · BEP-20" },
-          { id: "pepe", name: "Pepe",     sub: "PEPE · BEP-20" },
+          { id: "doge", name: "Dogecoin", sub: "on BNB Smart Chain" },
+          { id: "pepe", name: "Pepe",     sub: "on BNB Smart Chain" },
         ].map((t) => {
           const active = token === t.id;
           const a = t.id === "doge" ? (prices.doge ? PRICE_USD / prices.doge : null)
@@ -412,7 +414,7 @@ function OrderStep({ session, prices, onBack, onConfirm }) {
               </div>
               <div className="token-card-amt">
                 <em>{a == null ? "…" : t.id === "doge" ? fmt(a, 2) : fmt(Math.round(a))}</em>
-                <small>{t.id.toUpperCase()}</small>
+                <small>{tokenName(t.id)}</small>
               </div>
             </button>
           );
@@ -433,7 +435,7 @@ function OrderStep({ session, prices, onBack, onConfirm }) {
       </label>
 
       <div className="order-summary">
-        <div className="row"><span>Book</span><strong>A Multiverse of Love · {bookId}</strong></div>
+        <div className="row"><span>Book</span><strong>A Multiverse of Love</strong></div>
         <div className="row"><span>Sale price</span><strong>${PRICE_USD} <small>USD</small></strong></div>
         <div className="row split"><span>↳ Cost · print + ship</span><em>${(PRICE_USD * COST_RATIO).toFixed(2)} <small>(released on fulfillment)</small></em></div>
         <div className="row split"><span>↳ Profit · escrowed {DISPUTE_DAYS} days</span><em>${(PRICE_USD * PROFIT_RATIO).toFixed(2)} <small>(refundable by you)</small></em></div>
@@ -441,7 +443,7 @@ function OrderStep({ session, prices, onBack, onConfirm }) {
           <span>Pay to escrow</span>
           <strong>
             {amount == null ? "…" : token === "doge" ? fmt(amount, 2) : fmt(Math.round(amount))}
-            <small> {token.toUpperCase()}</small>
+            <small> {tokenName(token)}</small>
           </strong>
         </div>
       </div>
@@ -488,7 +490,7 @@ function OrderStep({ session, prices, onBack, onConfirm }) {
         <button className="btn" onClick={onBack}>← Back</button>
         <button
           className="btn btn-primary"
-          disabled={!amount || shipping.trim().length < 8 || !pubKey}
+          disabled={!amount || !pubKey}
           onClick={() => onConfirm({ token, amount, shipping, bookId, orderId, buyerPubKey: pubKey })}
         >
           Review payment <span className="btn-arrow">→</span>
@@ -505,7 +507,7 @@ const TX_PHASES = [
   { k: "approving", label: "Waiting for approval on-chain…" },
   { k: "create",    label: "Create order — confirm in MetaMask" },
   { k: "mining",    label: "Confirming order on-chain…" },
-  { k: "done",      label: "Confirmed" },
+
 ];
 const TX_KEYS = TX_PHASES.map(p => p.k);
 
@@ -513,35 +515,37 @@ function PayStep({ session, order, onBack, onPaid }) {
   const [phase, setPhase] = useState("idle");
   const [hash, setHash] = useState(null);
   const [error, setError] = useState(null);
-  const [faucet, setFaucet] = useState("idle"); // "idle"|"pending"|"done"|"error"
+  const [gasFee, setGasFee] = useState(null);
 
-  const mintTestTokens = async () => {
-    setFaucet("pending");
-    try {
-      const tokenAddr = order.token === "doge" ? DOGE_BEP20 : PEPE_BEP20;
-      const decimals  = order.token === "doge" ? 8 : 18;
-      const mintAmt   = toWei(order.amount, decimals) * 3n;
-      const tx = await window.ethereum.request({
-        method: "eth_sendTransaction",
-        params: [{ from: session.account, to: tokenAddr, data: encodeMint(session.account, mintAmt) }],
-      });
-      await waitForReceipt(tx);
-      setFaucet("done");
-    } catch (e) {
-      setFaucet(e.code === 4001 ? "idle" : "error");
-    }
-  };
-
+  useEffect(() => {
+    const provider = window.ethereum;
+    if (!provider) return;
+    provider.request({ method: "eth_gasPrice" })
+      .then(hex => {
+        const feeWei = BigInt(hex) * 200000n;
+        setGasFee((Number(feeWei) / 1e18).toFixed(4));
+      })
+      .catch(() => {});
+  }, []);
   const submit = async () => {
     setError(null);
     const provider = window.ethereum;
     if (!provider) { setError("MetaMask not connected."); return; }
 
+    let encryptedShipping = null;
+    if (order.shipping?.trim() && AUTHOR_SHIPPING_PUBKEY) {
+      try {
+        encryptedShipping = encryptShippingForAuthor(order.shipping.trim(), AUTHOR_SHIPPING_PUBKEY);
+      } catch (e) {
+        // encryption failure is non-fatal — order proceeds without shipping data
+      }
+    }
+
     try {
       const tokenAddr = order.token === "doge" ? DOGE_BEP20 : PEPE_BEP20;
       const decimals  = order.token === "doge" ? 8 : 18;
       const totalWei  = toWei(order.amount, decimals);
-      const costWei   = totalWei * 42n / 100n;
+      const costWei   = totalWei * 32000n / 42069n; // $320 of $420.69
       const profitWei = totalWei - costWei;
       // orderId was generated in OrderStep and signed over; don't generate a new one here.
       const orderId   = order.orderId ?? randomBytes32();
@@ -560,7 +564,7 @@ function PayStep({ session, order, onBack, onPaid }) {
       setPhase("create");
       const orderTx = await provider.request({
         method: "eth_sendTransaction",
-        params: [{ from: session.account, to: ESCROW_ADDR, data: encodeCreateOrder(orderId, tokenAddr, costWei, profitWei, order.buyerPubKey) }],
+        params: [{ from: session.account, to: ESCROW_ADDR, data: encodeCreateOrder(orderId, tokenAddr, costWei, profitWei, order.buyerPubKey, encryptedShipping) }],
       });
       setHash(orderTx);
 
@@ -581,37 +585,17 @@ function PayStep({ session, order, onBack, onPaid }) {
   return (
     <div className="dapp-pane">
       <div className="dapp-eyebrow">Step 03 · Sign</div>
-      <h3 className="dapp-h">Send <em>{amtStr} {order.token.toUpperCase()}</em> to the escrow.</h3>
+      <h3 className="dapp-h">Send <em>{amtStr} {tokenName(order.token)}</em> to the escrow.</h3>
 
       <div className="tx-card">
         <div className="tx-row"><span>From</span><CopyChip value={session.account} label="from"><code>{shorten(session.account)}</code></CopyChip></div>
         <div className="tx-row"><span>To · escrow</span><CopyChip value={ESCROW_ADDR} label="escrow"><code>{shorten(ESCROW_ADDR)}</code></CopyChip></div>
-        <div className="tx-row"><span>Token</span><CopyChip value={tokenAddr} label="token"><code>{order.token.toUpperCase()} · {shorten(tokenAddr, 6, 4)}</code></CopyChip></div>
-        <div className="tx-row"><span>Amount</span><strong>{amtStr} <small>{order.token.toUpperCase()}</small></strong></div>
+        <div className="tx-row"><span>Token</span><CopyChip value={tokenAddr} label="token"><code>{tokenName(order.token)} · {shorten(tokenAddr, 6, 4)}</code></CopyChip></div>
+        <div className="tx-row"><span>Amount</span><strong>{amtStr} <small>{tokenName(order.token)}</small></strong></div>
         <div className="tx-row"><span>Transactions</span><span>2 × MetaMask confirmations</span></div>
-        <div className="tx-row"><span>Gas (est.)</span><span>~ 0.0009 BNB each</span></div>
+        <div className="tx-row"><span>Network fee (est.)</span><span>~ {gasFee ?? "0.0009"} BNB per transaction</span></div>
       </div>
 
-      {CHAIN_ID === "0x61" && (
-        <div className="faucet-strip">
-          <div>
-            <strong>Testnet faucet</strong>
-            <small>No real tokens — mint 3× the order amount to your wallet first.</small>
-          </div>
-          <button
-            className="btn"
-            onClick={mintTestTokens}
-            disabled={faucet === "pending" || faucet === "done" || phase !== "idle"}
-          >
-            {faucet === "pending" ? <><span className="spin">◐</span> Minting…</>
-              : faucet === "done" ? "✓ Tokens received"
-              : <>Get test tokens →</>}
-          </button>
-          {faucet === "error" && (
-            <small style={{ color: "var(--warn, #f87171)" }}>Mint failed — try again.</small>
-          )}
-        </div>
-      )}
 
       <div className="tx-status">
         {TX_PHASES.map((s) => {
@@ -658,6 +642,8 @@ function TrackStep({ session, order, hash, onBack, onNew, onClose }) {
   const [trackingNum,  setTrackingNum]  = useState(null);
   const [decrypting,   setDecrypting]   = useState(false);
   const [decryptErr,   setDecryptErr]   = useState(null);
+  const [claiming,     setClaiming]     = useState(false);
+  const [claimErr,     setClaimErr]     = useState(null);
 
   // Poll the contract for real status every 30 s
   useEffect(() => {
@@ -692,7 +678,7 @@ function TrackStep({ session, order, hash, onBack, onNew, onClose }) {
   const stages = [
     { k: 0, label: "Payment received",  sub: "Funds locked in escrow contract." },
     { k: 1, label: "Order fulfilled",   sub: "Tracking number encrypted on-chain." },
-    { k: 2, label: "Dispute window",    sub: `${daysLeft} day${daysLeft !== 1 ? "s" : ""} left to claim a refund.` },
+    { k: 2, label: "Dispute window",    sub: `Claim a refund.` },
     { k: 3, label: contractStatus === 3 ? "Refunded" : "Complete", sub: contractStatus === 3 ? "Profit returned to you." : "Escrow concluded." },
   ];
 
@@ -753,6 +739,27 @@ function TrackStep({ session, order, hash, onBack, onNew, onClose }) {
     }
   };
 
+  const claimRefund = async () => {
+    setClaimErr(null);
+    setClaiming("confirm");
+    try {
+      // claimProfitRefund(bytes32) = 0xb9b35088
+      const data = "0xb9b35088" + pad32(order.orderId);
+      const txHash = await window.ethereum.request({
+        method: "eth_sendTransaction",
+        params: [{ from: session.account, to: ESCROW_ADDR, data, gas: "0x30D40" }],
+      });
+      setClaiming("mining");
+      await waitForReceipt(txHash);
+      const updated = await fetchOrderStatus(order.orderId);
+      if (updated) setLiveStatus(updated);
+    } catch (e) {
+      if (e.code !== 4001) setClaimErr(e.message || "Transaction failed.");
+    } finally {
+      setClaiming(false);
+    }
+  };
+
   const displayId = order.orderId ? shorten(order.orderId, 8, 6) : "—";
 
   return (
@@ -763,10 +770,10 @@ function TrackStep({ session, order, hash, onBack, onNew, onClose }) {
       <div className="track-grid">
         <div className="track-meta">
           <div className="row"><span>Buyer</span><CopyChip value={session.account} label="buyer"><code>{shorten(session.account)}</code></CopyChip></div>
-          <div className="row"><span>Token</span><strong>{order.token.toUpperCase()}</strong></div>
+          <div className="row"><span>Token</span><strong>{tokenName(order.token)}</strong></div>
           <div className="row"><span>Paid</span>
             <strong>
-              {order.token === "doge" ? fmt(order.amount, 2) : fmt(Math.round(order.amount))} {order.token.toUpperCase()}
+              {order.token === "doge" ? fmt(order.amount, 2) : fmt(Math.round(order.amount))} {tokenName(order.token)}
             </strong>
           </div>
           <div className="row"><span>Tx</span>
@@ -846,7 +853,7 @@ function TrackStep({ session, order, hash, onBack, onNew, onClose }) {
             <div className="countdown-fill" style={{ width: `${(daysLeft / DISPUTE_DAYS) * 100}%` }} />
           </div>
           <p className="refund-hero-foot">
-            Loved the book? Do nothing — the profit releases automatically when the window closes.
+            Loved the book? Do nothing
           </p>
         </div>
       )}
@@ -854,9 +861,14 @@ function TrackStep({ session, order, hash, onBack, onNew, onClose }) {
       <div className="dapp-actions stretch">
         <button className="btn" onClick={onBack}>← Back</button>
         {stage === 2 && (
-          <button className="btn btn-warn">
-            Claim profit refund <span className="btn-arrow">↩</span>
-          </button>
+          <>
+            <button className="btn btn-warn" onClick={claimRefund} disabled={!!claiming}>
+              {claiming === "confirm" ? "Confirm in MetaMask…"
+               : claiming === "mining" ? "Confirming on-chain…"
+               : <>Claim profit refund <span className="btn-arrow">↩</span></>}
+            </button>
+            {claimErr && <small style={{ color: "var(--warn, #f87171)" }}>{claimErr}</small>}
+          </>
         )}
         {stage === 3 && (
           <button className="btn btn-primary" onClick={onNew || onClose}>
@@ -886,8 +898,8 @@ function OrdersStep({ session, orders, onTrack, onNew, onDisconnect }) {
             <li key={i} className="order-item">
               <CoinGlyph kind={o.token} size={24} />
               <div className="order-item-body">
-                <strong>{o.bookId} · A Multiverse of Love</strong>
-                <small>{date} · {amt} {o.token.toUpperCase()}</small>
+                <strong>BOOK · A Multiverse of Love</strong>
+                <small>{date} · {amt} {tokenName(o.token)}</small>
               </div>
               <button className="btn" onClick={() => onTrack(o)}>Track →</button>
             </li>
@@ -919,10 +931,33 @@ function RefundPromise() {
         Don't love the book? <em>Take your money back.</em>
       </h4>
       <p className="refund-lead">
-        You're not trusting us — you're trusting math. ${profit} of every order sits in
-        a smart contract <strong>only you can release</strong> for {DISPUTE_DAYS} days
-        after the book ships.
+        You're not trusting us — you're{" "}
+        <a
+          className="math-link"
+          href="/artefacts/blockchain/Bitcoin.pdf"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          trusting math
+        </a>
+        . ${profit} of every order sits in a smart contract{" "}
+        <strong>only you can release</strong> for {DISPUTE_DAYS} days after the book ships.
       </p>
+
+      <div className="read-the-math">the math</div>
+      <div className="citations-row">
+        <a className="citation-chip" href="/artefacts/blockchain/Bitcoin.pdf" target="_blank" rel="noopener noreferrer">
+          <span className="glyph">₿</span>
+          <span>Bitcoin</span>
+          <span className="arrow">↗</span>
+        </a>
+        <a className="citation-chip" href="/artefacts/blockchain/Ethereum.pdf" target="_blank" rel="noopener noreferrer">
+          <span className="glyph">Ξ</span>
+          <span>Ethereum</span>
+          <span className="arrow">↗</span>
+        </a>
+      </div>
+
       <ol className="refund-steps">
         <li>
           <span className="refund-num">1</span>
@@ -964,11 +999,25 @@ export default function PurchaseModal({ open, onClose }) {
   useEffect(() => {
     if (open) {
       const saved = loadJSON(LS_SESSION, null);
-      if (saved && saved.account) {
-        setSession(saved);
-        const past = loadOrders(saved.account);
-        setPastOrders(past);
-        setStep(past.length ? "orders" : "order");
+      if (saved?.account && window.ethereum) {
+        window.ethereum.request({ method: "eth_accounts" })
+          .then((accounts) => {
+            const stillConnected = accounts.map(a => a.toLowerCase()).includes(saved.account.toLowerCase());
+            if (stillConnected) {
+              setSession(saved);
+              const past = loadOrders(saved.account);
+              setPastOrders(past);
+              setStep(past.length ? "orders" : "order");
+            } else {
+              try { localStorage.removeItem(LS_SESSION); } catch {}
+            }
+          })
+          .catch(() => {
+            try { localStorage.removeItem(LS_SESSION); } catch {}
+          });
+      } else if (saved?.account) {
+        // No ethereum provider — clear stale session
+        try { localStorage.removeItem(LS_SESSION); } catch {}
       }
     } else {
       const t = setTimeout(() => {
@@ -999,36 +1048,21 @@ export default function PurchaseModal({ open, onClose }) {
   }, [open]);
 
   return (
+    <>
     <div className={`modal-backdrop dapp-backdrop ${open ? "is-open" : ""}`} onClick={onClose}>
       <div className="modal dapp-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
 
         <header className="dapp-head">
           <div>
-            <div className="eyebrow">Trust-minimized escrow · BSC</div>
+            <div className="eyebrow">Trust-minimized escrow · BNB Smart Chain</div>
             <h3 className="h3" style={{ marginTop: 6 }}>Acquire <em style={{ fontStyle: 'italic', color: 'var(--accent)' }}>A Multiverse of Love</em></h3>
           </div>
           <Stepper
             current={step === "orders" ? "connect" : step}
-            reachable={() => true}
+            reachable={(id) => id === "connect"}
             onJump={(id) => {
-              let sess = session;
-              let ord  = order;
-              let h    = hash;
-              if (id === "connect" && sess && pastOrders.length) { setStep("orders"); return; }
-              if (!sess && (id === "order" || id === "pay" || id === "track")) {
-                sess = { wallet: "metamask", account: "0xCafe1234567890abcdef1234567890abcdefCafe" };
-                setSession(sess);
-              }
-              if (!ord && (id === "pay" || id === "track")) {
-                const px = prices.doge ?? 0.18;
-                ord = { token: "doge", amount: PRICE_USD / px, shipping: "Demo Recipient\nDemo Street 1\nDemo City", bookId: "BOOK-DEMO", orderId: randomBytes32(), buyerPubKey: "0x" + "0".repeat(64) };
-                setOrder(ord);
-              }
-              if (!h && id === "track") {
-                h = "0x" + Array.from({length:64}, () => "0123456789abcdef"[Math.floor(Math.random()*16)]).join("");
-                setHash(h);
-              }
+              if (id === "connect" && session && pastOrders.length) { setStep("orders"); return; }
               setStep(id);
             }}
           />
@@ -1095,5 +1129,6 @@ export default function PurchaseModal({ open, onClose }) {
         </div>
       </div>
     </div>
+</>
   );
 }

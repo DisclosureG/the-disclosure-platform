@@ -50,7 +50,7 @@ function Nav({ active, onBuy }) {
   const links = [
     { id: 'manifesto', label: 'Manifesto' },
     { id: 'pillars', label: 'Pillars' },
-    { id: 'book', label: 'Book' },
+    { id: 'book', label: 'Thesis' },
     { id: 'peace', label: 'Peace' },
   ];
 
@@ -98,8 +98,8 @@ function Hero({ onBuy }) {
         </h1>
         <p className="lead hero-sub fade-in">
           Interstellar Psychology is a new meta-discipline that bridges science and spirituality —
-          gathering the rigorous evidence that we live in a multiverse of love, and that world peace
-          is the natural result of remembering it.
+          building the evidence that we live in a multiverse of love,
+          and that world peace is its natural conclusion.
         </p>
         <div className="hero-cta-row fade-in">
           <button className="btn btn-primary" onClick={onBuy}>
@@ -138,7 +138,7 @@ function Manifesto() {
           </p>
           <p>
             <strong>Love is the fundamental relational field</strong> and the verification mechanism. It can be
-            refused. Yet when freely chosen, it confirms the reality and beauty of creation across all worlds.
+            refused. Yet when freely chosen, it confirms the reality and beauty of creation.
           </p>
           <p>
             Interstellar Psychology is the discipline that gathers, names, and honours this evidence —
@@ -169,7 +169,7 @@ function BookSection({ onBuy, onPreview }) {
           </p>
 
           <dl className="book-meta">
-            <dt>Pages</dt><dd>98 · illustrated</dd>
+            <dt>Pages</dt><dd>99 · illustrated</dd>
             <dt>Format</dt><dd>Hardcover</dd>
             <dt></dt><dd></dd>
             <dt>Currencies</dt><dd>Dogecoin · Pepe</dd>
@@ -180,8 +180,8 @@ function BookSection({ onBuy, onPreview }) {
           </p>
 
           <div className="coin-row" style={{ margin: '20px 0 28px' }}>
-            <span className="coin-pill"><span className="coin-dot doge" />DOGE accepted</span>
-            <span className="coin-pill"><span className="coin-dot pepe" />PEPE accepted</span>
+            <span className="coin-pill"><span className="coin-dot doge" />Dogecoin accepted</span>
+            <span className="coin-pill"><span className="coin-dot pepe" />Pepe accepted</span>
           </div>
 
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -203,14 +203,16 @@ function Peace() {
     <section id="peace" className="peace">
       <MandalaBg />
       <div className="container peace-content">
-        <div className="eyebrow fade-in">◇ The destination ◇</div>
-        <h2 className="h2 fade-in" style={{ marginTop: 16 }}>
-          The verification is <em style={{ color: 'var(--accent)', fontStyle: 'italic' }}>peace</em>.
-        </h2>
-        <p className="lead fade-in" style={{ marginTop: 18 }}>
-          When enough souls remember that they are creation seeing itself, the field tunes to coherence.
-          Peace is not a treaty — it is a frequency we agree to inhabit.
-        </p>
+        <div className="peace-intro">
+          <div className="eyebrow fade-in">◇ The destination ◇</div>
+          <h2 className="h2 fade-in" style={{ marginTop: 16 }}>
+            The verification is <em style={{ color: 'var(--accent)', fontStyle: 'italic' }}>peace</em>.
+          </h2>
+          <p className="lead fade-in" style={{ marginTop: 18 }}>
+            When enough souls remember that they are creation seeing itself, the field tunes to coherence.
+            Peace is not a treaty — it is a frequency we agree to inhabit.
+          </p>
+        </div>
 
         <div className="peace-stats">
           <div className="stat fade-in">
@@ -234,6 +236,21 @@ function Peace() {
   );
 }
 
+const CONTACT_EMAIL = 'neo@interstellar-psychology.com';
+
+function ContactInline() {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className={`contact-inline ${open ? 'is-open' : ''}`}>
+      <button className="contact-trigger" onClick={() => setOpen(v => !v)}>
+        <span>REACH OUT</span>
+        <span className="glyph">{open ? '−' : '+'}</span>
+      </button>
+      <a className="email-inline" href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>
+    </span>
+  );
+}
+
 function Footer() {
   return (
     <footer className="foot">
@@ -244,10 +261,10 @@ function Footer() {
               <BrandMark />
               <span className="brand-text">
                 Interstellar Psychology
-                <small>Multiverse of Love</small>
+                <small>A Multiverse of Love</small>
               </span>
             </div>
-            <p>A meta-scientific field bridging spirit and science — for the verification of love and the arrival of peace.</p>
+            <p>A meta-scientific field bridging science and spirituality — for the verification of love and the arrival of peace.</p>
           </div>
           <div>
             <h4>Pillars</h4>
@@ -271,14 +288,29 @@ function Footer() {
           <div>
             <h4>Field</h4>
             <ul>
-              <li><a href="#book">The book</a></li>
               <li><a href="#manifesto">Manifesto</a></li>
+              <li><a href="#book">The Thesis</a></li>
             </ul>
           </div>
         </div>
         <div className="foot-bottom">
-          <span>INTERSTELLAR.PSYCHOLOGY</span>
-          <span>LOVE · BELIEF · PEACE</span>
+          <span className="brandline">
+            <span>INTERSTELLAR</span>
+            <a
+              className="archive-mark"
+              href="/artefacts/"
+              aria-label="Artefacts archive"
+              data-label="Artefacts"
+            >
+              <svg viewBox="-10 -10 20 20" aria-hidden="true">
+                <circle className="ring-2" r="8" />
+                <circle className="ring" r="5" />
+                <path className="diamond" d="M 0 -2.4 L 2.4 0 L 0 2.4 L -2.4 0 Z" />
+              </svg>
+            </a>
+            <span>PSYCHOLOGY</span>
+          </span>
+          <ContactInline />
         </div>
       </div>
     </footer>
