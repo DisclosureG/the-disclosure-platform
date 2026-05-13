@@ -25,7 +25,7 @@ module.exports = {
       url:      BSC_MAINNET_RPC,
       chainId:  56,
       ...(DEPLOYER_KEY ? { accounts: [DEPLOYER_KEY] } : {}),
-      gasPrice: 3_000_000_000,
+      gasPrice: 1_000_000_000,
     },
   },
   etherscan: {
