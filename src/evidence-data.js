@@ -167,6 +167,27 @@ export function useEvidence(searchQuery = '', type = 'All', tier = 'all', sortBy
   return { evidence: items, loading, total, hasMore, loadMore, addOptimistic };
 }
 
+// ── Per-pillar counts hook — unfiltered totals for the Pillars grid ──────────
+export function usePillarCounts() {
+  const [counts, setCounts] = useState({});
+
+  useEffect(() => {
+    const base = (id) => supabase
+      .from('evidence')
+      .select('*', { count: 'exact', head: true })
+      .in('status', VISIBLE_STATUSES)
+      .eq('pillar_id', id);
+
+    Promise.all(PILLARS.map(p => base(p.id))).then(results => {
+      const next = {};
+      PILLARS.forEach((p, i) => { next[p.id] = results[i].count ?? 0; });
+      setCounts(next);
+    });
+  }, []);
+
+  return counts;
+}
+
 // ── Tier counts hook — unfiltered totals for Hero stats ───────────────────────
 export function useTierCounts() {
   const [counts, setCounts] = useState({ total: 0, tier1: 0, tier2: 0, tier3: 0 });

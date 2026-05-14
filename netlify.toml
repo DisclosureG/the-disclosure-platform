@@ -18,6 +18,11 @@
   status = 200
 
 [[redirects]]
+  from   = "/peer-review/*"
+  to     = "/peer-review/index.html"
+  status = 200
+
+[[redirects]]
   from   = "/*"
   to     = "/index.html"
   status = 200

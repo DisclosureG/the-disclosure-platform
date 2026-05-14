@@ -1,9 +1,23 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { BrandMark } from '../components/Sigil';
-import { PILLARS, useEvidence } from '../evidence-data';
+import { PILLARS, useEvidence, useTierCounts, STATUS_LABEL, openChallenge } from '../evidence-data';
 import { supabase } from '../lib/supabase';
+import { isPeerActive, getPeerHandle, signAttestation, openChallengeOnChain, submitEvidenceOnChain, waitForTx, CONSENSUS_ADDR, getChallengeCooldownRemaining, computeContentHash } from '../lib/wallet';
+import { markEvidenceOnchain } from '../evidence-data';
 import '../styles/interstellar.css';
 import '../styles/evidence.css';
+
+function EvidenceBadge({ status }) {
+  if (!status || status === 'canon' || status === 'approved') return null;
+  const map = {
+    contested:  { label: 'Contested',  cls: 'ev-badge-contested'  },
+    deprecated: { label: 'Deprecated', cls: 'ev-badge-deprecated' },
+    reaffirmed: { label: 'Reaffirmed', cls: 'ev-badge-reaffirmed' },
+  };
+  const cfg = map[status];
+  if (!cfg) return null;
+  return <span className={`ev-status-badge ${cfg.cls}`}>{cfg.label}</span>;
+}
 
 function PillarGlyph({ n }) {
   const angle = (parseInt(n, 10) / 9) * 360;
@@ -19,11 +33,12 @@ function PillarGlyph({ n }) {
 
 function Nav() {
   const links = [
-    { id: 'manifesto', label: 'Manifesto', href: '/#manifesto' },
-    { id: 'pillars',   label: 'Pillars',   href: '/#pillars' },
-    { id: 'book',      label: 'Thesis',    href: '/#book' },
-    { id: 'peace',     label: 'Peace',     href: '/#peace' },
-    { id: 'evidence',  label: 'Evidence',  href: '#top' },
+    { id: 'manifesto',   label: 'Manifesto',   href: '/#manifesto' },
+    { id: 'pillars',     label: 'Pillars',     href: '/#pillars' },
+    { id: 'book',        label: 'Thesis',      href: '/#book' },
+    { id: 'peace',       label: 'Peace',       href: '/#peace' },
+    { id: 'evidence',    label: 'Evidence',    href: '#top' },
+    { id: 'peer-review', label: 'Peer Review', href: '/peer-review/' },
   ];
   return (
     <nav className="nav">
@@ -148,14 +163,19 @@ function Controls({ q, setQ, type, setType, tier, setTier, sort, setSort, onSubm
 
 function EvCard({ e, onOpen }) {
   const tierLabel = e.tier === 1 ? 'TI' : e.tier === 2 ? 'TII' : 'TIII';
+  const isDeprecated = e.status === 'deprecated';
   return (
-    <button className="ev-card" onClick={() => onOpen(e)}>
+    <button
+      className={`ev-card${isDeprecated ? ' is-deprecated' : e.status === 'contested' ? ' is-contested' : ''}`}
+      onClick={() => onOpen(e)}
+    >
       <div className="ev-card-top">
         <span className="ev-type">{e.type}</span>
         <span className="ev-tier" data-tier={e.tier}>
           <span className="bar"><i /><i /><i /></span>
           {tierLabel}
         </span>
+        <EvidenceBadge status={e.status} />
       </div>
       <h3 className="ev-card-title">{e.title}</h3>
       <p className="ev-card-src">
@@ -232,70 +252,238 @@ function FlatGrid({ items, onOpen }) {
   );
 }
 
-function DetailModal({ e, onClose }) {
+function DetailModal({ e, onClose, walletPeer }) {
+  const [challengeOpen, setChallengeOpen] = useState(false);
+  const [challengeReason, setChallengeReason] = useState('');
+  const [challenging, setChallenging] = useState(false);
+  const [challenged, setChallenged] = useState(false);
+  const [chainWarning, setChainWarning] = useState(null);
+
   useEffect(() => {
     const onKey = (ev) => { if (ev.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  useEffect(() => {
+    setChallengeOpen(false);
+    setChallengeReason('');
+    setChallenged(false);
+  }, [e?.id]);
+
   if (!e) return null;
+
   const tierLabel = e.tier === 1 ? 'I' : e.tier === 2 ? 'II' : 'III';
-  const tierDesc = e.tier === 1 ? 'I — Peer-reviewed / Declassified' : e.tier === 2 ? 'II — Documented / Institutional' : 'III — Testimony / First-person';
+  const tierDesc  = e.tier === 1 ? 'I — Peer-reviewed / Declassified' : e.tier === 2 ? 'II — Documented / Institutional' : 'III — Testimony / First-person';
+  const isCanon      = e.status === 'canon' || e.status === 'approved' || e.status === 'reaffirmed';
+  const isContested  = e.status === 'contested';
+  const isDeprecated = e.status === 'deprecated';
+
+  const handleChallenge = async (ev) => {
+    ev.preventDefault();
+    if (!walletPeer?.addr || !walletPeer?.isPeer) return;
+    if (challengeReason.trim().length < 20) return;
+    setChallenging(true);
+    setChainWarning(null);
+
+    // EIP-712 signature is mandatory.  If the user rejects in MetaMask we
+    // surface a clear warning rather than silently writing an unsigned row.
+    let sig;
+    try {
+      sig = await signAttestation({
+        evidenceId: e.id,
+        phase:      'challenge',
+        verdict:    'challenge',
+        note:       challengeReason.trim(),
+      }, walletPeer.addr);
+    } catch (sigErr) {
+      setChainWarning(sigErr?.code === 4001
+        ? 'Signature rejected — challenge not filed.'
+        : `Signature failed — ${sigErr?.message || 'unknown error'}`);
+      setChallenging(false);
+      return;
+    }
+
+    let txHash = null;
+    if (CONSENSUS_ADDR) {
+      try {
+        txHash = await openChallengeOnChain(e.id);
+      } catch (txErr) {
+        setChainWarning(txErr?.message?.includes('rejected')
+          ? 'Transaction rejected — challenge not recorded.'
+          : `On-chain call failed — ${txErr?.message || 'unknown error'}`);
+        setChallenging(false);
+        return;
+      }
+      try { await waitForTx(txHash); }
+      catch (txErr) {
+        setChainWarning('Transaction reverted — challenge not recorded.');
+        setChallenging(false);
+        return;
+      }
+    }
+
+    try {
+      await openChallenge(e, walletPeer.addr, walletPeer.handle || '', challengeReason.trim(), sig, txHash);
+    } catch (syncErr) {
+      setChainWarning(`On-chain succeeded but cache sync failed — reload to refresh. (${syncErr?.message || ''})`);
+    }
+    setChallenging(false);
+    setChallenged(true);
+  };
+
   return (
     <div className="ev-modal-backdrop is-open" onClick={onClose}>
       <div className="ev-modal" onClick={(ev) => ev.stopPropagation()}>
         <button className="ev-modal-close" onClick={onClose} aria-label="Close">×</button>
+
         <div className="ev-detail-eyebrow">
           <span className="ev-type">{e.type}</span>
           <span className="ev-tier" data-tier={e.tier}>
             <span className="bar"><i /><i /><i /></span>
             Tier {tierLabel}
           </span>
+          <EvidenceBadge status={e.status} />
         </div>
-        <h3 className="ev-detail-title">{e.title}</h3>
+
+        <h3 className={`ev-detail-title${isDeprecated ? ' ev-detail-title-deprecated' : ''}`}>{e.title}</h3>
         <p className="ev-detail-src">
           <span>{e.source}</span> · <span className="year">{e.year}</span>
           <span> · Pillar {e.pillarNum} {e.pillarTitle}</span>
         </p>
+
+        {/* Deprecated notice */}
+        {isDeprecated && (
+          <div className="ev-deprecated-notice">
+            <div className="ev-deprecated-notice-label">Deprecated by the network</div>
+            <p>{e.deprecated_reason || e.challenge_reason || 'This evidence was challenged and deprecated by a supermajority of peers.'}</p>
+            {e.deprecated_at && (
+              <div className="ev-deprecated-notice-date">
+                {new Date(e.deprecated_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Contested notice */}
+        {isContested && e.challenge_reason && (
+          <div className="ev-contested-notice">
+            <div className="ev-contested-notice-label">Under challenge</div>
+            <p>{e.challenge_reason}</p>
+            <a href="/peer-review/" className="ev-contested-notice-link">
+              Vote in Peer Review →
+            </a>
+          </div>
+        )}
+
         <div className="ev-detail-body">
           <p>{e.excerpt}</p>
           {e.body && <p>{e.body}</p>}
           {e.quote && <p className="ev-detail-quote">&ldquo;{e.quote}&rdquo;</p>}
         </div>
+
         <dl className="ev-detail-meta">
           <dt>Pillar</dt><dd>{e.pillarNum} · {e.pillarTitle}</dd>
           <dt>Type</dt><dd>{e.type}</dd>
           <dt>Tier</dt><dd>{tierDesc}</dd>
-          <dt>Filed</dt><dd>Permanent record</dd>
+          <dt>Status</dt><dd>{STATUS_LABEL[e.status] || 'Canon'}</dd>
         </dl>
+
         <div className="ev-detail-tag-row">
           {(e.tags || []).map(t => (
             <a key={t} href="#" onClick={(ev) => ev.preventDefault()}>#{t}</a>
           ))}
         </div>
+
         {e.link && e.link !== '#' && (
           <a href={e.link} target="_blank" rel="noopener noreferrer" className="ev-detail-cta">
             Open source <span>↗</span>
           </a>
+        )}
+
+        {/* Challenge section — only for canon / reaffirmed evidence */}
+        {isCanon && !challenged && (
+          <div className="ev-challenge-section">
+            {!walletPeer?.isPeer ? (
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em', color: 'var(--ink-faint)', margin: 0 }}>
+                <a href="/peer-review/" style={{ color: 'var(--accent-2)' }}>Connect as a verified peer →</a>
+                {' '}to challenge this evidence.
+              </p>
+            ) : walletPeer.cooldownSecs > 0 ? (
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em', color: 'var(--warn)', margin: 0 }}>
+                Challenge cooldown active — next challenge available in{' '}
+                {Math.ceil(walletPeer.cooldownSecs / 86400)} day{Math.ceil(walletPeer.cooldownSecs / 86400) === 1 ? '' : 's'}{' '}
+                ({new Date(Date.now() + walletPeer.cooldownSecs * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}).
+              </p>
+            ) : !challengeOpen ? (
+              <button className="ev-challenge-trigger" onClick={() => setChallengeOpen(true)}>
+                Challenge this evidence
+              </button>
+            ) : (
+              <form className="ev-challenge-form" onSubmit={handleChallenge}>
+                <div className="ev-challenge-form-label">State your grounds</div>
+                <p className="ev-challenge-form-sub">
+                  What specific claim is wrong, misleading, or no longer supported?
+                  Other verified peers will vote to deprecate or defend.
+                </p>
+                <textarea
+                  autoFocus
+                  value={challengeReason}
+                  onChange={ev => setChallengeReason(ev.target.value)}
+                  placeholder="Minimum 20 characters. Be specific."
+                  rows={4}
+                />
+                <div className="ev-challenge-form-foot">
+                  <button type="button" className="ev-challenge-cancel" onClick={() => { setChallengeOpen(false); setChallengeReason(''); }}>
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="ev-challenge-submit"
+                    disabled={challengeReason.trim().length < 20 || challenging}
+                  >
+                    {challenging ? 'Filing…' : 'File challenge →'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
+
+        {challenged && (
+          <div className="ev-challenge-section ev-challenge-filed">
+            Challenge filed. Verified peers will vote in{' '}
+            <a href="/peer-review/">Peer Review →</a>
+            {chainWarning && (
+              <p style={{ marginTop: 8, fontSize: 11, fontFamily: 'var(--mono)', letterSpacing: '0.08em', color: 'var(--warn)', opacity: 0.85 }}>
+                ⚠ {chainWarning}
+              </p>
+            )}
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-function SubmitModal({ open, onClose }) {
+function SubmitModal({ open, onClose, walletPeer }) {
   const [form, setForm] = useState({
     pillar: PILLARS[0].id, type: 'Paper', tier: 2,
     title: '', source: '', year: '', excerpt: '', link: '', tags: '',
   });
-  const [sent, setSent] = useState(false);
+  const [sent, setSent]             = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
+  const [newId, setNewId]           = useState(null);  // UUID of the inserted row
+  const [chainPending, setChainPending] = useState(false);
+  const [chainDone, setChainDone]   = useState(false);
 
   useEffect(() => {
     if (open) {
       setSent(false);
       setSubmitError(null);
+      setNewId(null);
+      setChainDone(false);
       setForm(f => ({ ...f, title: '', source: '', year: '', excerpt: '', link: '', tags: '' }));
     }
   }, [open]);
@@ -314,7 +502,7 @@ function SubmitModal({ open, onClose }) {
     setSubmitting(true);
     setSubmitError(null);
     const tags = form.tags.split(',').map(s => s.trim()).filter(Boolean);
-    const { error } = await supabase.from('evidence').insert({
+    const { data: inserted, error } = await supabase.from('evidence').insert({
       pillar_id: form.pillar,
       type:      form.type,
       tier:      Number(form.tier),
@@ -325,11 +513,11 @@ function SubmitModal({ open, onClose }) {
       link:      form.link.trim() || null,
       tags,
       status:    'pending',
-    });
+    }).select('id').single();
     setSubmitting(false);
     if (error) { setSubmitError(error.message); return; }
+    setNewId(inserted?.id || null);
     setSent(true);
-    setTimeout(onClose, 1700);
   };
 
   if (!open) return null;
@@ -342,8 +530,51 @@ function SubmitModal({ open, onClose }) {
             <div className="check">✓</div>
             <h3 className="ev-detail-title" style={{ textAlign: 'center' }}>Filed.</h3>
             <p className="lead" style={{ textAlign: 'center', marginTop: 12 }}>
-              Your evidence has been added to the archive.
+              Your evidence has been added to the pending queue.
             </p>
+            {walletPeer?.isPeer && CONSENSUS_ADDR && newId && !chainDone && (
+              <button
+                className="ev-form-submit"
+                style={{ marginTop: 20, width: '100%' }}
+                disabled={chainPending}
+                onClick={async () => {
+                  setChainPending(true);
+                  try {
+                    // Bind the off-chain content into the on-chain record.
+                    const contentHash = await computeContentHash({
+                      title:     form.title.trim(),
+                      source:    form.source.trim() || null,
+                      year:      form.year.trim()   || null,
+                      excerpt:   form.excerpt.trim() || null,
+                      link:      form.link.trim()   || null,
+                      tier:      Number(form.tier),
+                      pillar_id: form.pillar,
+                    });
+                    const txHash = await submitEvidenceOnChain(newId, Number(form.tier), contentHash);
+                    await waitForTx(txHash);
+                    try { await markEvidenceOnchain(newId, walletPeer.addr, txHash); } catch { /* indexer reconciles */ }
+                    setChainDone(true);
+                  } catch {
+                    // User rejected or tx failed — don't block the UX
+                  } finally {
+                    setChainPending(false);
+                  }
+                }}
+              >
+                {chainPending ? 'Registering on-chain…' : 'Register on-chain →'}
+              </button>
+            )}
+            {chainDone && (
+              <p style={{ textAlign: 'center', marginTop: 12, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>
+                On-chain registration confirmed.
+              </p>
+            )}
+            {!walletPeer?.isPeer && (
+              <p style={{ textAlign: 'center', marginTop: 16, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>
+                <a href="/peer-review/" style={{ color: 'var(--accent-2)' }}>Connect as a peer →</a>
+                {' '}to register this submission on-chain.
+              </p>
+            )}
           </div>
         ) : (
           <form onSubmit={submit}>
@@ -450,40 +681,46 @@ export default function Evidence() {
   const [submitOpen, setSubmitOpen] = useState(false);
   const [activePillar, setActivePillar] = useState(PILLARS[0].id);
 
-  const { evidence: all, loading } = useEvidence();
+  // Minimal wallet state for challenge gating — full peer auth lives in PeerReview
+  const [walletPeer, setWalletPeer] = useState(null); // { addr, handle, isPeer }
 
-  const filtered = useMemo(() => {
-    const qLower = q.trim().toLowerCase();
-    return all.filter(e => {
-      if (type !== 'All' && e.type !== type) return false;
-      if (tier !== 'all' && String(e.tier) !== tier) return false;
-      if (!qLower) return true;
-      const blob = [e.title, e.source, e.excerpt, e.body, e.quote, (e.tags || []).join(' '), e.pillarTitle, e.type]
-        .filter(Boolean).join(' ').toLowerCase();
-      return blob.includes(qLower);
-    });
-  }, [all, q, type, tier]);
+  // Silent wallet check on load; recheck whenever the connected account changes.
+  useEffect(() => {
+    if (!window.ethereum || !CONSENSUS_ADDR) return;
 
-  const sorted = useMemo(() => {
-    const arr = [...filtered];
-    if (sort === 'tier') arr.sort((a, b) => a.tier - b.tier);
-    else if (sort === 'year-desc') arr.sort((a, b) => parseInt(b.year, 10) - parseInt(a.year, 10));
-    else if (sort === 'year-asc') arr.sort((a, b) => parseInt(a.year, 10) - parseInt(b.year, 10));
-    else if (sort === 'title') arr.sort((a, b) => a.title.localeCompare(b.title));
-    return arr;
-  }, [filtered, sort]);
+    const checkAccount = async (addr) => {
+      if (!addr) { setWalletPeer(null); return; }
+      const peer         = await isPeerActive(addr);
+      const handle       = peer ? await getPeerHandle(addr) : '';
+      const cooldownSecs = peer ? await getChallengeCooldownRemaining(addr) : 0;
+      setWalletPeer({ addr, handle, isPeer: peer, cooldownSecs });
+    };
+
+    window.ethereum.request({ method: 'eth_accounts' })
+      .then(accounts => checkAccount(accounts[0] || null))
+      .catch(() => {});
+
+    const onAccountsChanged = (accounts) => checkAccount(accounts[0] || null);
+    window.ethereum.on('accountsChanged', onAccountsChanged);
+    return () => window.ethereum.removeListener?.('accountsChanged', onAccountsChanged);
+  }, []);
+
+  const [debouncedQ, setDebouncedQ] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const { evidence, loading, hasMore, loadMore } = useEvidence(debouncedQ, type, tier, sort);
+  const tierCounts = useTierCounts();
 
   const counts = useMemo(() => {
-    const total = all.length;
-    const tier1 = all.filter(e => e.tier === 1).length;
-    const tier2 = all.filter(e => e.tier === 2).length;
-    const tier3 = all.filter(e => e.tier === 3).length;
-    const byType = { All: filtered.length };
+    const byType = { All: evidence.length };
     ['Paper', 'Book', 'Podcast', 'Documentary', 'Declassified', 'Testimony', 'Lecture'].forEach(t => {
-      byType[t] = all.filter(e => e.type === t && (tier === 'all' || String(e.tier) === tier) && (!q || JSON.stringify(e).toLowerCase().includes(q.toLowerCase()))).length;
+      byType[t] = evidence.filter(e => e.type === t).length;
     });
-    return { total, tier1, tier2, tier3, type: byType };
-  }, [all, filtered, q, tier]);
+    return { ...tierCounts, type: byType };
+  }, [evidence, tierCounts]);
 
   useEffect(() => {
     const onScroll = () => {
@@ -505,14 +742,18 @@ export default function Evidence() {
     return () => { document.body.style.overflow = ''; };
   }, [open, submitOpen]);
 
-  // Scroll to hash on load
+  // Scroll to hash once the archive has rendered. Wait for evidence to load
+  // so the target pillar section exists in the DOM before scrolling.
+  const hashScrolledRef = useRef(false);
   useEffect(() => {
-    if (window.location.hash) {
-      const id = window.location.hash.slice(1);
-      const el = document.getElementById(id);
-      if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth' }), 300);
-    }
-  }, []);
+    if (hashScrolledRef.current) return;
+    if (loading || !window.location.hash) return;
+    const id = window.location.hash.slice(1);
+    const el = document.getElementById(id);
+    if (!el) return;
+    hashScrolledRef.current = true;
+    requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }, [loading]);
 
   return (
     <div className="ev-shell">
@@ -531,28 +772,37 @@ export default function Evidence() {
       <SideRail active={activePillar} />
 
       <main className="ev-pillars">
-        {loading ? (
+        {loading && evidence.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '4rem', opacity: 0.5, letterSpacing: '0.1em', fontSize: '0.85rem' }}>
             LOADING ARCHIVE…
           </div>
-        ) : sort === 'pillar' ? (
+        ) : sort === 'pillar' && !debouncedQ && type === 'All' && tier === 'all' ? (
           PILLARS.map(p => (
             <PillarSection
               key={p.id}
               pillar={p}
-              items={sorted.filter(e => e.pillarId === p.id)}
+              items={evidence.filter(e => e.pillarId === p.id)}
               onOpen={setOpen}
             />
           ))
         ) : (
-          <FlatGrid items={sorted} onOpen={setOpen} />
+          <FlatGrid items={evidence} onOpen={setOpen} />
+        )}
+
+        {hasMore && (
+          <div style={{ textAlign: 'center', padding: '2rem 1rem 4rem' }}>
+            <button className="ev-submit-btn" onClick={loadMore} disabled={loading}>
+              {loading ? 'Loading…' : `Load more · ${evidence.length} / ${tierCounts.total} shown`}
+            </button>
+          </div>
         )}
       </main>
 
-      <DetailModal e={open} onClose={() => setOpen(null)} />
+      <DetailModal e={open} onClose={() => setOpen(null)} walletPeer={walletPeer} />
       <SubmitModal
         open={submitOpen}
         onClose={() => setSubmitOpen(false)}
+        walletPeer={walletPeer}
       />
     </div>
   );

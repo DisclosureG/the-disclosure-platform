@@ -1,0 +1,781 @@
+% =====================================================================
+%  Interstellar Psychology — Evidence & Peer-Review White Paper
+%  Author : Neo
+%  Class  : article (clean, official, accessible)
+% =====================================================================
+
+\documentclass[11pt,a4paper]{article}
+
+% ---------- Packages ----------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage[skins,breakable]{tcolorbox}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
+\usepackage[hidelinks,colorlinks=true,linkcolor=black,urlcolor=blue!55!black,citecolor=black]{hyperref}
+\usepackage{fancyhdr}
+
+% ---------- Colours ----------
+\definecolor{ink}{HTML}{0E1116}
+\definecolor{inkfaint}{HTML}{555B66}
+\definecolor{accent}{HTML}{6A4CFF}
+\definecolor{accent2}{HTML}{1F8F66}
+\definecolor{warn}{HTML}{B85C00}
+\definecolor{rule}{HTML}{C8CCD3}
+\definecolor{panelbg}{HTML}{F6F4EE}
+
+% ---------- Page style ----------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize\textsc{Interstellar Psychology}}
+\fancyhead[R]{\footnotesize\textsc{Evidence \& Peer-Review White Paper}}
+\fancyfoot[C]{\footnotesize\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% ---------- Section style ----------
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{ink}}
+  {\thesection}{0.6em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{ink}}
+  {\thesubsection}{0.6em}{}
+
+% ---------- Helper boxes ----------
+\newtcolorbox{plainbox}[1][]{
+  enhanced, breakable, boxrule=0pt, frame hidden,
+  colback=panelbg, colupper=ink,
+  left=10pt, right=10pt, top=8pt, bottom=8pt,
+  arc=2pt, #1
+}
+
+\newtcolorbox{notebox}[1][]{
+  enhanced, breakable, boxrule=0pt, frame hidden,
+  colback=panelbg, colupper=ink,
+  left=12pt, right=12pt, top=8pt, bottom=8pt,
+  borderline west={2pt}{0pt}{accent},
+  arc=0pt, #1
+}
+
+% ---------- Title block ----------
+\title{
+  \vspace{-2em}
+  {\Huge\bfseries A Multiverse of Love, Verified}\\[0.6em]
+  {\Large A White Paper on the Interstellar Psychology\\
+   Evidence Archive and Peer-Review Consensus System}
+}
+\author{
+  \textbf{Neo}\\[0.3em]
+  \textit{Interstellar Psychology}
+}
+\date{May 14, 2026}
+
+% =====================================================================
+\begin{document}
+% =====================================================================
+\maketitle
+\thispagestyle{empty}
+
+\vspace{-1em}
+\begin{plainbox}
+\textbf{Abstract.}
+Interstellar Psychology proposes a meta-scientific field that bridges
+rigorous evidence with phenomena traditionally dismissed by mainstream
+science: psychedelics, telepathy, mindsight, remote viewing,
+out-of-body experience, non-human intelligence, multiverse signal,
+and the fractal nature of reality. This paper describes the system
+we built to keep that field \emph{honest}: a public evidence archive
+backed by an on-chain peer-review consensus mechanism. Every claim
+is filed, weighted by source quality, voted on by verified peers,
+and recorded in an immutable log that anyone can audit. Canon is
+never final --- any peer can challenge a previously accepted claim,
+and the network can deprecate or reaffirm it. The result is a
+self-correcting record that takes the spirit of the scientific
+method --- replication, scrutiny, openness, revisability --- and
+gives it teeth that no individual, journal, or institution can quietly
+override.
+\end{plainbox}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% =====================================================================
+\section{Introduction: Why a New System Is Needed}
+% =====================================================================
+
+Science advances by a simple loop: someone proposes a claim, others
+examine it, reproduce it, and either accept it into the shared record
+or push back against it. The institution we call \emph{peer review}
+is the gate that decides what enters that record. It is a remarkable
+invention, and over the past three centuries it has produced most
+of what we know about the physical world.
+
+It is also a system with two well-known weaknesses.
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item \textbf{It is private.} A handful of anonymous reviewers,
+        chosen by an editor, decide what is publishable. The
+        deliberation is invisible; the criteria are unwritten; the
+        rejections do not travel with the paper.
+  \item \textbf{It is conservative.} A reviewer who has staked a
+        career on one paradigm is the worst possible judge of evidence
+        that contradicts it. Topics that fall outside the current
+        consensus --- regardless of the quality of the data --- are
+        routinely filtered out before publication.
+\end{enumerate}
+
+This second weakness is the founding problem of Interstellar Psychology.
+A great deal of replicable, recorded, sometimes \emph{government-declassified}
+evidence exists for phenomena that the mainstream is unwilling to host:
+twenty-three years of CIA remote-viewing research, congressional
+testimony on non-human intelligence, controlled studies of psychedelic
+healing, on-camera demonstrations of non-speaking autistic telepathy,
+cardiac-arrest patients describing operating rooms from the ceiling.
+The data is not in dispute. The \emph{venue} is.
+
+Interstellar Psychology builds that venue. It is a public archive of
+evidence, organised by topic, weighted by source quality, and curated
+by a network of verified peers who vote in the open and whose votes
+are written to a public ledger that no one can erase.
+
+This paper describes how that system works, in plain language, and
+why we believe it is a fair upgrade to the traditional peer-review loop.
+
+% =====================================================================
+\section{What Counts as Peer Review}
+% =====================================================================
+
+Before describing what we built, we should be clear about what we
+are keeping and what we are changing.
+
+\subsection{The Scientific Method, Briefly}
+
+The scientific method is not a single procedure. It is a posture toward
+truth that has roughly four moves:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item \textbf{Observation.} Notice something that asks for an explanation.
+  \item \textbf{Hypothesis.} Propose an explanation that could be wrong.
+  \item \textbf{Test.} Design an experiment or gather evidence that could
+        contradict the hypothesis.
+  \item \textbf{Revision.} If the evidence contradicts the hypothesis,
+        change the hypothesis. If it survives, accept it provisionally
+        and keep testing.
+\end{enumerate}
+
+The crucial property is the last one: every accepted claim remains
+\emph{provisional}. Nothing in science is final; everything is one
+counter-example away from being revised. This is the property our
+system most wants to preserve.
+
+\subsection{What Peer Review Adds}
+
+Peer review is a social layer on top of the method. Before a claim
+enters the public record, other practitioners check the work:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item Are the methods sound?
+  \item Is the data credible?
+  \item Do the conclusions follow from the data?
+  \item Is the work honest about its limitations?
+\end{itemize}
+
+If enough qualified reviewers say yes, the claim is published. If not,
+it is sent back or rejected. Peer review is the community's way of
+saying ``we have looked, and we collectively stand behind this.''
+
+\subsection{What Traditional Peer Review Lacks}
+
+Reviewers are anonymous. Editors have final say. The losing arguments
+are not preserved. There is no public count of \emph{how many people}
+endorsed the claim or contested it. There is no way for a later
+generation to revisit an old paper and say ``the network now thinks
+this is wrong'' without writing a whole new paper.
+
+Our system keeps the four moves of the method, keeps the social check,
+and adds three things traditional peer review does not have:
+
+\begin{notebox}
+\begin{enumerate}[leftmargin=1.5em]
+  \item \textbf{Open identities.} Every reviewer is publicly named.
+        Their endorsements and challenges follow them.
+  \item \textbf{Open tallies.} Every vote is visible, counted in real
+        time, and stored permanently.
+  \item \textbf{Open revisability.} A canonized claim is not closed.
+        Any verified peer can re-open it for the whole network to
+        re-judge.
+\end{enumerate}
+\end{notebox}
+
+% =====================================================================
+\section{Goals of the System}
+% =====================================================================
+
+We designed the Interstellar Psychology evidence system to satisfy
+five goals at once. These goals constrain everything that follows.
+
+\paragraph{1. Truth is provisional.} No claim can be locked in
+forever. The network must always be able to revisit and revise.
+
+\paragraph{2. Curators are accountable.} Whoever endorses an item
+must do so publicly, with a wallet that follows them across
+decisions.
+
+\paragraph{3. The record is tamper-evident.} A claim cannot be
+silently edited after it has been accepted. Any later mutation must
+be detectable from outside the system.
+
+\paragraph{4. The bar is calibrated to the evidence.} A
+peer-reviewed paper does not have to clear the same hurdle as a
+first-person account. The system must encode this distinction
+explicitly.
+
+\paragraph{5. It must work from day one.} The network must be able
+to launch with a single founder and grow safely from there ---
+without leaving a window where one person can rubber-stamp
+themselves into a fake quorum.
+
+% =====================================================================
+\section{System Architecture}
+% =====================================================================
+
+The system has two layers that work together. We separate them
+deliberately so that one of them can fail without corrupting the
+other.
+
+\subsection{Layer 1: The Chain (Truth)}
+
+A smart contract called \texttt{EvidenceConsensus}, deployed on the
+BNB Smart Chain, holds the canonical state of the network. It is the
+authoritative record. It tracks:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item Who is a verified peer.
+  \item Who has been nominated to become a peer.
+  \item Every piece of evidence submitted, along with its tier and
+        a cryptographic fingerprint of its content.
+  \item Every vote: approvals, rejections, challenges, defences.
+  \item The current state of every claim
+        (Submitted, Canon, Expelled, Lapsed, Contested, Deprecated,
+        Reaffirmed).
+\end{itemize}
+
+Because it lives on a public blockchain, nothing on this layer can
+be retroactively rewritten. Every action is recorded, signed by a
+peer's wallet, and visible to anyone with an internet connection.
+
+\subsection{Layer 2: The Cache (Speed)}
+
+A traditional database (Postgres, hosted on Supabase) holds the
+\emph{readable} version of everything: full evidence text, summaries,
+search indexes, peer handles. This layer exists for one reason ---
+speed. Reading from a blockchain is slow and expensive; reading
+from a database is instant.
+
+The cache is a \emph{follower}, not a source of truth. A background
+process (the ``indexer'') continuously reads new events from the
+chain and updates the database to match. If the cache ever disagrees
+with the chain, the chain wins. A daily integrity audit re-hashes
+every stored claim and compares it to the fingerprint recorded
+on-chain at submission time. Any mismatch raises a public alert.
+
+\subsection{Putting Them Together}
+
+\begin{center}
+\begin{tikzpicture}[
+  every node/.style={font=\small},
+  layer/.style={rectangle, draw=rule, rounded corners=2pt, fill=panelbg, minimum width=4.6cm, minimum height=1.2cm, align=center, inner sep=6pt},
+  arrow/.style={-{Stealth[length=2.5mm]}, thick, draw=accent},
+  label/.style={font=\footnotesize\itshape, color=inkfaint}
+]
+\node[layer] (user) {Peer\\(MetaMask wallet)};
+\node[layer, below=1.2cm of user] (chain) {EvidenceConsensus\\smart contract};
+\node[layer, right=2.4cm of chain] (cache) {Cache\\(Postgres + search)};
+\node[layer, above=1.2cm of cache] (ui) {Web interface\\(Evidence \& Peer Review)};
+
+\draw[arrow] (user) -- node[label,right]{signs vote / submission} (chain);
+\draw[arrow] (chain) -- node[label,above]{indexer follows} (cache);
+\draw[arrow] (cache) -- node[label,right]{reads} (ui);
+\draw[arrow] (ui) to[bend left=20] node[label,above]{wallet action} (user);
+\end{tikzpicture}
+\end{center}
+
+A peer's vote is signed in their wallet, sent to the contract, and
+written to the chain. The indexer notices the new event and updates
+the cache. The website re-renders. The whole loop is typically
+visible within a minute.
+
+% =====================================================================
+\section{The Subject Matter: Nine Pillars}
+% =====================================================================
+
+Evidence is organised under nine topical pillars. They are the
+research domains that Interstellar Psychology investigates:
+
+\begin{plainbox}
+\begin{tabular}{@{}p{0.4cm} p{4.2cm} p{9cm}@{}}
+\textbf{1} & Music                   & Sound as the harmonic substrate that lets souls recognise each other. \\
+\textbf{2} & Psychedelics            & Compounds that produce reproducible mystical experience under controlled conditions. \\
+\textbf{3} & Telepathy               & Non-speaking autistic individuals demonstrating mind-to-mind communication on camera, repeatedly. \\
+\textbf{4} & Mindsight               & Children trained to read text and identify colours while fully blindfolded. \\
+\textbf{5} & Remote Viewing          & Twenty-three years of declassified CIA research into non-local sight. \\
+\textbf{6} & Out of Body             & Cardiac arrest survivors describing operating rooms from the ceiling. \\
+\textbf{7} & Non-Human Intelligence  & From AAWSAP through congressional testimony --- the question is no longer whether. \\
+\textbf{8} & Multiverse              & Synchronicity as evidence. The universe signalling that it sees you. \\
+\textbf{9} & Infinity                & Self-similar, scale-invariant, endless. The fractal thumbprint of God. \\
+\end{tabular}
+\end{plainbox}
+
+These nine domains are not the claim of the system. They are the
+\emph{question}. The claims live inside them.
+
+% =====================================================================
+\section{Evidence: Tiers}
+% =====================================================================
+
+Not all evidence is equal. A declassified intelligence document and
+a single first-person testimony both belong in the record --- but
+they cannot carry the same weight. The system encodes this with three
+tiers:
+
+\begin{plainbox}
+\begin{tabular}{@{}p{1.4cm} p{4.8cm} p{8cm}@{}}
+\textbf{Tier} & \textbf{Type} & \textbf{Example} \\
+\midrule
+\textbf{I}    & Peer-reviewed or declassified & Published scientific paper; CIA STARGATE files. \\
+\textbf{II}   & Documented or institutional   & Books, podcasts, documentaries, official testimony. \\
+\textbf{III}  & Testimony or first-person     & Personal experience reports; eyewitness accounts. \\
+\end{tabular}
+\end{plainbox}
+
+Tier I is the most credentialled and therefore requires the
+\emph{highest} percentage of peers to canonize \emph{and} the
+\emph{highest} percentage to remove. It is harder to add and harder
+to lose. Tier III is the most permeable in both directions.
+
+% =====================================================================
+\section{The Seven-State Lifecycle}
+% =====================================================================
+
+Every piece of evidence travels through a finite sequence of states.
+The contract enforces the transitions; nothing else can change them.
+
+\begin{center}
+\begin{tikzpicture}[
+  every node/.style={font=\small},
+  state/.style={rectangle, rounded corners=3pt, draw=rule, fill=panelbg, minimum width=2.4cm, minimum height=0.9cm, align=center, inner sep=4pt},
+  good/.style={state, fill=accent2!12, draw=accent2!50},
+  bad/.style={state, fill=warn!12, draw=warn!50},
+  contested/.style={state, fill=accent!10, draw=accent!50},
+  arrow/.style={-{Stealth[length=2.5mm]}, thick, draw=inkfaint},
+  label/.style={font=\scriptsize\itshape, color=inkfaint, fill=white, inner sep=1pt}
+]
+
+\node[state]        (sub)   {Submitted};
+\node[good, above right=0.4cm and 1.8cm of sub] (canon) {Canon};
+\node[bad,  right=2cm of sub]                   (expel) {Expelled};
+\node[bad,  below right=0.4cm and 1.8cm of sub] (lapse) {Lapsed};
+
+\node[contested, right=2cm of canon]            (cont)  {Contested};
+\node[good, above right=0.4cm and 1.8cm of cont] (reaff) {Reaffirmed};
+\node[bad,  below right=0.4cm and 1.8cm of cont] (depr)  {Deprecated};
+
+\draw[arrow] (sub) -- node[label,sloped,above]{approve quorum}   (canon);
+\draw[arrow] (sub) -- node[label,sloped,above]{reject quorum}    (expel);
+\draw[arrow] (sub) -- node[label,sloped,below]{30-day timeout}   (lapse);
+
+\draw[arrow] (canon) -- node[label,sloped,above]{any peer challenges} (cont);
+\draw[arrow] (cont)  -- node[label,sloped,above]{defence wins / silence} (reaff);
+\draw[arrow] (cont)  -- node[label,sloped,below]{challenge quorum}   (depr);
+
+\draw[arrow] (reaff.north) to[out=140,in=40,looseness=1.4]
+    node[label,above,pos=0.5]{can be re-challenged} (cont.north);
+
+\end{tikzpicture}
+\end{center}
+
+\paragraph{Submitted.} A claim has been filed and is awaiting peer
+review. There is a 30-day window during which peers may vote
+approve or reject. If neither side reaches a quorum, the claim
+\emph{lapses}.
+
+\paragraph{Canon.} Enough peers approved the claim. It enters the
+public archive and is treated as accepted by the network.
+
+\paragraph{Expelled.} Enough peers rejected the claim. It is recorded
+as not accepted and is not displayed in the main archive.
+
+\paragraph{Lapsed.} The 30-day window passed without enough votes
+either way. The claim is set aside for lack of consensus rather than
+for being wrong.
+
+\paragraph{Contested.} A verified peer has formally challenged a
+canon claim. The piece is flagged in the archive, and a 21-day
+window opens for the network to vote on whether to deprecate it or
+defend it.
+
+\paragraph{Deprecated.} Enough peers supported the challenge. The
+claim is marked as no longer canon. The original record is preserved
+--- it is not deleted --- so that the history of the disagreement
+remains visible.
+
+\paragraph{Reaffirmed.} The challenge did not reach the deprecation
+threshold within the window. The claim is restored to canon, with a
+visible note that it survived a challenge. A reaffirmed claim can
+itself be challenged again later.
+
+% =====================================================================
+\section{Who Can Vote: The Peer Registry}
+% =====================================================================
+
+A claim's fate depends entirely on who counts as a peer at the moment
+of the vote. This is the most carefully designed part of the system.
+
+\subsection{The Genesis Peer}
+
+The network launches with a single founding peer, called the
+\emph{Genesis} peer. At launch, the Genesis peer is the entire
+quorum. This is not a bug --- it is the only honest starting
+condition. A new network has not yet earned the right to claim
+collective authority, and pretending otherwise (by, say, requiring
+five votes before anything can canon) creates a deadlock at
+day one.
+
+To make Genesis-only operation safe, every threshold has a
+\emph{floor of 1}. One peer is enough to approve, expel, or revoke,
+\emph{but only while the network is still genuinely a network of
+one}. The numbers scale up automatically as new peers join.
+
+\subsection{The Seed Phase}
+
+There is one obvious abuse path: the Genesis peer could nominate a
+hundred fake wallets controlled by themselves and ``verify'' them
+all. To close this window, public nominations are locked until the
+active peer count crosses a configured threshold (called the
+\emph{seed phase K}). During the seed phase, the contract's owner
+adds peers directly. Once enough independent peers exist that they
+can no longer be silently outvoted by sockpuppets, the seed phase
+ends and the public nominate--endorse flow opens.
+
+\subsection{Nomination and Endorsement}
+
+After the seed phase, any verified peer can nominate a new candidate
+by submitting the candidate's wallet address and a display name. Other
+verified peers then endorse the nominee. When endorsements reach the
+nomination threshold, the nominee is automatically promoted into the
+active peer list.
+
+The nomination threshold scales with the network: roughly one third
+of the active peer count, rounded up, and capped at nine to keep
+onboarding fast in mature networks.
+
+\subsection{Revocation}
+
+A peer who acts in bad faith --- voting maliciously, spamming the
+challenge system, repeatedly endorsing low-quality submissions ---
+can be removed. Any peer can motion to revoke another peer, and
+others vote on the motion. When votes reach the revocation threshold
+(roughly half the network), the peer is automatically removed.
+
+A peer cannot motion to revoke themselves, and the network can never
+vote itself down to zero --- the contract enforces that at least one
+active peer must always remain.
+
+\subsection{Quorum Scaling, in One Table}
+
+\begin{plainbox}
+\textbf{Thresholds as a function of the active peer count} $n$:
+\vspace{0.3em}
+\begin{tabular}{@{}p{6.5cm} p{8cm}@{}}
+\textbf{Action}                                   & \textbf{Threshold (peers required)} \\
+\midrule
+Canonize a Tier I submission                      & $\lceil 0.45\, n \rceil$, minimum 1 \\
+Canonize a Tier II submission                     & $\lceil 0.35\, n \rceil$, minimum 1 \\
+Canonize a Tier III submission                    & $\lceil 0.30\, n \rceil$, minimum 1 \\
+Expel a pending submission                        & $\lceil 0.25\, n \rceil$, minimum 1 \\
+Deprecate a Tier I canon item                     & $\lceil 0.65\, n \rceil$, minimum 1 \\
+Deprecate a Tier II canon item                    & $\lceil 0.60\, n \rceil$, minimum 1 \\
+Deprecate a Tier III canon item                   & $\lceil 0.55\, n \rceil$, minimum 1 \\
+Verify a peer nominee                             & $\min(9,\,\lceil n/3 \rceil)$, minimum 1 \\
+Revoke a peer                                     & $\lceil n/2 \rceil$, minimum 1 \\
+\end{tabular}
+\end{plainbox}
+
+Notice the asymmetry. Tier I requires the most peers to enter (the
+bar is high) and the most peers to deprecate (it is also defended
+strongly once accepted). The system encourages care on the way in
+\emph{and} on the way out.
+
+% =====================================================================
+\section{Submitting Evidence}
+% =====================================================================
+
+The submission flow exists in two stages so that ordinary readers
+can contribute without needing a wallet, while verified peers handle
+the on-chain step.
+
+\subsection{Stage One: Anyone Can File}
+
+A visitor opens the Evidence page, clicks \emph{Submit evidence},
+and fills in a form: pillar, type, tier, title, source, year, a
+short excerpt, a link, and tags. The submission is stored as a
+\emph{pending} row in the cache. It does not yet appear in the
+public archive.
+
+To prevent abuse, anonymous submissions are throttled at five per IP
+address per hour, enforced atomically inside the database.
+
+\subsection{Stage Two: A Peer Registers It On-Chain}
+
+Verified peers see all pending submissions in their queue. To bring
+one into the formal review process, a peer:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Recomputes a cryptographic fingerprint
+        (\texttt{keccak256}) of the submission's canonical content.
+  \item Calls \texttt{submitEvidence} on the contract with the
+        submission's identifier, its tier, and the fingerprint.
+  \item Signs the transaction with their wallet.
+\end{enumerate}
+
+The fingerprint binds the on-chain record to a specific version of
+the text. From this point on, any silent edit to the cached content
+can be detected by re-hashing and comparing to the on-chain value.
+This is what gives the cache its tamper-evidence.
+
+% =====================================================================
+\section{Reviewing Evidence}
+% =====================================================================
+
+Once on-chain, the submission enters the public review queue. Verified
+peers see it in their Peer Review dashboard and decide whether to
+approve or reject. There are several properties worth noting:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Signed.} Every vote is an EIP-712 signature from a
+        peer's wallet plus an on-chain transaction. The two together
+        prove who voted and what they voted for.
+  \item \textbf{Final.} A peer cannot change their vote once cast.
+  \item \textbf{Counted live.} The cache updates within a minute of
+        the on-chain event. Anyone viewing the page sees the same
+        running tally.
+  \item \textbf{Batched.} Peers can vote on many items in one
+        transaction, capped at 50 per call, to keep gas costs low.
+  \item \textbf{Time-limited.} Submissions have a 30-day review
+        window. After that the item lapses if no threshold was
+        reached.
+\end{itemize}
+
+% =====================================================================
+\section{Challenging Canon}
+% =====================================================================
+
+This is the part of the system that most distinguishes it from
+traditional peer review.
+
+A canon item is not closed. Any verified peer can challenge it at
+any time, with two safeguards:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item A peer who has just opened a challenge must wait seven days
+        before opening another. This stops a single peer from
+        weaponising the challenge button to spam the network.
+  \item The challenge must state grounds --- a written explanation
+        of what specifically is wrong, misleading, or no longer
+        supported. The grounds are stored alongside the challenge so
+        that voters know what they are voting on.
+\end{itemize}
+
+Opening a challenge moves the claim to \emph{Contested} and starts
+a 21-day window. During the window, peers vote either to
+\emph{challenge} (deprecate) or \emph{defend} (reaffirm). Resolution
+is deterministic:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item If challenge votes reach the deprecation threshold before
+        the window expires, the claim is immediately deprecated.
+  \item If the window expires without reaching the threshold, the
+        claim is automatically reaffirmed. Silence defends canon.
+\end{itemize}
+
+A reaffirmed claim carries a visible badge showing that it survived
+a challenge, along with the date. It can be challenged again later
+--- the system never closes the loop on revisability. Each new
+challenge cycle starts from a clean slate of votes; previous cycles
+are preserved as part of the historical record.
+
+% =====================================================================
+\section{Integrity: How We Know Nothing Has Been Quietly Edited}
+% =====================================================================
+
+The most subtle failure mode of any archive is that someone changes
+the content of an old entry without anyone noticing. We defend against
+this with three independent mechanisms.
+
+\paragraph{Content fingerprints.} At submission time, the contract
+records a \texttt{keccak256} hash of the canonical content. This
+hash is part of the on-chain event log forever.
+
+\paragraph{Cross-check at registration.} When a peer submits an item
+on-chain, the edge function verifies that the recomputed hash matches
+the one in the transaction. A submission whose stored text does not
+match the hash on the transaction is rejected.
+
+\paragraph{Daily audit.} A scheduled job re-hashes every canon item
+in the cache and compares the result to the on-chain hash. Any
+mismatch raises a \emph{tamper alert} that is visible on the public
+Peer Review dashboard. Alerts are not silent.
+
+Beyond content integrity, every cron job in the system writes a
+\emph{heartbeat} after each run. A stale heartbeat surfaces on the
+dashboard so that operators (and the public) can see immediately if
+the indexer or audit job has stopped.
+
+% =====================================================================
+\section{The Larger Goal}
+% =====================================================================
+
+A neutral observer might ask: why bother? Why build an entire on-chain
+voting system to curate evidence that mainstream journals would
+mostly decline to print anyway?
+
+The answer is that the cost of \emph{not} building it is high.
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item \textbf{Real phenomena go undocumented.} When credible
+        researchers know their topic will not survive editorial
+        review, they stop writing about it. The evidence does not
+        disappear; it just stops being archived in a form that can
+        be cited. A generation later, no one can find it.
+  \item \textbf{Bad evidence wins by default.} If the only people
+        publishing on a topic are those who do not face institutional
+        gatekeeping, the public record on that topic skews toward
+        the least credentialed contributors. The good work and the
+        crank work end up shelved next to each other.
+  \item \textbf{We forget that knowledge is revisable.} The longer
+        an institution polices what counts as a fact, the easier it
+        is to believe that the current consensus is the final answer.
+        It never is.
+\end{enumerate}
+
+The Interstellar Psychology archive is an attempt to give credible
+work on these topics a venue with a clear standard: open identity,
+open count, open revisability, public hash, public history. We are
+not asking anyone to take a single claim on faith. We are publishing
+\emph{the work of judging the claim}, so that the judgement itself
+can be examined.
+
+% =====================================================================
+\section{Comparison to Traditional Peer Review}
+% =====================================================================
+
+\begin{plainbox}
+\begin{tabular}{@{}p{4.2cm} p{4.9cm} p{5.1cm}@{}}
+                           & \textbf{Traditional journal}                & \textbf{Interstellar Consensus} \\
+\midrule
+Reviewer identity          & Anonymous                                   & Public wallet address \\
+Number of reviewers        & Typically 2--3                              & Scales with network ($\geq 30\%$) \\
+Vote visibility            & Hidden                                      & Public, real-time \\
+Acceptance criteria        & Editor's discretion                         & Algorithmic threshold \\
+Record after publication   & Static                                      & Re-openable indefinitely \\
+Retraction process         & Editor-driven, opaque                       & Network vote, on-chain \\
+Tamper-evidence            & None                                        & Content hash + daily audit \\
+History of disagreement    & Lost                                        & Preserved \\
+Cost to author             & Often paid                                  & Submission is free \\
+\end{tabular}
+\end{plainbox}
+
+The traditional journal optimises for a clean public-facing record
+at the cost of erasing the deliberation behind it. We make the
+opposite trade: we keep the deliberation, every count, every
+challenge, every reaffirmation, on a public log. The record is
+messier, but the messiness is the point. It is what allows the
+record to correct itself.
+
+% =====================================================================
+\section{Limits and Open Questions}
+% =====================================================================
+
+We try not to overstate what the system does.
+
+\paragraph{It does not adjudicate truth.} The contract counts votes.
+It does not check whether the underlying paper is correct. It cannot.
+What it guarantees is that the count is honest and that no one has
+secretly edited the record afterwards.
+
+\paragraph{It is only as good as its peers.} A small or homogeneous
+peer set will produce a small or homogeneous canon. Growing the
+network --- and growing it with people who disagree with each other
+in good faith --- is the long project.
+
+\paragraph{Wallets are not identities.} The peer registry knows
+wallet addresses, not human beings. A determined attacker with
+enough resources can run multiple wallets. The seed phase, the
+revocation flow, and the public scrutiny of each peer's voting
+record are the defences against this, but none of them is absolute.
+
+\paragraph{Gas is not free.} On-chain actions cost a small amount of
+BNB. We mitigate this with batched voting and by keeping the most
+expensive reads cached off-chain. We do not eliminate it.
+
+\paragraph{The chain is one human invention layered on another.}
+This system is a tool, not a worldview. The deeper claim --- that
+there is a Multiverse of Love, that consciousness is not confined
+to bodies, that the universe responds to the people inside it ---
+is not something a smart contract can settle. The system only tries
+to make the conversation legible.
+
+% =====================================================================
+\section{Conclusion}
+% =====================================================================
+
+Interstellar Psychology takes the four moves of the scientific
+method --- observe, hypothesise, test, revise --- and gives them an
+infrastructure that the original method never had:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item A public, append-only log of every claim.
+  \item Public identities for everyone who endorses or challenges.
+  \item Quorums that scale with the network and differ by tier so
+        that the bar for entry matches the strength of the source.
+  \item A revisability mechanism that means no canon item is ever
+        truly closed.
+  \item Tamper-evidence so that the record cannot be quietly
+        rewritten.
+\end{itemize}
+
+None of this guarantees that the system will arrive at the truth.
+What it guarantees is that the search for the truth will happen in
+the open, that the work of judgement will be visible, and that
+future readers will be able to trace exactly how we came to believe
+what we did --- and, when they decide we were wrong, change it.
+
+That is enough. The rest is the work.
+
+\vspace{2em}
+\hrule
+\vspace{1em}
+
+\begin{center}
+\textit{Interstellar Psychology --- A Multiverse of Love}\\
+\small
+The system described in this paper is live. Source contracts,
+migrations, and front-end code are public. Anyone with a wallet
+can read every vote ever cast.
+\end{center}
+
+\end{document}

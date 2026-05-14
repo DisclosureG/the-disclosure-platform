@@ -75,6 +75,7 @@ function Nav({ active, onBuy }) {
             </a>
           ))}
           <a href="/evidence/">Evidence</a>
+          <a href="/peer-review/">Peer Review</a>
         </div>
         <button className="nav-cta" onClick={onBuy}>Acquire Book →</button>
       </div>
@@ -292,6 +293,7 @@ function Footer() {
               <li><a href="#manifesto">Manifesto</a></li>
               <li><a href="#book">The Thesis</a></li>
               <li><a href="/evidence/">Evidence</a></li>
+              <li><a href="/peer-review/">Peer Review</a></li>
             </ul>
           </div>
         </div>

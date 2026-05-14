@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { usePillarCounts } from '../evidence-data';
 
 const slug = (s) => s.toLowerCase().replace(/\s+/g, '-');
 const EVIDENCE_BASE = '/evidence/';
@@ -12,7 +13,6 @@ const PILLARS = [
     quote: "In every note, a reminder of love's boundless light, the universe's gentle rhythm.",
     body: "Music is the first language of the multiverse — a vibration that predates form. Through harmonic resonance the soul recognises itself in the other.",
     links: ["Imagine Dragons"],
-    evidenceCount: 5
   },
   {
     n: "02",
@@ -22,7 +22,6 @@ const PILLARS = [
     quote: "They dissolve opinion structures and culturally laid down models of behaviour.",
     body: "Plant medicines and entheogens function as keys, not as escape. They reveal the architecture of consciousness from inside the architecture itself.",
     links: ["Consiousness","Afterlife", "Psychedelic Ascension"],
-    evidenceCount: 5
   },
   {
     n: "03",
@@ -32,7 +31,6 @@ const PILLARS = [
     quote: "Love really hates when we choose money",
     body: "The Telepathy Tapes and decades of parapsychological research point to a substrate of consciousness where minds are not isolated islands.",
     links: ["The Telepathy Tapes", "Julia Mossbridge"],
-    evidenceCount: 4
   },
   {
     n: "04",
@@ -40,7 +38,6 @@ const PILLARS = [
     tag: "Inner perception",
     blurb: "Seeing without eyes",
     links: ["Third eye", "Energy", "Dalia Burgoin", "Mark Komissarov"],
-    evidenceCount: 3
   },
   {
     n: "05",
@@ -50,7 +47,6 @@ const PILLARS = [
     quote: "Distance is a property of matter, not of mind.",
     body: "Twenty-three years of US government research yielded statistically significant results that mainstream science has yet to integrate.",
     links: ["Stargate Project", "Ingo Swann", "Stanford"],
-    evidenceCount: 4
   },
   {
     n: "06",
@@ -60,7 +56,6 @@ const PILLARS = [
     quote: "I left my body and found I was still entirely myself.",
     body: "Cardiac arrest survivors describe the operating room from the ceiling. Hemi-Sync practitioners chart the territory deliberately.",
     links: ["Monroe Institute", "Anthony Chene"],
-    evidenceCount: 4
   },
   {
     n: "07",
@@ -71,7 +66,6 @@ const PILLARS = [
     body: "UAP disclosure, contactee reports, interdimensional hypotheses. The question is no longer whether — but how we relate.",
     links: ["AWSAP/AATIP", "David Grusch", "Ross Coulthart", "Steven Greer"],
     tagLink: "https://x.com/UapJunky",
-    evidenceCount: 5
   },
   {
     n: "08",
@@ -81,7 +75,6 @@ const PILLARS = [
     quote: "Coincidence is the multiverse's native vocabulary.",
     body: "The multiverse is the loving infrastructure that lets every soul rehearse the path home.",
     links: ["Carl Jung", "Synchronicity"],
-    evidenceCount: 4
   },
   {
     n: "09",
@@ -91,7 +84,6 @@ const PILLARS = [
     quote: "The fractal thumbprint of God",
     body: "Sacred geometry and chaos mathematics describe the same structure: a creation that contains itself at every scale.",
     links: ["Mandelbrot", "Free will", "Flower of life"],
-    evidenceCount: 4
   },
 ];
 
@@ -185,6 +177,7 @@ function PillarCard({ p, isOpen, onToggle, idx }) {
 
 export default function Pillars() {
   const [open, setOpen] = useState(null);
+  const counts = usePillarCounts();
   return (
     <section id="pillars" className="container">
       <div className="pillars-head fade-in">
@@ -205,7 +198,7 @@ export default function Pillars() {
         {PILLARS.map((p, i) => (
           <PillarCard
             key={p.title}
-            p={p}
+            p={{ ...p, evidenceCount: counts[slug(p.title)] }}
             idx={i}
             isOpen={open === i}
             onToggle={() => setOpen(open === i ? null : i)}
