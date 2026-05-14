@@ -911,10 +911,16 @@ function NotAPeerScreen({ addr, onDisconnect }) {
 }
 
 // ── ConnectScreen ─────────────────────────────────────────────────────────────
-// Periodic-table shell config: n=1 → 2e, n=2 → 8e; peers sit on n=3 (outer)
-const INNER_SHELLS = [
-  { count: 2, duration: 12, orbitTop: '22%', dotSize: 5, color: 'var(--accent)'   }, // n=1 (r3)
-  { count: 8, duration: 25, orbitTop: '14%', dotSize: 6, color: 'var(--accent-2)' }, // n=2 (r2)
+// Moscovium (Mc, Z=115) electron shells: 2, 8, 18, 32, 32, 18, 5 — 115 electrons total.
+// Shells are ordered innermost (n=1) → outermost (n=7); future peers join the valence shell.
+const MC_SHELLS = [
+  { count: 2,  duration: 10, orbitTop: '36%', dotSize: 4, color: 'var(--accent)'   }, // n=1
+  { count: 8,  duration: 16, orbitTop: '30%', dotSize: 4, color: 'var(--accent-2)' }, // n=2
+  { count: 18, duration: 22, orbitTop: '24%', dotSize: 5, color: 'var(--accent)'   }, // n=3
+  { count: 32, duration: 30, orbitTop: '18%', dotSize: 5, color: 'var(--accent-2)' }, // n=4
+  { count: 32, duration: 38, orbitTop: '12%', dotSize: 5, color: 'var(--accent)'   }, // n=5
+  { count: 18, duration: 46, orbitTop: '6%',  dotSize: 6, color: 'var(--accent-2)' }, // n=6
+  { count: 5,  duration: 54, orbitTop: '0%',  dotSize: 7, color: 'var(--accent)'   }, // n=7 (valence)
 ];
 
 function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attestationCount }) {
@@ -982,12 +988,12 @@ function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attesta
         </div>
         <div>
           <div className="pr-connect-orbit">
-            <div className="pr-orbit-ring r1" />
-            <div className="pr-orbit-ring r2" />
-            <div className="pr-orbit-ring r3" />
+            {[1, 2, 3, 4, 5, 6, 7].map((n) => (
+              <div key={`ring-${n}`} className={`pr-orbit-ring r${n}`} />
+            ))}
 
-            {/* n=1 and n=2 shells: periodic-table electron dots */}
-            {INNER_SHELLS.flatMap((shell, si) =>
+            {/* Moscovium (Z=115): seven electron shells, 2·8·18·32·32·18·5 */}
+            {MC_SHELLS.flatMap((shell, si) =>
               Array.from({ length: shell.count }, (_, i) => {
                 const startDeg = (360 / shell.count) * i;
                 const delay    = -(startDeg / 360) * shell.duration;
@@ -1006,7 +1012,7 @@ function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attesta
               })
             )}
 
-            {/* n=3 shell: verified peers as Jazzicons */}
+            {/* valence shell: verified peers as Jazzicons */}
             {verifiedPeers.map((p, i) => {
               const startDeg = (360 / verifiedPeers.length) * i;
               const delay    = -(startDeg / 360) * ORBIT_DUR;

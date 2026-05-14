@@ -95,8 +95,12 @@
   border-radius: 50%;
   animation: pr-rotate 60s linear infinite;
 }
-.pr-orbit-ring.r2 { inset: 14%; animation-duration: 90s; animation-direction: reverse; border-style: dotted; }
-.pr-orbit-ring.r3 { inset: 28%; animation-duration: 120s; }
+.pr-orbit-ring.r2 { inset: 6%;  animation-duration: 75s;  animation-direction: reverse; border-style: dotted; }
+.pr-orbit-ring.r3 { inset: 12%; animation-duration: 90s; }
+.pr-orbit-ring.r4 { inset: 18%; animation-duration: 105s; animation-direction: reverse; border-style: dotted; }
+.pr-orbit-ring.r5 { inset: 24%; animation-duration: 120s; }
+.pr-orbit-ring.r6 { inset: 30%; animation-duration: 135s; animation-direction: reverse; border-style: dotted; }
+.pr-orbit-ring.r7 { inset: 36%; animation-duration: 150s; }
 @keyframes pr-rotate { to { transform: rotate(360deg); } }
 /* ---- Rotating orbit electrons ---- */
 .pr-orbit-arm {
