@@ -145,7 +145,6 @@ function IdentityHeader({ me, role, pendingCount, reviewCount }) {
   return (
     <section className="pr-identity">
       <div className="pr-id-main">
-        <Jazzicon addr={me.addr} size={76} ring />
         <div>
           <h2 className="pr-id-handle">{NAME_OF(me)}<NameBadge source={me.nameSource} /></h2>
           <div className="pr-id-addr">{me.addr}</div>
@@ -1216,7 +1215,6 @@ function PeerRegistryTab({ me, nomineeThreshold, revokeThreshold, onEndorse, onM
             const pct = Math.min(100, ((n.endorsements ?? 0) / threshold) * 100);
             return (
               <div key={n.addr || i} className="pr-peer-card is-pending">
-                <Jazzicon addr={n.addr} size={56} />
                 <div style={{ flex: 1 }}>
                   <h3 className="pr-peer-name">{n.handle || SHORT(n.addr)}</h3>
                   <div className="pr-peer-addr">{n.addr}</div>
@@ -1264,7 +1262,6 @@ function PeerRegistryTab({ me, nomineeThreshold, revokeThreshold, onEndorse, onM
               const pct = p.revActive ? Math.min(100, (p.revVotes / revThresh) * 100) : 0;
               return (
                 <div key={p.addr} className={`pr-peer-card ${p.revActive ? 'is-revoking' : ''}`}>
-                  <Jazzicon addr={p.addr} size={56} ring={p.isMe} />
                   <div style={{ flex: 1 }}>
                     <h3 className="pr-peer-name" style={p.revActive ? { textDecoration: 'line-through', textDecorationColor: 'var(--danger)' } : undefined}>
                       {p.handle || SHORT(p.addr)}
