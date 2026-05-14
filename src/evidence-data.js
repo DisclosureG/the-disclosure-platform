@@ -4,7 +4,7 @@ import { supabase } from './lib/supabase';
 // ── Pillars ──────────────────────────────────────────────────────────────────
 export const PILLARS = [
   { n: "01", id: "music",                  title: "Music",                  tag: "Frequency · Soul",    blurb: "Sound as the first language of the multiverse. The harmonic substrate that lets souls recognise each other." },
-  { n: "02", id: "psychedelics",           title: "Psychedelics",           tag: "Healing · Truth",     blurb: "Compounds that lift the veil. Reproducible mystical experience in a safe setting." },
+  { n: "02", id: "psychedelics",           title: "Psychedelics",           tag: "Healing · Truth",     blurb: "Compounds that lift the veil. Can Reproduce mystical experiences in a safe setting." },
   { n: "03", id: "telepathy",              title: "Telepathy",              tag: "Mind-to-mind",        blurb: "The hardest case to ignore — non-speaking autistics doing the impossible, on camera, repeatedly." },
   { n: "04", id: "mindsight",              title: "Mindsight",              tag: "Inner perception",    blurb: "Seeing without eyes. Children trained to read text and identify colours while fully blindfolded." },
   { n: "05", id: "remote-viewing",         title: "Remote Viewing",         tag: "Non-local sight",     blurb: "Twenty-three years of CIA research. Declassified. The documents are not in dispute." },
