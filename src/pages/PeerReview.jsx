@@ -939,7 +939,6 @@ function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attesta
             <div style={{ display: 'flex', marginBottom: 8, gap: 12, alignItems: 'center' }}>
               <span className="eyebrow">How it works</span>
               <span style={{ flex: 1 }} />
-              <a href="/evidence/" className="mono" style={{ fontSize: 9, color: 'var(--accent-2)', letterSpacing: '0.18em', textDecoration: 'none', textTransform: 'uppercase' }}>Evidence archive ↗</a>
               <a href="/artefacts/blockchain/whitepaper.pdf" target="_blank" rel="noopener noreferrer" className="mono" style={{ fontSize: 9, color: 'var(--accent-2)', letterSpacing: '0.18em', textDecoration: 'none', textTransform: 'uppercase' }}>Whitepaper ↗</a>
             </div>
             {[
