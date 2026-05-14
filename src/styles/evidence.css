@@ -649,9 +649,9 @@
 .ev-rail {
   position: fixed;
   left: 24px;
-  top: 50%;
+  top: clamp(220px, 50%, calc(100vh - 360px));
   transform: translateY(-50%);
-  z-index: 30;
+  z-index: 70;
   display: flex;
   flex-direction: column;
   gap: 8px;
