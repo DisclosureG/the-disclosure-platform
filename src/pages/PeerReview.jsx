@@ -936,10 +936,11 @@ function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attesta
             one attestation at a time.
           </p>
           <div className="pr-connect-card">
-            <div style={{ display: 'flex', marginBottom: 8, gap: 12 }}>
+            <div style={{ display: 'flex', marginBottom: 8, gap: 12, alignItems: 'center' }}>
               <span className="eyebrow">How it works</span>
               <span style={{ flex: 1 }} />
-              <a href="/whitepaper.pdf" target="_blank" rel="noopener noreferrer" className="mono" style={{ fontSize: 9, color: 'var(--accent-2)', letterSpacing: '0.18em', textDecoration: 'none', textTransform: 'uppercase' }}>Whitepaper ↗</a>
+              <a href="/evidence/" className="mono" style={{ fontSize: 9, color: 'var(--accent-2)', letterSpacing: '0.18em', textDecoration: 'none', textTransform: 'uppercase' }}>Evidence archive ↗</a>
+              <a href="/artefacts/blockchain/whitepaper.pdf" target="_blank" rel="noopener noreferrer" className="mono" style={{ fontSize: 9, color: 'var(--accent-2)', letterSpacing: '0.18em', textDecoration: 'none', textTransform: 'uppercase' }}>Whitepaper ↗</a>
             </div>
             {[
               ['01', 'Connect your wallet', 'We never read your balance. The signature only proves you control the address.'],

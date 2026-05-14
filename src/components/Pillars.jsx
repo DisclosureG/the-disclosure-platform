@@ -190,7 +190,7 @@ export default function Pillars() {
         </div>
         <p className="lead">
           Each pillar is a discipline where science and spirituality are already converging — quietly, often dismissed,
-          increasingly undeniable. Tap any to descend, or open the <a href="/evidence/" style={{ color: 'var(--accent)', textDecoration: 'underline', textUnderlineOffset: '3px' }}>evidence archive</a>.
+          increasingly undeniable. Tap any to descend.
         </p>
       </div>
 
