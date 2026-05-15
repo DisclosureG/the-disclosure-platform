@@ -164,7 +164,7 @@ function BookSection({ onBuy, onPreview }) {
         <div className="fade-in">
           <div className="eyebrow">THE THESIS</div>
           <h2 className="h2" style={{ marginTop: 12 }}>
-            A Multiverse <em style={{ color: 'var(--accent)', fontStyle: 'italic' }}>of Love</em>
+            A Multiverse <em style={{ fontStyle: 'italic' }}>of <a href="https://www.instagram.com/p/DX3rr4kCFw5/?utm_source=ig_web_copy_link&igsh=MzRlODBiNWFlZA%3D%3D" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Love</a></em>
           </h2>
           <p className="lead" style={{ marginTop: 18 }}>
             The founding story of Interstellar Psychology. A testimony to the loving infrastructure of reality.
