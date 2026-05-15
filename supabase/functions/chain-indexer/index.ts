@@ -280,6 +280,38 @@ Deno.serve(async (req: Request) => {
       );
       if (!error) inserted++;
 
+      // Backfill the off-chain attestation row from ReviewVoteCast /
+      // ChallengeVoteCast.  The normal path is: client signs + broadcasts tx,
+      // then calls verify-attestation which inserts the row.  If the client
+      // closes the tab / loses network / hits a 5xx between mining and the
+      // edge-function call, the vote lives on-chain but Supabase never gets
+      // the row — and with quorum=1 a single lost insert is enough to flip
+      // evidence.status to canon with zero attestations attached.  The chain
+      // is the source of truth, so the indexer plugs the gap.  ON CONFLICT
+      // DO NOTHING via (evidence_id, peer_addr, phase): if the edge function
+      // already wrote the row, this is a no-op and the count trigger does
+      // not fire a second time.
+      if (
+        (parsed.name === "ReviewVoteCast" || parsed.name === "ChallengeVoteCast") &&
+        decoded.evidence_id && decoded.peer_addr
+      ) {
+        const phase   = parsed.name === "ReviewVoteCast" ? "review" : "challenge";
+        const verdict = parsed.name === "ReviewVoteCast"
+          ? ((decoded.payload as { approve?: boolean }).approve ? "approve" : "reject")
+          : ((decoded.payload as { support_challenge?: boolean }).support_challenge ? "challenge" : "defend");
+        await supabase.from("attestations").upsert(
+          {
+            evidence_id: decoded.evidence_id,
+            peer_addr:   decoded.peer_addr,
+            phase,
+            verdict,
+            tx_hash:     log.transactionHash,
+            created_at:  occurred,
+          },
+          { onConflict: "evidence_id,peer_addr,phase", ignoreDuplicates: true },
+        );
+      }
+
       // Reconcile evidence.submitted_onchain when an EvidenceSubmitted lands.
       // Also write the content_hash so the off-chain row is bound to the
       // chain's view from indexer-side too.
