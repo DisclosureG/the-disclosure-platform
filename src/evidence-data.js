@@ -82,6 +82,10 @@ const PAGE_SIZE = 24;
 
 const VISIBLE_STATUSES = ['canon', 'approved', 'reaffirmed', 'contested', 'deprecated'];
 
+// Statuses included in numeric tallies — VISIBLE_STATUSES minus 'deprecated',
+// so no count ever reflects evidence the network has retired.
+const COUNTED_STATUSES = VISIBLE_STATUSES.filter(s => s !== 'deprecated');
+
 const ORDER_MAP = {
   'pillar':    { col: 'pillar_id', asc: true  },
   'tier':      { col: 'tier',      asc: true  },
@@ -175,7 +179,7 @@ export function usePillarCounts() {
     const base = (id) => supabase
       .from('evidence')
       .select('*', { count: 'exact', head: true })
-      .in('status', VISIBLE_STATUSES)
+      .in('status', COUNTED_STATUSES)
       .eq('pillar_id', id);
 
     Promise.all(PILLARS.map(p => base(p.id))).then(results => {
@@ -193,7 +197,7 @@ export function useTierCounts() {
   const [counts, setCounts] = useState({ total: 0, tier1: 0, tier2: 0, tier3: 0 });
 
   useEffect(() => {
-    const base = () => supabase.from('evidence').select('*', { count: 'exact', head: true }).in('status', VISIBLE_STATUSES);
+    const base = () => supabase.from('evidence').select('*', { count: 'exact', head: true }).in('status', COUNTED_STATUSES);
     Promise.all([
       base(),
       base().eq('tier', 1),
@@ -500,6 +504,27 @@ export function useAttestationLog(limit = 50) {
   }, [limit]);
 
   return { log, loading };
+}
+
+// ── Reviews-signed count hook ────────────────────────────────────────────────
+//
+// Lifetime count of attestations signed by a given peer address. Unlike the
+// in-session vote tally, this survives evidence leaving the pending queue.
+export function useMyReviewCount(addr) {
+  const [count, setCount] = useState(null);
+
+  useEffect(() => {
+    if (!addr) { setCount(null); return; }
+    let cancelled = false;
+    supabase
+      .from('attestations')
+      .select('*', { count: 'exact', head: true })
+      .eq('peer_addr', addr)
+      .then(({ count: c }) => { if (!cancelled) setCount(c ?? 0); });
+    return () => { cancelled = true; };
+  }, [addr]);
+
+  return count;
 }
 
 // ── Retry helper ─────────────────────────────────────────────────────────────

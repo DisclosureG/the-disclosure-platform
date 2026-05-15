@@ -249,11 +249,13 @@
 .ev-pillars {
   padding: 64px 0 120px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 96px;
 }
 .ev-pillar-section {
+  width: 100%;
   max-width: 1320px;
-  margin: 0 auto;
+  justify-self: center;
   padding-left: 32px;
   padding-right: 32px;
   scroll-margin-top: 140px;
@@ -333,9 +335,6 @@
 .ev-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 1px;
-  background: var(--line-soft);
-  border: 1px solid var(--line-soft);
 }
 @media (max-width: 1000px) { .ev-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 600px) { .ev-grid { grid-template-columns: 1fr; } }
@@ -352,12 +351,21 @@
   min-height: 280px;
   cursor: pointer;
   text-align: left;
-  border: none;
+  border: 1px solid var(--line-soft);
+  margin: 0 -1px -1px 0;    /* collapse shared borders; empty cells render nothing */
   color: inherit;
   font: inherit;
   width: 100%;
 }
 .ev-card:hover { background: var(--bg-elev); }
+
+/* Empty slot — pads sparse pillars so every row stays 3 cards wide */
+.ev-card-ghost {
+  background: var(--bg);
+  min-height: 280px;
+}
+/* Ghost padding is computed for the 3-column layout; drop it below that */
+@media (max-width: 1000px) { .ev-card-ghost { display: none; } }
 .ev-card:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 .ev-card-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
@@ -436,6 +444,7 @@
   padding: 80px 32px;
   text-align: center;
   background: var(--bg);
+  border: 1px solid var(--line-soft);
   font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.2em;
@@ -877,11 +886,11 @@
 .ev-challenge-cancel:hover { border-color: var(--ink-soft); color: var(--ink); }
 .ev-challenge-submit {
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
-  padding: 9px 16px; border: 1px solid var(--danger); border-radius: 999px;
-  background: var(--danger); color: var(--bg-deep); cursor: pointer; transition: all .25s ease;
+  padding: 9px 16px; border: 1px solid var(--accent); border-radius: 999px;
+  background: var(--accent); color: var(--bg-deep); cursor: pointer; transition: all .25s ease;
 }
-.ev-challenge-submit:hover:not(:disabled) { box-shadow: 0 0 0 4px color-mix(in oklab, var(--danger) 25%, transparent); }
-.ev-challenge-submit:disabled { opacity: 0.45; cursor: not-allowed; }
+.ev-challenge-submit:hover:not(:disabled) { box-shadow: 0 0 0 4px var(--halo); }
+.ev-challenge-submit:disabled { opacity: 0.7; cursor: not-allowed; }
 .ev-challenge-filed {
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
   color: var(--ok); padding: 12px 0;

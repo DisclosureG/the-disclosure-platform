@@ -195,6 +195,8 @@ function EvCard({ e, onOpen }) {
 }
 
 function PillarSection({ pillar, items, onOpen }) {
+  const countedItems = items.filter(e => e.status !== 'deprecated').length;
+  const ghostCount = items.length === 0 ? 0 : (3 - (items.length % 3)) % 3;
   return (
     <section id={pillar.id} className="ev-pillar-section">
       <div className="ev-pillar-head">
@@ -208,7 +210,7 @@ function PillarSection({ pillar, items, onOpen }) {
           <p className="ev-pillar-blurb">{pillar.blurb}</p>
         </div>
         <div className="ev-pillar-meta">
-          <b>{items.length}</b>
+          <b>{countedItems}</b>
           entries
         </div>
       </div>
@@ -216,7 +218,12 @@ function PillarSection({ pillar, items, onOpen }) {
         {items.length === 0 ? (
           <div className="ev-empty">No matches in this pillar — clear filters or submit the first one.</div>
         ) : (
-          items.map(e => <EvCard key={e.id} e={e} onOpen={onOpen} />)
+          <>
+            {items.map(e => <EvCard key={e.id} e={e} onOpen={onOpen} />)}
+            {Array.from({ length: ghostCount }, (_, i) => (
+              <div key={`ghost-${i}`} className="ev-card-ghost" aria-hidden="true" />
+            ))}
+          </>
         )}
       </div>
     </section>
@@ -224,6 +231,7 @@ function PillarSection({ pillar, items, onOpen }) {
 }
 
 function FlatGrid({ items, onOpen }) {
+  const countedItems = items.filter(e => e.status !== 'deprecated').length;
   return (
     <section className="ev-pillar-section">
       <div className="ev-pillar-head">
@@ -237,7 +245,7 @@ function FlatGrid({ items, onOpen }) {
           <p className="ev-pillar-blurb">Switch sort back to "by pillar" to see the structural view.</p>
         </div>
         <div className="ev-pillar-meta">
-          <b>{items.length}</b>
+          <b>{countedItems}</b>
           entries
         </div>
       </div>
@@ -282,7 +290,7 @@ function DetailModal({ e, onClose, walletPeer }) {
   const handleChallenge = async (ev) => {
     ev.preventDefault();
     if (!walletPeer?.addr || !walletPeer?.isPeer) return;
-    if (challengeReason.trim().length < 20) return;
+    if (challengeReason.trim().length === 0) return;
     setChallenging(true);
     setChainWarning(null);
 
@@ -430,7 +438,7 @@ function DetailModal({ e, onClose, walletPeer }) {
                   autoFocus
                   value={challengeReason}
                   onChange={ev => setChallengeReason(ev.target.value)}
-                  placeholder="Minimum 20 characters. Be specific."
+                  placeholder="Be specific."
                   rows={4}
                 />
                 <div className="ev-challenge-form-foot">
@@ -440,7 +448,7 @@ function DetailModal({ e, onClose, walletPeer }) {
                   <button
                     type="submit"
                     className="ev-challenge-submit"
-                    disabled={challengeReason.trim().length < 20 || challenging}
+                    disabled={challengeReason.trim().length === 0 || challenging}
                   >
                     {challenging ? 'Filing…' : 'File challenge →'}
                   </button>
@@ -594,7 +602,7 @@ function SubmitModal({ open, onClose, walletPeer }) {
               <div className="ev-form-row">
                 <label htmlFor="f-type">Type</label>
                 <select id="f-type" value={form.type} onChange={handle('type')}>
-                  {['Paper','Book','Podcast','Documentary','Declassified','Testimony','Lecture','Study','Method','Witness','Art','Document'].map(t =>
+                  {['Paper','Book','Podcast','Documentary','Video','Declassified','Testimony','Lecture','Study','Method','Witness','Art','Photograph','Document'].map(t =>
                     <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
@@ -711,13 +719,14 @@ export default function Evidence() {
     return () => clearTimeout(t);
   }, [q]);
 
-  const { evidence, loading, hasMore, loadMore } = useEvidence(debouncedQ, type, tier, sort);
+  const { evidence, loading, total, hasMore, loadMore } = useEvidence(debouncedQ, type, tier, sort);
   const tierCounts = useTierCounts();
 
   const counts = useMemo(() => {
-    const byType = { All: evidence.length };
+    const counted = evidence.filter(e => e.status !== 'deprecated');
+    const byType = { All: counted.length };
     ['Paper', 'Book', 'Podcast', 'Documentary', 'Declassified', 'Testimony', 'Lecture'].forEach(t => {
-      byType[t] = evidence.filter(e => e.type === t).length;
+      byType[t] = counted.filter(e => e.type === t).length;
     });
     return { ...tierCounts, type: byType };
   }, [evidence, tierCounts]);
@@ -792,7 +801,7 @@ export default function Evidence() {
         {hasMore && (
           <div style={{ textAlign: 'center', padding: '2rem 1rem 4rem' }}>
             <button className="ev-submit-btn" onClick={loadMore} disabled={loading}>
-              {loading ? 'Loading…' : `Load more · ${evidence.length} / ${tierCounts.total} shown`}
+              {loading ? 'Loading…' : `Load more · ${evidence.length} / ${total ?? evidence.length} shown`}
             </button>
           </div>
         )}
