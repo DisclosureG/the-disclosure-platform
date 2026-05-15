@@ -77,15 +77,11 @@ function MetaMaskFox({ size = 22 }) {
 }
 
 function NameBadge({ source, small }) {
-  if (!source || source === 'none') return null;
-  const cfg = source === 'ens'
-    ? { label: 'ENS', cls: 'ok', title: 'Resolved via ENS reverse lookup' }
-    : { label: 'Self-asserted', cls: '', title: 'Set by the peer on first sign-in' };
+  if (source !== 'ens') return null;
   return (
-    <span className={`pr-tag ${cfg.cls}`} title={cfg.title}
+    <span className="pr-tag ok" title="Resolved via ENS reverse lookup"
       style={{ marginLeft: 8, transform: 'translateY(-2px)', padding: small ? '3px 7px' : '5px 10px', fontSize: small ? 8 : 9 }}>
-      {cfg.cls && <span className="pr-tag-dot" />}
-      {cfg.label}
+      <span className="pr-tag-dot" />ENS
     </span>
   );
 }

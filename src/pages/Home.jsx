@@ -228,7 +228,7 @@ function Peace() {
             <p>One species, one shared substrate, one staggering experiment in remembrance.</p>
           </div>
           <div className="stat fade-in">
-            <div className="stat-num"><span style={{ fontSize: '0.65em', verticalAlign: 'middle' }}>I</span> AM <em>field</em></div>
+            <div className="stat-num stat-num--phrase">Unified <em>Field</em></div>
             <div className="stat-label">Love</div>
             <p>The relational substrate. The verifier. The thing that cannot be faked.</p>
           </div>

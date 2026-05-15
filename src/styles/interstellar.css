@@ -946,10 +946,16 @@ section {
   line-height: 1;
   letter-spacing: -0.02em;
   margin-bottom: 6px;
+  min-height: 56px;
 }
 .stat-num em {
   font-style: italic;
   color: var(--accent);
+}
+.stat-num--phrase {
+  font-size: 42px;
+  white-space: nowrap;
+  padding-top: 14px;
 }
 .stat-label {
   font-family: var(--mono);

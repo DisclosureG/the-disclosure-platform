@@ -192,6 +192,28 @@ export function usePillarCounts() {
   return counts;
 }
 
+// ── Per-type counts hook — unfiltered totals for the type-chip row ───────────
+export function useTypeCounts() {
+  const [counts, setCounts] = useState({});
+
+  useEffect(() => {
+    supabase
+      .from('evidence')
+      .select('type')
+      .in('status', COUNTED_STATUSES)
+      .then(({ data }) => {
+        const tally = {};
+        (data || []).forEach(r => {
+          if (!r.type) return;
+          tally[r.type] = (tally[r.type] ?? 0) + 1;
+        });
+        setCounts(tally);
+      });
+  }, []);
+
+  return counts;
+}
+
 // ── Tier counts hook — unfiltered totals for Hero stats ───────────────────────
 export function useTierCounts() {
   const [counts, setCounts] = useState({ total: 0, tier1: 0, tier2: 0, tier3: 0 });

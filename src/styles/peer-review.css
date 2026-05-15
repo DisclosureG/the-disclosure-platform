@@ -255,8 +255,8 @@
 .pr-tag.elder { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 50%, var(--line)); }
 .pr-tag .pr-tag-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 
-.pr-id-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; align-items: center; }
-@media (max-width: 800px) { .pr-id-stats { grid-template-columns: repeat(2, 1fr); padding-top: 12px; border-top: 1px solid var(--line-soft); } }
+.pr-id-stats { display: flex; gap: 32px; align-items: center; justify-content: flex-end; }
+@media (max-width: 800px) { .pr-id-stats { justify-content: flex-start; padding-top: 12px; border-top: 1px solid var(--line-soft); } }
 .pr-id-stat { text-align: right; }
 @media (max-width: 800px) { .pr-id-stat { text-align: left; } }
 .pr-id-stat b { display: block; font-family: var(--serif); font-weight: 300; font-size: 36px; line-height: 1; letter-spacing: -0.02em; color: var(--ink); margin-bottom: 4px; }

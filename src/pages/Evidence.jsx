@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { BrandMark } from '../components/Sigil';
-import { PILLARS, useEvidence, useTierCounts, STATUS_LABEL, openChallenge } from '../evidence-data';
+import { PILLARS, useEvidence, useTierCounts, useTypeCounts, STATUS_LABEL, openChallenge } from '../evidence-data';
 import { supabase } from '../lib/supabase';
 import { isPeerActive, getPeerHandle, signAttestation, openChallengeOnChain, submitEvidenceOnChain, waitForTx, CONSENSUS_ADDR, getChallengeCooldownRemaining, computeContentHash } from '../lib/wallet';
 import { markEvidenceOnchain } from '../evidence-data';
@@ -102,7 +102,11 @@ function Hero({ count, tier1Count, tier2Count, tier3Count }) {
 }
 
 function Controls({ q, setQ, type, setType, tier, setTier, sort, setSort, onSubmit, counts }) {
-  const typeChips = ['All', 'Paper', 'Book', 'Podcast', 'Documentary', 'Declassified', 'Testimony', 'Lecture', 'Art', 'Photograph'];
+  const dynamicTypes = Object.entries(counts.type)
+    .filter(([k, v]) => k !== 'All' && v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k]) => k);
+  const typeChips = ['All', ...dynamicTypes];
   const tierChips = [
     { id: 'all', label: 'All tiers' },
     { id: '1',   label: 'Tier I' },
@@ -721,15 +725,12 @@ export default function Evidence() {
 
   const { evidence, loading, total, hasMore, loadMore } = useEvidence(debouncedQ, type, tier, sort);
   const tierCounts = useTierCounts();
+  const typeCounts = useTypeCounts();
 
-  const counts = useMemo(() => {
-    const counted = evidence.filter(e => e.status !== 'deprecated');
-    const byType = { All: counted.length };
-    ['Paper', 'Book', 'Podcast', 'Documentary', 'Declassified', 'Testimony', 'Lecture'].forEach(t => {
-      byType[t] = counted.filter(e => e.type === t).length;
-    });
-    return { ...tierCounts, type: byType };
-  }, [evidence, tierCounts]);
+  const counts = useMemo(() => ({
+    ...tierCounts,
+    type: { All: tierCounts.total, ...typeCounts },
+  }), [tierCounts, typeCounts]);
 
   useEffect(() => {
     const onScroll = () => {
