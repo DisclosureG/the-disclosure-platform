@@ -5,7 +5,7 @@ import {
   canonizeThreshold, expelThreshold, deprecateThreshold,
   PENDING_WINDOW_DAYS, CHALLENGE_WINDOW_DAYS, daysRemaining,
   usePendingEvidence, useContestedEvidence, useCanonEvidence, useAttestationLog,
-  useUnchainedPending, useChainEvents, useTamperAlerts, useHeartbeats,
+  useUnchainedPending, useChainEvents, useTamperAlerts, useHeartbeats, useMyReviewCount,
   castReviewVote, openChallenge, castChallengeVote, finalizeChallengeSupabase,
   markEvidenceOnchain,
 } from '../evidence-data';
@@ -136,11 +136,6 @@ function IdentityHeader({ me, role, pendingCount, reviewCount }) {
   const tags = [];
   if (role === 'elder') tags.push({ label: 'Genesis peer', cls: 'elder' });
   if (role === 'peer' || role === 'elder') tags.push({ label: 'Verified · can attest', cls: 'ok' });
-  tags.push({ label: me.bio, cls: '' });
-
-  const tenureMo = Math.floor(
-    (Date.now() - new Date(me.joined).getTime()) / (1000 * 60 * 60 * 24 * 30)
-  );
 
   return (
     <section className="pr-identity">
@@ -158,13 +153,8 @@ function IdentityHeader({ me, role, pendingCount, reviewCount }) {
         </div>
       </div>
       <div className="pr-id-stats">
-        <div className="pr-id-stat"><b>{reviewCount}</b><span>Reviews signed</span></div>
-        <div className="pr-id-stat"><b>{me.endorsedBy}</b><span>Endorsed by</span></div>
+        <div className="pr-id-stat"><b>{reviewCount ?? '…'}</b><span>Reviews signed</span></div>
         <div className="pr-id-stat"><b>{pendingCount}</b><span>Needs review</span></div>
-        <div className="pr-id-stat">
-          <b>{tenureMo}<small style={{ fontSize: '0.5em', marginLeft: 4, color: 'var(--ink-faint)' }}>mo</small></b>
-          <span>Tenure</span>
-        </div>
       </div>
     </section>
   );
@@ -228,8 +218,7 @@ function ReviewCard({ item, myVerdict, onVote, onLapseChain, meAddr, peerCount }
         <p className="pr-review-excerpt">{item.excerpt}</p>
 
         <div className="pr-review-meta">
-          <span>Submitted by <b>{item.submittedBy?.startsWith('guest:') ? 'guest · ' + item.submittedBy.slice(6) : (item.submittedBy || 'anonymous')}</b></span>
-          {item.submitted_at && <span>· Filed <b>{new Date(item.submitted_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</b></span>}
+          {item.submitted_at && <span>Filed <b>{new Date(item.submitted_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</b></span>}
           {item.link && <span>· Source <a href={item.link} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-2)' }}>open ↗</a></span>}
         </div>
       </div>
@@ -415,7 +404,7 @@ function OpenChallengePanel({ onOpen, peerCount, cooldownSecs = 0 }) {
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
-    if (!selected || reason.trim().length < 20) return;
+    if (!selected || reason.trim().length === 0) return;
     setSubmitting(true);
     await onOpen(selected, reason.trim());
     setSelected(null);
@@ -488,18 +477,18 @@ function OpenChallengePanel({ onOpen, peerCount, cooldownSecs = 0 }) {
           </div>
           <textarea
             className="pr-challenge-textarea"
-            placeholder="State your grounds clearly. What specific claim is wrong, misleading, or unsupported? Minimum 20 characters."
+            placeholder="State your grounds clearly. What specific claim is wrong, misleading, or unsupported?"
             value={reason}
             onChange={e => setReason(e.target.value)}
             rows={4}
           />
           <div className="pr-challenge-form-foot">
             <span className="pr-vote-hint" style={{ flex: 1 }}>
-              {reason.length < 20 ? `${20 - reason.length} more characters needed` : 'Ready to sign'}
+              {reason.trim().length === 0 ? 'Grounds required' : 'Ready to sign'}
             </span>
             <button
               className="pr-nominate-btn"
-              disabled={reason.trim().length < 20 || submitting}
+              disabled={reason.trim().length === 0 || submitting}
               onClick={handleSubmit}>
               {submitting ? 'Signing…' : 'Open challenge →'}
             </button>
@@ -922,6 +911,24 @@ const MC_SHELLS = [
   { count: 5,  duration: 54, orbitTop: '0%',  dotSize: 7, color: 'var(--accent)'   }, // n=7 (valence)
 ];
 
+// Moscovium-290 nucleus: 115 protons + 175 neutrons, phyllotaxis-packed into the core.
+const MC_NUCLEONS = (() => {
+  const total = 290, protons = 115;
+  const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+  return Array.from({ length: total }, (_, i) => {
+    const radius = Math.sqrt(i / (total - 1)) * 46; // % of core, leaves a rim
+    const angle  = i * GOLDEN_ANGLE;
+    // Bresenham-style spread so exactly 115 of the 290 nucleons are protons
+    const isProton =
+      Math.floor((i + 1) * protons / total) !== Math.floor(i * protons / total);
+    return {
+      x: 50 + Math.cos(angle) * radius,
+      y: 50 + Math.sin(angle) * radius,
+      isProton,
+    };
+  });
+})();
+
 function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attestationCount }) {
   const verifiedPeers = []; // Jazzicon orbit — reserved for future on-chain peer fetch
   const electronSize  = Math.max(14, 44 - verifiedPeers.length * 2);
@@ -1028,7 +1035,15 @@ function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attesta
               );
             })}
 
-            <div className="pr-orbit-node you">You</div>
+            <div className="pr-orbit-node nucleus" aria-label="Moscovium-290 nucleus">
+              {MC_NUCLEONS.map((n, i) => (
+                <div
+                  key={`nuc-${i}`}
+                  className={`pr-nucleon ${n.isProton ? 'proton' : 'neutron'}`}
+                  style={{ left: `${n.x}%`, top: `${n.y}%` }}
+                />
+              ))}
+            </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginTop: 28, maxWidth: 460, marginLeft: 'auto', marginRight: 'auto', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--ink-faint)', textAlign: 'center' }}>
             <div><b style={{ fontFamily: 'var(--serif)', fontSize: 28, color: 'var(--ink)', display: 'block', fontWeight: 300 }}>{peerCount ?? '…'}</b>Verified peers</div>
@@ -1378,7 +1393,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
     return queue;
   }, [queue, filter, myVotes]);
 
-  const reviewCount = me.reviews + Object.keys(myVotes).length + Object.keys(myChallengeVotes).length;
+  const reviewCount = useMyReviewCount(me?.addr);
 
   // ── Review vote handler ────────────────────────────────────────────────────
   const handleVote = (item, verdict) => {
@@ -1838,8 +1853,8 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
 
       <footer className="pr-footnote">
         <div>
-          <b>Genesis bootstrap</b>
-          The system starts with a single Genesis peer (quorum 1). As more peers join, thresholds scale up automatically — nominee quorum caps at 9.
+          <b>Thresholds scale with the network</b>
+          Every vote count is a percentage of the active peers, not a fixed number. With few peers a single attestation can canonize; as the network grows, the same share of peers is always needed — so consensus stays just as hard to reach, and no small group can dominate.
         </div>
         <div>
           <b>Truth can evolve</b>
@@ -2029,10 +2044,6 @@ export default function PeerReview() {
     addr:       wallet,
     handle:     peerHandle,
     nameSource: peerHandle ? 'self' : 'none',
-    reviews:    0,
-    endorsedBy: 0,
-    joined:     new Date().toISOString().split('T')[0],
-    bio:        '',
   } : null;
 
   useEffect(() => { document.body.style.overflow = ''; }, []);

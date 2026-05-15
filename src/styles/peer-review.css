@@ -137,17 +137,30 @@
   font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
   overflow: hidden;
 }
-.pr-orbit-node.you {
-  width: 92px; height: 92px;
+.pr-orbit-node.nucleus {
+  width: 116px; height: 116px;
   left: 50%; top: 50%;
   transform: translate(-50%, -50%);
-  background: color-mix(in oklab, var(--accent) 14%, var(--bg-elev));
+  background: radial-gradient(circle at 50% 50%,
+    color-mix(in oklab, var(--accent) 18%, var(--bg-elev)),
+    var(--bg-elev) 78%);
   border-color: var(--accent);
-  box-shadow: 0 0 0 8px var(--halo);
-  color: var(--ink);
-  font-family: var(--serif); font-size: 16px; letter-spacing: -0.01em;
+  box-shadow: 0 0 0 8px var(--halo), 0 0 36px color-mix(in oklab, var(--accent) 30%, transparent);
   overflow: visible;
+  animation: pr-nucleus-pulse 6s ease-in-out infinite;
 }
+@keyframes pr-nucleus-pulse {
+  0%, 100% { box-shadow: 0 0 0 8px var(--halo), 0 0 28px color-mix(in oklab, var(--accent) 22%, transparent); }
+  50%      { box-shadow: 0 0 0 10px var(--halo), 0 0 48px color-mix(in oklab, var(--accent) 42%, transparent); }
+}
+.pr-nucleon {
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+.pr-nucleon.proton  { background: var(--accent);    box-shadow: 0 0 3px color-mix(in oklab, var(--accent) 70%, transparent); }
+.pr-nucleon.neutron { background: var(--ink-faint); }
 
 .pr-connect-card {
   border: 1px solid var(--line);
@@ -478,8 +491,13 @@
   transition: all .2s ease;
   display: inline-flex; align-items: center; gap: 8px;
 }
-.pr-nominate-btn:hover { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 6px var(--halo); }
-.pr-nominate-btn:disabled { opacity: .4; cursor: not-allowed; }
+.pr-nominate-btn:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 6px var(--halo); }
+.pr-nominate-btn:disabled {
+  background: var(--ink-soft);
+  border-color: var(--ink-soft);
+  color: var(--bg);
+  cursor: not-allowed;
+}
 
 /* ===================== ACTIVITY LOG ===================== */
 .pr-log { display: grid; gap: 1px; background: var(--line-soft); border: 1px solid var(--line-soft); border-radius: var(--radius-m); overflow: hidden; }
