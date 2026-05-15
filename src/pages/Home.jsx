@@ -178,7 +178,7 @@ function BookSection({ onBuy, onPreview }) {
           </dl>
 
           <p className="book-price">
-            $420.69 <small>USD equivalent · paid in memes</small>
+            $420.69 <small>USD equivalent · paid in <a href="https://www.linkedin.com/posts/gillesmoenaert_share-7461069519038525440-DKjc?utm_source=share&utm_medium=member_desktop&rcm=ACoAACDEKpcBQHKvKQ94VZChbxH1YxYOv-Qce8w" target="_blank" rel="noopener noreferrer" style={{ color: '#0A66C2', textDecoration: 'none' }}>memes</a></small>
           </p>
 
           <div className="coin-row" style={{ margin: '20px 0 28px' }}>
