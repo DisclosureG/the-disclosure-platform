@@ -7,6 +7,7 @@ const EVIDENCE_BASE = '/evidence/';
 const LINK_URLS = {
   Afterlife: 'https://www.after.life/',
   'Julia Mossbridge': 'https://www.applied.love/',
+  Ego: 'https://www.youtube.com/watch?v=zrjJWdn3mME&t=202s',
 };
 
 const PILLARS = [
