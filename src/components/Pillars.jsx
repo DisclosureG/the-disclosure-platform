@@ -4,6 +4,11 @@ import { usePillarCounts } from '../evidence-data';
 const slug = (s) => s.toLowerCase().replace(/\s+/g, '-');
 const EVIDENCE_BASE = '/evidence/';
 
+const LINK_URLS = {
+  Afterlife: 'https://www.after.life/',
+  'Julia Mossbridge': 'https://www.applied.love/',
+};
+
 const PILLARS = [
   {
     n: "01",
@@ -21,7 +26,7 @@ const PILLARS = [
     blurb: "Substances that open you to the possibility everything you know is wrong.",
     quote: "They dissolve opinion structures and culturally laid down models of behaviour.",
     body: "Plant medicines and entheogens function as keys, not as escape. They reveal the architecture of consciousness from inside the architecture itself.",
-    links: ["Consiousness","Afterlife", "Psychedelic Ascension"],
+    links: ["Consiousness","Afterlife", "Ego"],
   },
   {
     n: "03",
@@ -144,9 +149,20 @@ function PillarCard({ p, isOpen, onToggle, idx }) {
         {p.quote && <p className="quote">&ldquo;{p.quote}&rdquo;</p>}
         <p>{p.body}</p>
         <div className="links">
-          {p.links.map((l) => (
-            <a key={l} href="#" onClick={(e) => e.preventDefault()}>{l}</a>
-          ))}
+          {p.links.map((l) => {
+            const linkHref = LINK_URLS[l];
+            return linkHref ? (
+              <a
+                key={l}
+                href={linkHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+              >{l}</a>
+            ) : (
+              <a key={l} href="#" onClick={(e) => e.preventDefault()}>{l}</a>
+            );
+          })}
         </div>
 
         <a
