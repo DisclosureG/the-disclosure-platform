@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from './lib/supabase';
 
 // ── Pillars ──────────────────────────────────────────────────────────────────
@@ -253,7 +253,7 @@ export function usePendingEvidence() {
   const [queue, setQueue]   = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const refetch = () => {
+  const refetch = () =>
     supabase
       .from('evidence')
       .select('*, attestations(*)')
@@ -264,7 +264,6 @@ export function usePendingEvidence() {
         setQueue((data || []).map(normalize));
         setLoading(false);
       });
-  };
 
   useEffect(() => {
     refetch();
@@ -294,7 +293,7 @@ export function useUnchainedPending() {
   const [items, setItems]   = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const refetch = () => {
+  const refetch = () =>
     supabase
       .from('evidence')
       .select('id, title, tier, pillar_id, source, year, excerpt, link, submitted_at, status')
@@ -305,7 +304,6 @@ export function useUnchainedPending() {
         setItems((data || []).map(normalize));
         setLoading(false);
       });
-  };
 
   useEffect(() => {
     refetch();
@@ -422,6 +420,27 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNa
     return req;
   };
 
+  const refetch = useCallback(() => {
+    setLoading(true);
+    setPage(0);
+    setTotal(null);
+    return applyFilters(
+      supabase
+        .from('chain_events')
+        .select('*', { count: 'estimated' })
+        .order('block_number', { ascending: false })
+        .order('log_index',    { ascending: false })
+    )
+      .range(0, pageSize - 1)
+      .then(({ data, count }) => {
+        setEvents(data || []);
+        setTotal(count ?? null);
+        setLoading(false);
+      });
+  // applyFilters closes over q/namesKey/addrsKey; pageSize is a dep too.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageSize, q, namesKey, addrsKey]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -467,7 +486,7 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNa
 
   const hasMore = total === null ? events.length === (page + 1) * pageSize : events.length < total;
 
-  return { events, loading, hasMore, loadMore, total };
+  return { events, loading, hasMore, loadMore, total, refetch };
 }
 
 // ── Contested evidence hook  (canon items under active challenge) ────────────
@@ -596,6 +615,26 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
     return req;
   };
 
+  const refetch = useCallback(() => {
+    setLoading(true);
+    setPage(0);
+    setTotal(null);
+    return applyFilters(
+      supabase
+        .from('attestations')
+        .select('*, evidence(title)', { count: 'estimated' })
+        .order('created_at', { ascending: false })
+    )
+      .range(0, pageSize - 1)
+      .then(({ data, count }) => {
+        setLog(data || []);
+        setTotal(count ?? null);
+        setLoading(false);
+      });
+  // applyFilters closes over q/v; pageSize is a dep too.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageSize, q, v]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -639,7 +678,7 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
 
   const hasMore = total === null ? log.length === (page + 1) * pageSize : log.length < total;
 
-  return { log, loading, hasMore, loadMore, total };
+  return { log, loading, hasMore, loadMore, total, refetch };
 }
 
 // ── Reviews-signed count hook ────────────────────────────────────────────────

@@ -77,6 +77,27 @@ function MetaMaskFox({ size = 22 }) {
   return <img src={metamaskFox} width={size} height={size} alt="MetaMask" aria-hidden="true" style={{ display: 'block', flexShrink: 0 }} />;
 }
 
+function RefreshButton({ onClick, spinning, label = 'Refresh', title = 'Refresh' }) {
+  return (
+    <button
+      type="button"
+      className={`pr-refresh ${spinning ? 'is-spinning' : ''}`}
+      onClick={onClick}
+      disabled={spinning}
+      title={title}
+      aria-label={title}
+    >
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M20 11A8 8 0 0 0 6.3 6.3L4 8.5" />
+        <path d="M4 4v4.5h4.5" />
+        <path d="M4 13a8 8 0 0 0 13.7 4.7L20 15.5" />
+        <path d="M20 20v-4.5h-4.5" />
+      </svg>
+      {spinning ? 'Refreshing' : label}
+    </button>
+  );
+}
+
 function NameBadge({ source, small }) {
   if (source !== 'ens') return null;
   return (
@@ -837,6 +858,13 @@ function ChainEventLog({ me, role }) {
 
   // On-chain peer registry is the authoritative source for handle→address.
   // Loaded once; used both to resolve handle searches and to label rows.
+  const refetchPeerRegistry = useCallback(() => {
+    return getActivePeersAggregated()
+      .then(list => {
+        setPeerRegistry((list || []).map(p => ({ addr: (p.addr || '').toLowerCase(), handle: p.handle || '' })));
+      })
+      .catch(() => {});
+  }, []);
   useEffect(() => {
     let cancelled = false;
     getActivePeersAggregated()
@@ -873,8 +901,17 @@ function ChainEventLog({ me, role }) {
   const activeGroup = CHAIN_EVENT_FILTERS.find(f => f.id === groupId);
   const eventNames  = activeGroup ? activeGroup.names : [];
 
-  const { events, loading, hasMore, loadMore, total } = useChainEvents(30, debounced, eventNames, handleAddrs);
+  const { events, loading, hasMore, loadMore, total, refetch } = useChainEvents(30, debounced, eventNames, handleAddrs);
   const filtering = debounced.length > 0 || groupId.length > 0;
+
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    const minSpin = new Promise(r => setTimeout(r, 600));
+    try { await Promise.all([refetch(), refetchPeerRegistry(), minSpin]); }
+    finally { setRefreshing(false); }
+  }, [refreshing, refetch, refetchPeerRegistry]);
 
   const controls = (
     <div className="pr-log-controls">
@@ -907,6 +944,7 @@ function ChainEventLog({ me, role }) {
           spellCheck={false}
           autoCapitalize="off"
         />
+        <RefreshButton onClick={handleRefresh} spinning={refreshing} title="Refresh chain log" />
       </div>
     </div>
   );
@@ -1002,8 +1040,17 @@ function ActivityLog() {
     return () => clearTimeout(id);
   }, [query]);
 
-  const { log, loading, hasMore, loadMore, total } = useAttestationLog(30, debounced, verdict);
+  const { log, loading, hasMore, loadMore, total, refetch } = useAttestationLog(30, debounced, verdict);
   const filtering = debounced.length > 0 || verdict.length > 0;
+
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    const minSpin = new Promise(r => setTimeout(r, 600));
+    try { await Promise.all([refetch(), minSpin]); }
+    finally { setRefreshing(false); }
+  }, [refreshing, refetch]);
 
   const controls = (
     <div className="pr-log-controls">
@@ -1036,6 +1083,7 @@ function ActivityLog() {
           spellCheck={false}
           autoCapitalize="off"
         />
+        <RefreshButton onClick={handleRefresh} spinning={refreshing} title="Refresh attestation log" />
       </div>
     </div>
   );
@@ -1775,9 +1823,18 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
     getChallengeCooldownRemaining(me.addr).then(s => setChallengeCooldownSecs(s ?? 0));
   }, [me?.addr]);
 
-  const { queue,     loading: qLoading }  = usePendingEvidence();
+  const { queue,     loading: qLoading, refetch: refetchQueue }  = usePendingEvidence();
   const { contested, loading: cLoading }  = useContestedEvidence();
   const { items: unchained, refetch: refetchUnchained } = useUnchainedPending();
+
+  const [refreshingQueue, setRefreshingQueue] = useState(false);
+  const handleRefreshQueue = useCallback(async () => {
+    if (refreshingQueue) return;
+    setRefreshingQueue(true);
+    const minSpin = new Promise(r => setTimeout(r, 600));
+    try { await Promise.all([refetchQueue(), refetchUnchained(), minSpin]); }
+    finally { setRefreshingQueue(false); }
+  }, [refreshingQueue, refetchQueue, refetchUnchained]);
 
   // Seed myVotes / myChallengeVotes from on-chain hasVoted so a page reload
   // does not let the user retry a vote that the contract will refuse.
@@ -2181,6 +2238,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
                   {label}
                 </button>
               ))}
+              <RefreshButton onClick={handleRefreshQueue} spinning={refreshingQueue} title="Refresh queue" />
             </div>
           </div>
 
