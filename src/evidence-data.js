@@ -392,7 +392,7 @@ export function useHeartbeats() {
 // `loadMore` / `hasMore` so the UI can append the next page on click.
 const CHAIN_EVENTS_PAGE = 30;
 
-export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNames = []) {
+export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNames = [], extraAddrs = []) {
   const [events, setEvents]   = useState([]);
   const [page, setPage]       = useState(0);
   const [total, setTotal]     = useState(null);
@@ -400,12 +400,25 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNa
 
   // Strip PostgREST-special chars before composing the OR filter.
   const q = query.trim().replace(/[,()*"]/g, '');
-  // Stable key so the effect doesn't refire on a fresh array of the same names.
+  // Stable keys so the effect doesn't refire on a fresh array of the same values.
   const namesKey = eventNames.slice().sort().join(',');
+  const addrsKey = extraAddrs.slice().sort().join(',');
+
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   const applyFilters = (req) => {
     if (namesKey) req = req.in('event_name', namesKey.split(','));
-    if (q) req = req.or(`peer_addr.ilike.%${q}%,evidence_id::text.ilike.%${q}%`);
+    if (q || addrsKey) {
+      const ors = [];
+      if (q) {
+        ors.push(`peer_addr.ilike.%${q}%`);
+        // evidence_id is a `uuid` column; PostgREST doesn't support `ilike`
+        // on uuid columns inside or(), so we only match a fully-typed UUID.
+        if (UUID_RE.test(q)) ors.push(`evidence_id.eq.${q.toLowerCase()}`);
+      }
+      if (addrsKey) ors.push(`peer_addr.in.(${addrsKey})`);
+      if (ors.length) req = req.or(ors.join(','));
+    }
     return req;
   };
 
@@ -431,7 +444,7 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNa
       });
 
     return () => { cancelled = true; };
-  }, [pageSize, q, namesKey]);
+  }, [pageSize, q, namesKey, addrsKey]);
 
   const loadMore = () => {
     const next = page + 1;

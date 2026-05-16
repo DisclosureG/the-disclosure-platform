@@ -821,20 +821,56 @@ const CHAIN_EVENT_FILTERS = [
   { id: 'revocation', label: 'Revocations', cls: 'reject',   names: ['RevocationMotioned', 'RevocationVoteCast', 'PeerRevoked'] },
 ];
 
-function ChainEventLog() {
+function ChainEventLog({ me, role }) {
   const [query, setQuery]         = useState('');
   const [debounced, setDebounced] = useState('');
   const [groupId, setGroupId]     = useState('');
   const [peekId, setPeekId]       = useState(null);
+  const [peerRegistry, setPeerRegistry] = useState([]); // [{ addr, handle }]
   useEffect(() => {
     const id = setTimeout(() => setDebounced(query.trim()), 250);
     return () => clearTimeout(id);
   }, [query]);
 
+  // On-chain peer registry is the authoritative source for handle→address.
+  // Loaded once; used both to resolve handle searches and to label rows.
+  useEffect(() => {
+    let cancelled = false;
+    getActivePeersAggregated()
+      .then(list => {
+        if (cancelled) return;
+        setPeerRegistry((list || []).map(p => ({ addr: (p.addr || '').toLowerCase(), handle: p.handle || '' })));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const genesisAddr = role === 'elder' && me?.addr ? me.addr.toLowerCase() : null;
+
+  const handleAddrs = useMemo(() => {
+    const s = debounced.toLowerCase();
+    if (!s) return [];
+    const matches = new Set();
+    for (const p of peerRegistry) {
+      if (p.handle && p.handle.toLowerCase().includes(s)) matches.add(p.addr);
+    }
+    // "Genesis" is a role label, not a stored handle — once the user has typed
+    // at least 3 characters of "genesis", surface the known genesis peer
+    // (currently the connected user when role === 'elder').
+    if (genesisAddr && s.length >= 3 && 'genesis'.startsWith(s)) matches.add(genesisAddr);
+    return [...matches];
+  }, [debounced, peerRegistry, genesisAddr]);
+
+  const handleByAddr = useMemo(() => {
+    const m = new Map();
+    for (const p of peerRegistry) if (p.addr) m.set(p.addr, p.handle);
+    return m;
+  }, [peerRegistry]);
+
   const activeGroup = CHAIN_EVENT_FILTERS.find(f => f.id === groupId);
   const eventNames  = activeGroup ? activeGroup.names : [];
 
-  const { events, loading, hasMore, loadMore, total } = useChainEvents(30, debounced, eventNames);
+  const { events, loading, hasMore, loadMore, total } = useChainEvents(30, debounced, eventNames, handleAddrs);
   const filtering = debounced.length > 0 || groupId.length > 0;
 
   const controls = (
@@ -863,7 +899,7 @@ function ChainEventLog() {
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by 0x address or evidence id…"
+          placeholder="Search by handle, 0x address, or full evidence id…"
           aria-label="Search chain log"
           spellCheck={false}
           autoCapitalize="off"
@@ -902,7 +938,10 @@ function ChainEventLog() {
               <div className="pr-log-time">{timeStr}</div>
               <div className="pr-log-event" style={{ wordBreak: 'break-all' }}>
                 <span className="pr-log-kind approve">{ev.event_name}</span>{' '}
-                {ev.peer_addr && <b>{ev.peer_addr}</b>}{' '}
+                {ev.peer_addr && (() => {
+                  const h = handleByAddr.get(ev.peer_addr.toLowerCase());
+                  return <b>{h ? `${h} (${SHORT(ev.peer_addr)})` : ev.peer_addr}</b>;
+                })()}{' '}
                 {ev.evidence_id && (
                   <button
                     type="button"
@@ -910,7 +949,7 @@ function ChainEventLog() {
                     className="pr-log-evidence-link"
                     title={`Open evidence ${ev.evidence_id}`}
                   >
-                    <em>{ev.evidence_id}</em>
+                    <em>{SHORT(ev.evidence_id)}</em>
                   </button>
                 )}
               </div>
@@ -2160,7 +2199,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
             </div>
           </div>
           <OpsPanel />
-          <ChainEventLog />
+          <ChainEventLog me={me} role={role} />
         </section>
       )}
 

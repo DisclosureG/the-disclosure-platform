@@ -501,13 +501,12 @@
 
 /* ===================== ACTIVITY LOG ===================== */
 .pr-log-controls {
-  display: grid;
-  grid-template-columns: 1fr minmax(220px, 320px);
-  gap: 14px;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   margin-bottom: 14px;
 }
-@media (max-width: 700px) { .pr-log-controls { grid-template-columns: 1fr; } }
+.pr-log-controls .pr-log-search { width: 100%; }
 
 .pr-log-filters { display: flex; gap: 6px; flex-wrap: wrap; }
 .pr-log-filter {
