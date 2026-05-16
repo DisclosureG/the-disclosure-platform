@@ -174,7 +174,10 @@ async function verifyTxEvent(
       if (typeof idArg !== "string" || idArg.toLowerCase() !== wantId) continue;
     }
     if (wantPeer) {
-      const addrArg = parsed.args[1];
+      // EvidenceSubmitted puts `submitter` at args[2] (args[1] is `tier`);
+      // every other event puts the peer address at args[1].
+      const peerIdx = parsed.name === "EvidenceSubmitted" ? 2 : 1;
+      const addrArg = parsed.args[peerIdx];
       if (typeof addrArg !== "string" || addrArg.toLowerCase() !== wantPeer) continue;
     }
     if (expectedBool !== undefined) {
