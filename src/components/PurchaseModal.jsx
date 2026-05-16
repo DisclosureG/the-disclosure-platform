@@ -301,7 +301,7 @@ function ConnectStep({ onConnect }) {
   return (
     <div className="dapp-pane">
       <div className="dapp-eyebrow">Step 01 · Wallet</div>
-      <h3 className="dapp-h">Connect wallet on <em>BNB Smart Chain</em>.</h3>
+      <h3 className="dapp-h">Connect wallet on <em style={{ color: "#F3BA2F" }}>BNB Smart Chain</em>.</h3>
       <p className="dapp-sub">
         The escrow contract lives on BNB Smart Chain. You will hold the keys throughout — neither this site
         nor the author can move funds out of escrow on your behalf.
@@ -341,7 +341,10 @@ function ConnectStep({ onConnect }) {
       </div>
       {error && <p className="dapp-error" style={{ color: "var(--warn, #f87171)", marginTop: 12, fontSize: "0.85rem" }}>{error}</p>}
       <div className="dapp-fineprint">
-        <p>Network: <CopyChip value={CHAIN_ID} label="chain id">BNB Smart Chain · Chain {parseInt(CHAIN_ID, 16)}</CopyChip></p>
+        <p className="dapp-fineprint-row">
+          <span className="dapp-fineprint-k">Network</span>
+          <span className="dapp-fineprint-v">BNB Smart Chain · Chain {parseInt(CHAIN_ID, 16)}</span>
+        </p>
         <p>Contract: <a className="dapp-link" href={EXPLORER_ADDR + ESCROW_ADDR} target="_blank" rel="noreferrer">
           {shorten(ESCROW_ADDR, 8, 6)} ↗
         </a></p>

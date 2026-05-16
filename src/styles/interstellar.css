@@ -1338,6 +1338,28 @@ section {
   border-bottom: 1px solid color-mix(in oklab, var(--accent) 40%, transparent);
 }
 .dapp-link:hover { border-bottom-color: var(--accent); }
+.dapp-fineprint .dapp-link {
+  color: var(--accent-2);
+  border-bottom-color: color-mix(in oklab, var(--accent-2) 40%, transparent);
+}
+.dapp-fineprint .dapp-link:hover { border-bottom-color: var(--accent-2); }
+.dapp-fineprint-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+}
+.dapp-fineprint-k {
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  min-width: 64px;
+}
+.dapp-fineprint-v {
+  color: var(--ink-soft);
+}
 
 /* Stepper */
 .dapp-stepper {
@@ -1711,9 +1733,9 @@ section {
   gap: 8px;
   padding: 6px 12px;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--accent) 14%, transparent);
-  border: 1px solid color-mix(in oklab, var(--accent) 36%, transparent);
-  color: var(--accent);
+  background: color-mix(in oklab, oklch(0.72 0.19 145) 14%, transparent);
+  border: 1px solid color-mix(in oklab, oklch(0.72 0.19 145) 36%, transparent);
+  color: oklch(0.72 0.19 145);
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.2em;
