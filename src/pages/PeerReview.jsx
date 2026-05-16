@@ -1153,51 +1153,112 @@ function SignModal({ open, payload, onCancel, onSign, danger, signerAddr }) {
   );
 }
 
-// ── NotAPeerScreen — shown when wallet is connected but not on the registry ───
+// ── NotAPeerScreen — observer view for wallets not on the peer registry ──────
+// Unverified wallets can't attest, but the consensus record is public — they
+// can still inspect the attestation log and the indexed chain log.
 function NotAPeerScreen({ addr, onDisconnect }) {
+  const [tab, setTab] = useState('log');
+  const me = { addr, handle: null, nameSource: 'none' };
+
   return (
-    <main className="pr-connect">
-      <div className="pr-connect-grid">
-        <div>
-          <div className="eyebrow">◇ Access denied · Not a registered peer</div>
-          <h1 className="display" style={{ marginTop: 24 }}>
-            This wallet is<br /><em>not a peer.</em>
-          </h1>
-          <p className="lead">
-            The peer review panel is restricted to verified peers on the{' '}
-            <code style={{ fontFamily: 'var(--mono)', fontSize: '0.85em' }}>EvidenceConsensus</code>{' '}
-            contract. Your connected address is not in the registry.
-          </p>
-          <div className="pr-connect-card">
-            <div className="eyebrow" style={{ marginBottom: 14 }}>◇ How to become a peer</div>
-            {[
-              ['01', 'Get nominated', 'An existing peer files a nomination with your wallet address.'],
-              ['02', 'Receive endorsements', 'Active peers must endorse your nomination. Quorum scales with network size (capped at 9).'],
-              ['03', 'Access granted', 'Once the endorsement quorum is reached your address is added to the registry.'],
-            ].map(([n, title, desc]) => (
-              <div key={n} className="pr-connect-row">
-                <span className="pr-connect-num">{n}</span>
-                <div><b>{title}</b><p>{desc}</p></div>
-              </div>
-            ))}
-            <div style={{ marginTop: 20, padding: '12px 16px', background: 'color-mix(in oklab, var(--bg-elev) 80%, transparent)', borderRadius: 'var(--radius)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.1em', color: 'var(--ink-faint)', wordBreak: 'break-all' }}>
-              Connected: {addr}
+    <main className="pr-wrap">
+      <section className="pr-identity pr-identity-observer">
+        <div className="pr-id-main">
+          <div>
+            <h2 className="pr-id-handle pr-id-handle-addr">{addr}</h2>
+            <div className="pr-id-tags">
+              <span className="pr-tag danger">
+                <span className="pr-tag-dot" />Observer · Read-only
+              </span>
+              <span className="pr-tag">Not on registry</span>
             </div>
-            <button className="pr-mm-btn" onClick={onDisconnect} style={{ marginTop: 16, background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)' }}>
-              Disconnect and try another wallet
-            </button>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ textAlign: 'center', opacity: 0.4 }}>
-            <svg width="120" height="120" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.8" aria-hidden="true">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M4.93 4.93 l14.14 14.14" />
-            </svg>
-            <p className="mono" style={{ marginTop: 16, fontSize: 10, letterSpacing: '0.2em' }}>NOT REGISTERED</p>
+        <div className="pr-observer-actions">
+          <button className="pr-peer-btn" onClick={onDisconnect}>
+            Disconnect →
+          </button>
+        </div>
+      </section>
+
+      <section className="pr-observer-aside">
+        <div className="pr-observer-aside-head">
+          <div>
+            <div className="eyebrow" style={{ marginBottom: 8 }}>◇ How to become a peer</div>
+            <p className="sub" style={{ margin: 0 }}>
+              The review and challenge actions are restricted to peers on the{' '}
+              <code style={{ fontFamily: 'var(--mono)', fontSize: '0.85em' }}>EvidenceConsensus</code>{' '}
+              contract. The record itself is public — you can audit every signed attestation and on-chain event below.
+            </p>
           </div>
         </div>
+        <div className="pr-observer-steps">
+          {[
+            ['01', 'Get nominated', 'An existing peer files a nomination with your wallet address.'],
+            ['02', 'Receive endorsements', 'Active peers endorse the nomination. Quorum scales with the network, capped at 9.'],
+            ['03', 'Access granted', 'Once quorum is reached your address is added to the registry and you can attest.'],
+          ].map(([n, title, desc]) => (
+            <div key={n} className="pr-observer-step">
+              <span className="pr-connect-num">{n}</span>
+              <div><b>{title}</b><p>{desc}</p></div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="pr-tabs">
+        <button className={`pr-tab ${tab === 'log' ? 'is-active' : ''}`} onClick={() => setTab('log')}>
+          Attestation log
+        </button>
+        <button className={`pr-tab ${tab === 'chain' ? 'is-active' : ''}`} onClick={() => setTab('chain')}>
+          Chain log
+        </button>
       </div>
+
+      {tab === 'log' && (
+        <section>
+          <div className="pr-section-head">
+            <div>
+              <h2>Attestation log</h2>
+              <p className="sub">
+                Every signed action — approvals, rejections, challenges, defenses. The public, append-only
+                record of who said what and when.
+              </p>
+            </div>
+          </div>
+          <ActivityLog />
+        </section>
+      )}
+
+      {tab === 'chain' && (
+        <section>
+          <div className="pr-section-head">
+            <div>
+              <h2>Chain log</h2>
+              <p className="sub">
+                Indexed events from the consensus contract. The chain is the receipt; this is the receipt.
+              </p>
+            </div>
+          </div>
+          <OpsPanel />
+          <ChainEventLog me={me} role="unverified" />
+        </section>
+      )}
+
+      <footer className="pr-footnote">
+        <div>
+          <b>The record is public</b>
+          Even without attestation rights, anyone can audit every signed vote and every on-chain event. Consensus is verifiable, not asserted.
+        </div>
+        <div>
+          <b>Truth can evolve</b>
+          Canon evidence can be challenged. A supermajority deprecates it — the history of revision stays visible.
+        </div>
+        <div>
+          <b>The chain is the receipt</b>
+          Attestations are append-only. They cannot be edited or hidden. The blockchain figures itself out.
+        </div>
+      </footer>
     </main>
   );
 }
