@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { BrandMark } from '../components/Sigil';
 import {
+  PILLARS,
   canonizeThreshold, expelThreshold, deprecateThreshold,
   PENDING_WINDOW_DAYS, CHALLENGE_WINDOW_DAYS, daysRemaining,
   usePendingEvidence, useContestedEvidence, useCanonEvidence, useAttestationLog,
@@ -770,6 +771,7 @@ function EvidencePeekModal({ evidenceId, onClose }) {
   if (!evidenceId) return null;
 
   const tierLabel = data?.tier === 1 ? 'I' : data?.tier === 2 ? 'II' : data?.tier === 3 ? 'III' : '';
+  const pillar    = data ? PILLARS.find(p => p.id === data.pillar_id) : null;
 
   return (
     <div className="pr-ev-modal-backdrop" onClick={onClose}>
@@ -787,6 +789,7 @@ function EvidencePeekModal({ evidenceId, onClose }) {
           <>
             <div className="eyebrow" style={{ marginBottom: 10 }}>
               {data.type}{tierLabel ? ` · Tier ${tierLabel}` : ''}
+              {pillar ? ` · Pillar ${pillar.n} · ${pillar.title}` : ''}
             </div>
             <h3 className="pr-ev-modal-title">{data.title}</h3>
             <p className="pr-ev-modal-src">
@@ -949,7 +952,7 @@ function ChainEventLog({ me, role }) {
                     className="pr-log-evidence-link"
                     title={`Open evidence ${ev.evidence_id}`}
                   >
-                    <em>{SHORT(ev.evidence_id)}</em>
+                    <em>{ev.evidence_id}</em>
                   </button>
                 )}
               </div>
