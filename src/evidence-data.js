@@ -387,24 +387,59 @@ export function useHeartbeats() {
 }
 
 // Chain events from the indexer, for the public activity feed.
-export function useChainEvents(limit = 80) {
+//
+// Paginated: loads `pageSize` rows at a time (newest block first) and exposes
+// `loadMore` / `hasMore` so the UI can append the next page on click.
+const CHAIN_EVENTS_PAGE = 30;
+
+export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE) {
   const [events, setEvents]   = useState([]);
+  const [page, setPage]       = useState(0);
+  const [total, setTotal]     = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setPage(0);
+    setTotal(null);
+
+    supabase
+      .from('chain_events')
+      .select('*', { count: 'estimated' })
+      .order('block_number', { ascending: false })
+      .order('log_index',    { ascending: false })
+      .range(0, pageSize - 1)
+      .then(({ data, count }) => {
+        if (cancelled) return;
+        setEvents(data || []);
+        setTotal(count ?? null);
+        setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [pageSize]);
+
+  const loadMore = () => {
+    const next = page + 1;
+    setPage(next);
+    setLoading(true);
+
     supabase
       .from('chain_events')
       .select('*')
       .order('block_number', { ascending: false })
       .order('log_index',    { ascending: false })
-      .limit(limit)
+      .range(next * pageSize, next * pageSize + pageSize - 1)
       .then(({ data }) => {
-        setEvents(data || []);
+        setEvents(prev => [...prev, ...(data || [])]);
         setLoading(false);
       });
-  }, [limit]);
+  };
 
-  return { events, loading };
+  const hasMore = total === null ? events.length === (page + 1) * pageSize : events.length < total;
+
+  return { events, loading, hasMore, loadMore, total };
 }
 
 // ── Contested evidence hook  (canon items under active challenge) ────────────
@@ -509,23 +544,58 @@ export function useCanonEvidence(query = '') {
 }
 
 // ── Attestation log hook ─────────────────────────────────────────────────────
-export function useAttestationLog(limit = 50) {
-  const [log, setLog]     = useState([]);
+//
+// Paginated: loads `pageSize` rows at a time (newest first) and exposes
+// `loadMore` / `hasMore` so the UI can append the next page on click instead
+// of capping the visible log at the first chunk.
+const ATTESTATION_PAGE = 30;
+
+export function useAttestationLog(pageSize = ATTESTATION_PAGE) {
+  const [log, setLog]         = useState([]);
+  const [page, setPage]       = useState(0);
+  const [total, setTotal]     = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setPage(0);
+    setTotal(null);
+
+    supabase
+      .from('attestations')
+      .select('*, evidence(title)', { count: 'estimated' })
+      .order('created_at', { ascending: false })
+      .range(0, pageSize - 1)
+      .then(({ data, count }) => {
+        if (cancelled) return;
+        setLog(data || []);
+        setTotal(count ?? null);
+        setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [pageSize]);
+
+  const loadMore = () => {
+    const next = page + 1;
+    setPage(next);
+    setLoading(true);
+
     supabase
       .from('attestations')
       .select('*, evidence(title)')
       .order('created_at', { ascending: false })
-      .limit(limit)
+      .range(next * pageSize, next * pageSize + pageSize - 1)
       .then(({ data }) => {
-        setLog(data || []);
+        setLog(prev => [...prev, ...(data || [])]);
         setLoading(false);
       });
-  }, [limit]);
+  };
 
-  return { log, loading };
+  const hasMore = total === null ? log.length === (page + 1) * pageSize : log.length < total;
+
+  return { log, loading, hasMore, loadMore, total };
 }
 
 // ── Reviews-signed count hook ────────────────────────────────────────────────

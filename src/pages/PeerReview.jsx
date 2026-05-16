@@ -632,7 +632,7 @@ function OpsPanel() {
   }
 
   return (
-    <section style={{ marginBottom: 32 }}>
+    <section style={{ marginTop: -22, marginBottom: 8 }}>
       <div className="eyebrow" style={{ marginBottom: 12 }}>◇ System health</div>
 
       {/* Heartbeats */}
@@ -719,7 +719,7 @@ function OpsPanel() {
       )}
 
       {!alLoading && openAlerts.length === 0 && heartbeats.length > 0 && (
-        <p className="sub" style={{ margin: '0 0 12px', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em' }}>
+        <p className="sub" style={{ margin: 0, color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em' }}>
           ✓ No open tamper alerts. Content hashes match canonical for every canonized row.
         </p>
       )}
@@ -729,40 +729,61 @@ function OpsPanel() {
 
 // ── ChainEventLog — indexed events from the EvidenceConsensus contract ───────
 function ChainEventLog() {
-  const { events, loading } = useChainEvents(80);
-  if (loading) return <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING CHAIN LOG…</div>;
+  const { events, loading, hasMore, loadMore, total } = useChainEvents(30);
+  if (loading && events.length === 0) return <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING CHAIN LOG…</div>;
   if (events.length === 0) return (
     <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
       <p className="lead" style={{ margin: 0 }}>No indexed events yet. The chain-indexer hasn't run, or the contract has had no activity.</p>
     </div>
   );
   return (
-    <div className="pr-log">
-      {events.map(ev => {
-        const when = ev.occurred_at ? new Date(ev.occurred_at) : null;
-        const diffH = when ? Math.floor((Date.now() - when.getTime()) / 3_600_000) : null;
-        const timeStr = !when ? `block ${ev.block_number}` : diffH < 1 ? 'Just now' : diffH < 24 ? `${diffH}h ago` : `${Math.floor(diffH / 24)}d ago`;
-        return (
-          <div key={ev.id} className="pr-log-row">
-            <div className="pr-log-time">{timeStr}</div>
-            <div className="pr-log-event">
-              <span className="pr-log-kind approve">{ev.event_name}</span>{' '}
-              {ev.peer_addr && <b>{SHORT(ev.peer_addr)}</b>}{' '}
-              {ev.evidence_id && <em>{ev.evidence_id.slice(0, 8)}…</em>}
+    <>
+      <div className="pr-log">
+        {events.map(ev => {
+          const when = ev.occurred_at ? new Date(ev.occurred_at) : null;
+          const diffH = when ? Math.floor((Date.now() - when.getTime()) / 3_600_000) : null;
+          const timeStr = !when ? `block ${ev.block_number}` : diffH < 1 ? 'Just now' : diffH < 24 ? `${diffH}h ago` : `${Math.floor(diffH / 24)}d ago`;
+          const explorerBase = CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com';
+          return (
+            <div key={ev.id} className="pr-log-row">
+              <div className="pr-log-time">{timeStr}</div>
+              <div className="pr-log-event" style={{ wordBreak: 'break-all' }}>
+                <span className="pr-log-kind approve">{ev.event_name}</span>{' '}
+                {ev.peer_addr && <b>{ev.peer_addr}</b>}{' '}
+                {ev.evidence_id && <em>{ev.evidence_id}</em>}
+              </div>
+              <div className="pr-log-hash">
+                {ev.tx_hash && (
+                  <a
+                    href={`${explorerBase}/tx/${ev.tx_hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={ev.tx_hash}
+                  >
+                    {SHORT(ev.tx_hash)} ↗
+                  </a>
+                )}
+              </div>
             </div>
-            <div className="pr-log-hash"><span style={{ color: 'var(--ink-faint)' }}>{SHORT(ev.tx_hash)}</span></div>
-          </div>
-        );
-      })}
-    </div>
+          );
+        })}
+      </div>
+      {hasMore && (
+        <div style={{ marginTop: 12, textAlign: 'center' }}>
+          <button className="pr-peer-btn" onClick={loadMore} disabled={loading}>
+            {loading ? 'Loading…' : `Load 30 more${total ? ` · ${events.length} of ${total}` : ''}`}
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
 // ── ActivityLog — live from Supabase attestations ─────────────────────────────
 function ActivityLog() {
-  const { log, loading } = useAttestationLog(60);
+  const { log, loading, hasMore, loadMore, total } = useAttestationLog(30);
 
-  if (loading) return <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING LOG…</div>;
+  if (loading && log.length === 0) return <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING LOG…</div>;
   if (log.length === 0) return (
     <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
       <p className="lead" style={{ margin: 0 }}>No attestations yet. Be the first to sign.</p>
@@ -770,27 +791,50 @@ function ActivityLog() {
   );
 
   return (
-    <div className="pr-log">
-      {log.map((a, i) => {
-        const kindMap = { approve: 'approve', reject: 'reject', challenge: 'revoke', defend: 'endorse' };
-        const didMap  = { approve: 'approved', reject: 'rejected', challenge: 'challenged', defend: 'defended' };
-        const when = new Date(a.created_at);
-        const diffH = Math.floor((Date.now() - when.getTime()) / 3_600_000);
-        const timeStr = diffH < 1 ? 'Just now' : diffH < 24 ? `${diffH}h ago` : `${Math.floor(diffH / 24)}d ago`;
-        return (
-          <div key={i} className="pr-log-row">
-            <div className="pr-log-time">{timeStr}</div>
-            <div className="pr-log-event">
-              <span className={`pr-log-kind ${kindMap[a.verdict] || 'endorse'}`}>{a.verdict}</span>{' '}
-              <b>{a.peer_handle || SHORT(a.peer_addr)}</b>{' '}
-              <em>{didMap[a.verdict] || a.verdict}</em>{' '}
-              <span>{a.evidence?.title || a.evidence_id}</span>
+    <>
+      <div className="pr-log">
+        {log.map((a, i) => {
+          const kindMap = { approve: 'approve', reject: 'reject', challenge: 'revoke', defend: 'endorse' };
+          const didMap  = { approve: 'approved', reject: 'rejected', challenge: 'challenged', defend: 'defended' };
+          const when = new Date(a.created_at);
+          const diffH = Math.floor((Date.now() - when.getTime()) / 3_600_000);
+          const timeStr = diffH < 1 ? 'Just now' : diffH < 24 ? `${diffH}h ago` : `${Math.floor(diffH / 24)}d ago`;
+          const explorerBase = CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com';
+          return (
+            <div key={i} className="pr-log-row">
+              <div className="pr-log-time">{timeStr}</div>
+              <div className="pr-log-event">
+                <span className={`pr-log-kind ${kindMap[a.verdict] || 'endorse'}`}>{a.verdict}</span>{' '}
+                <b>{a.peer_handle || SHORT(a.peer_addr)}</b>{' '}
+                <em>{didMap[a.verdict] || a.verdict}</em>{' '}
+                <span>{a.evidence?.title || a.evidence_id}</span>
+              </div>
+              <div className="pr-log-hash">
+                {a.tx_hash ? (
+                  <a
+                    href={`${explorerBase}/tx/${a.tx_hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={a.tx_hash}
+                  >
+                    {SHORT(a.tx_hash)} ↗
+                  </a>
+                ) : (
+                  <span style={{ color: 'var(--ink-faint)' }}>{SHORT(a.id)}</span>
+                )}
+              </div>
             </div>
-            <div className="pr-log-hash"><span style={{ color: 'var(--ink-faint)' }}>{SHORT(a.id)}</span></div>
-          </div>
-        );
-      })}
-    </div>
+          );
+        })}
+      </div>
+      {hasMore && (
+        <div style={{ marginTop: 12, textAlign: 'center' }}>
+          <button className="pr-peer-btn" onClick={loadMore} disabled={loading}>
+            {loading ? 'Loading…' : `Load 30 more${total ? ` · ${log.length} of ${total}` : ''}`}
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
