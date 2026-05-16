@@ -522,8 +522,8 @@
 }
 .ev-card-tags { display: flex; gap: 4px; flex-wrap: wrap; max-width: 70%; }
 .ev-card-tags span { color: var(--ink-soft); }
-.ev-card-arrow { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); transition: color .2s ease; }
-.ev-card:hover .ev-card-arrow { color: var(--accent); }
+.ev-card-arrow { display: inline-flex; align-items: center; gap: 6px; color: oklch(0.72 0.19 145); transition: color .2s ease; }
+.ev-card:hover .ev-card-arrow { color: oklch(0.78 0.21 145); }
 .ev-empty {
   grid-column: 1 / -1;
   padding: 80px 32px;
