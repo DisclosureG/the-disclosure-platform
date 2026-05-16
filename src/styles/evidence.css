@@ -64,8 +64,8 @@
 }
 .ev-counter-head .ev-dot {
   width: 6px; height: 6px; border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--halo);
+  background: oklch(0.72 0.19 145);
+  box-shadow: 0 0 0 4px oklch(0.72 0.19 145 / 0.35);
   animation: ev-pulse 2.4s ease-in-out infinite;
 }
 @keyframes ev-pulse {
