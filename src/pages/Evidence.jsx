@@ -199,9 +199,19 @@ function EvCard({ e, onOpen }) {
   );
 }
 
+const PILLAR_PAGE_SIZE = 6;
 function PillarSection({ pillar, items, onOpen }) {
   const countedItems = items.filter(e => e.status !== 'deprecated').length;
-  const ghostCount = items.length === 0 ? 0 : (3 - (items.length % 3)) % 3;
+  const [visible, setVisible] = useState(PILLAR_PAGE_SIZE);
+
+  // Reset pagination when the underlying item set changes (filter/sort/search).
+  const itemsKey = items.map(e => e.id).join(',');
+  useEffect(() => { setVisible(PILLAR_PAGE_SIZE); }, [itemsKey]);
+
+  const shown      = items.slice(0, visible);
+  const ghostCount = shown.length === 0 ? 0 : (3 - (shown.length % 3)) % 3;
+  const remaining  = items.length - shown.length;
+
   return (
     <section id={pillar.id} className="ev-pillar-section">
       <div className="ev-pillar-head">
@@ -224,13 +234,25 @@ function PillarSection({ pillar, items, onOpen }) {
           <div className="ev-empty">No matches in this pillar — clear filters or submit the first one.</div>
         ) : (
           <>
-            {items.map(e => <EvCard key={e.id} e={e} onOpen={onOpen} />)}
+            {shown.map(e => <EvCard key={e.id} e={e} onOpen={onOpen} />)}
             {Array.from({ length: ghostCount }, (_, i) => (
               <div key={`ghost-${i}`} className="ev-card-ghost" aria-hidden="true" />
             ))}
           </>
         )}
       </div>
+      {remaining > 0 && (
+        <div className="ev-pillar-more">
+          <button
+            type="button"
+            className="ev-pillar-more-btn"
+            onClick={() => setVisible(v => v + PILLAR_PAGE_SIZE)}
+          >
+            Load {Math.min(PILLAR_PAGE_SIZE, remaining)} more
+            <span className="ev-pillar-more-count">· {remaining} hidden</span>
+          </button>
+        </div>
+      )}
     </section>
   );
 }
