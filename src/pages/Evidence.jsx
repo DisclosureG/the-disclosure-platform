@@ -170,6 +170,7 @@ function EvCard({ e, onOpen }) {
   const isDeprecated = e.status === 'deprecated';
   return (
     <button
+      id={`ev-${e.id}`}
       className={`ev-card${isDeprecated ? ' is-deprecated' : e.status === 'contested' ? ' is-contested' : ''}`}
       onClick={() => onOpen(e)}
     >
@@ -754,16 +755,34 @@ export default function Evidence() {
 
   // Scroll to hash once the archive has rendered. Wait for evidence to load
   // so the target pillar section exists in the DOM before scrolling.
+  // For `#ev-<uuid>` hashes we additionally open the evidence modal — if the
+  // row isn't in the current paginated list, fall back to a direct fetch so
+  // deep-links from the chain log still surface the source.
   const hashScrolledRef = useRef(false);
   useEffect(() => {
     if (hashScrolledRef.current) return;
     if (loading || !window.location.hash) return;
-    const id = window.location.hash.slice(1);
-    const el = document.getElementById(id);
-    if (!el) return;
+    const hashId = window.location.hash.slice(1);
     hashScrolledRef.current = true;
+
+    if (hashId.startsWith('ev-')) {
+      const evId   = hashId.slice(3);
+      const loaded = evidence.find(it => it.id === evId);
+      const el     = document.getElementById(hashId);
+      if (el) requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+      if (loaded) {
+        setOpen(loaded);
+      } else {
+        supabase.from('evidence').select('*').eq('id', evId).maybeSingle()
+          .then(({ data }) => { if (data) setOpen(data); });
+      }
+      return;
+    }
+
+    const el = document.getElementById(hashId);
+    if (!el) return;
     requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-  }, [loading]);
+  }, [loading, evidence]);
 
   return (
     <div className="ev-shell">

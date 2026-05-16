@@ -392,11 +392,22 @@ export function useHeartbeats() {
 // `loadMore` / `hasMore` so the UI can append the next page on click.
 const CHAIN_EVENTS_PAGE = 30;
 
-export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE) {
+export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNames = []) {
   const [events, setEvents]   = useState([]);
   const [page, setPage]       = useState(0);
   const [total, setTotal]     = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Strip PostgREST-special chars before composing the OR filter.
+  const q = query.trim().replace(/[,()*"]/g, '');
+  // Stable key so the effect doesn't refire on a fresh array of the same names.
+  const namesKey = eventNames.slice().sort().join(',');
+
+  const applyFilters = (req) => {
+    if (namesKey) req = req.in('event_name', namesKey.split(','));
+    if (q) req = req.or(`peer_addr.ilike.%${q}%,evidence_id::text.ilike.%${q}%`);
+    return req;
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -404,11 +415,13 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE) {
     setPage(0);
     setTotal(null);
 
-    supabase
-      .from('chain_events')
-      .select('*', { count: 'estimated' })
-      .order('block_number', { ascending: false })
-      .order('log_index',    { ascending: false })
+    applyFilters(
+      supabase
+        .from('chain_events')
+        .select('*', { count: 'estimated' })
+        .order('block_number', { ascending: false })
+        .order('log_index',    { ascending: false })
+    )
       .range(0, pageSize - 1)
       .then(({ data, count }) => {
         if (cancelled) return;
@@ -418,18 +431,20 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE) {
       });
 
     return () => { cancelled = true; };
-  }, [pageSize]);
+  }, [pageSize, q, namesKey]);
 
   const loadMore = () => {
     const next = page + 1;
     setPage(next);
     setLoading(true);
 
-    supabase
-      .from('chain_events')
-      .select('*')
-      .order('block_number', { ascending: false })
-      .order('log_index',    { ascending: false })
+    applyFilters(
+      supabase
+        .from('chain_events')
+        .select('*')
+        .order('block_number', { ascending: false })
+        .order('log_index',    { ascending: false })
+    )
       .range(next * pageSize, next * pageSize + pageSize - 1)
       .then(({ data }) => {
         setEvents(prev => [...prev, ...(data || [])]);
@@ -550,11 +565,23 @@ export function useCanonEvidence(query = '') {
 // of capping the visible log at the first chunk.
 const ATTESTATION_PAGE = 30;
 
-export function useAttestationLog(pageSize = ATTESTATION_PAGE) {
+export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdict = '') {
   const [log, setLog]         = useState([]);
   const [page, setPage]       = useState(0);
   const [total, setTotal]     = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Sanitize the query before composing a PostgREST `or` filter: strip
+  // characters that have special meaning in PostgREST syntax (`,()*"`)
+  // so they can't break out of the ilike pattern.
+  const q = query.trim().replace(/[,()*"]/g, '');
+  const v = ['approve', 'reject', 'challenge', 'defend'].includes(verdict) ? verdict : '';
+
+  const applyFilters = (req) => {
+    if (v) req = req.eq('verdict', v);
+    if (q) req = req.or(`peer_handle.ilike.%${q}%,peer_addr.ilike.%${q}%`);
+    return req;
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -562,10 +589,12 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE) {
     setPage(0);
     setTotal(null);
 
-    supabase
-      .from('attestations')
-      .select('*, evidence(title)', { count: 'estimated' })
-      .order('created_at', { ascending: false })
+    applyFilters(
+      supabase
+        .from('attestations')
+        .select('*, evidence(title)', { count: 'estimated' })
+        .order('created_at', { ascending: false })
+    )
       .range(0, pageSize - 1)
       .then(({ data, count }) => {
         if (cancelled) return;
@@ -575,17 +604,19 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE) {
       });
 
     return () => { cancelled = true; };
-  }, [pageSize]);
+  }, [pageSize, q, v]);
 
   const loadMore = () => {
     const next = page + 1;
     setPage(next);
     setLoading(true);
 
-    supabase
-      .from('attestations')
-      .select('*, evidence(title)')
-      .order('created_at', { ascending: false })
+    applyFilters(
+      supabase
+        .from('attestations')
+        .select('*, evidence(title)')
+        .order('created_at', { ascending: false })
+    )
       .range(next * pageSize, next * pageSize + pageSize - 1)
       .then(({ data }) => {
         setLog(prev => [...prev, ...(data || [])]);

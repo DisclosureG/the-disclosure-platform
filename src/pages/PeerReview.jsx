@@ -732,17 +732,165 @@ function OpsPanel() {
   );
 }
 
-// ── ChainEventLog — indexed events from the EvidenceConsensus contract ───────
-function ChainEventLog() {
-  const { events, loading, hasMore, loadMore, total } = useChainEvents(30);
-  if (loading && events.length === 0) return <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING CHAIN LOG…</div>;
-  if (events.length === 0) return (
-    <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
-      <p className="lead" style={{ margin: 0 }}>No indexed events yet. The chain-indexer hasn't run, or the contract has had no activity.</p>
+// ── EvidencePeekModal — light read-only popup used from the chain log ────────
+// Fetches a single evidence row by id and renders just enough to identify the
+// source. For full detail (challenge flow, etc.) the modal also links to the
+// Evidence archive deep-link `/evidence/#ev-<uuid>`.
+function EvidencePeekModal({ evidenceId, onClose }) {
+  const [data, setData]   = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!evidenceId) return;
+    setData(null);
+    setError(null);
+    let cancelled = false;
+    supabase.from('evidence').select('*').eq('id', evidenceId).maybeSingle()
+      .then(({ data: row, error: err }) => {
+        if (cancelled) return;
+        if (err)        setError(err.message);
+        else if (!row)  setError('Evidence not found — the id may belong to a row that has since been removed.');
+        else            setData(row);
+      });
+    return () => { cancelled = true; };
+  }, [evidenceId]);
+
+  useEffect(() => {
+    if (!evidenceId) return;
+    const onKey = (ev) => { if (ev.key === 'Escape') onClose(); };
+    const prev  = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [evidenceId, onClose]);
+
+  if (!evidenceId) return null;
+
+  const tierLabel = data?.tier === 1 ? 'I' : data?.tier === 2 ? 'II' : data?.tier === 3 ? 'III' : '';
+
+  return (
+    <div className="pr-ev-modal-backdrop" onClick={onClose}>
+      <div className="pr-ev-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <button className="pr-ev-modal-close" onClick={onClose} aria-label="Close">×</button>
+        {error ? (
+          <>
+            <div className="eyebrow" style={{ marginBottom: 10 }}>◇ Evidence</div>
+            <p className="lead" style={{ margin: 0 }}>{error}</p>
+            <p className="sub" style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>{evidenceId}</p>
+          </>
+        ) : !data ? (
+          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING EVIDENCE…</div>
+        ) : (
+          <>
+            <div className="eyebrow" style={{ marginBottom: 10 }}>
+              {data.type}{tierLabel ? ` · Tier ${tierLabel}` : ''}
+            </div>
+            <h3 className="pr-ev-modal-title">{data.title}</h3>
+            <p className="pr-ev-modal-src">
+              {data.source}{data.year ? ` · ${data.year}` : ''}
+            </p>
+            {data.excerpt && <p className="pr-ev-modal-body">{data.excerpt}</p>}
+            {data.quote && <p className="pr-ev-modal-quote">&ldquo;{data.quote}&rdquo;</p>}
+            <div className="pr-ev-modal-actions">
+              {data.link && data.link !== '#' && (
+                <a href={data.link} target="_blank" rel="noopener noreferrer" className="pr-peer-btn">
+                  Open source ↗
+                </a>
+              )}
+              <a href={`/evidence/#ev-${data.id}`} className="pr-peer-btn">
+                Open in archive →
+              </a>
+            </div>
+          </>
+        )}
+      </div>
     </div>
+  );
+}
+
+// ── ChainEventLog — indexed events from the EvidenceConsensus contract ───────
+const CHAIN_EVENT_FILTERS = [
+  { id: 'submission', label: 'Submissions', cls: 'nominate', names: ['EvidenceSubmitted'] },
+  { id: 'vote',       label: 'Votes',       cls: 'endorse',  names: ['ReviewVoteCast', 'ChallengeVoteCast'] },
+  { id: 'outcome',    label: 'Outcomes',    cls: 'approve',  names: ['EvidenceCanonized', 'EvidenceExpelled', 'EvidenceLapsed', 'EvidenceDeprecated', 'EvidenceReaffirmed'] },
+  { id: 'challenge',  label: 'Challenges',  cls: 'revoke',   names: ['ChallengeOpened'] },
+  { id: 'peer',       label: 'Peers',       cls: '',         names: ['PeerAdded', 'PeerRemoved', 'PeerNominated', 'PeerEndorsed', 'NomineeVerified'] },
+  { id: 'revocation', label: 'Revocations', cls: 'reject',   names: ['RevocationMotioned', 'RevocationVoteCast', 'PeerRevoked'] },
+];
+
+function ChainEventLog() {
+  const [query, setQuery]         = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [groupId, setGroupId]     = useState('');
+  const [peekId, setPeekId]       = useState(null);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(query.trim()), 250);
+    return () => clearTimeout(id);
+  }, [query]);
+
+  const activeGroup = CHAIN_EVENT_FILTERS.find(f => f.id === groupId);
+  const eventNames  = activeGroup ? activeGroup.names : [];
+
+  const { events, loading, hasMore, loadMore, total } = useChainEvents(30, debounced, eventNames);
+  const filtering = debounced.length > 0 || groupId.length > 0;
+
+  const controls = (
+    <div className="pr-log-controls">
+      <div className="pr-log-filters" role="group" aria-label="Filter by event type">
+        <button
+          type="button"
+          className={`pr-log-filter${groupId === '' ? ' is-active' : ''}`}
+          onClick={() => setGroupId('')}
+        >
+          All
+        </button>
+        {CHAIN_EVENT_FILTERS.map(f => (
+          <button
+            key={f.id}
+            type="button"
+            className={`pr-log-filter ${f.cls}${groupId === f.id ? ' is-active' : ''}`}
+            onClick={() => setGroupId(prev => prev === f.id ? '' : f.id)}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+      <div className="pr-log-search">
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by 0x address or evidence id…"
+          aria-label="Search chain log"
+          spellCheck={false}
+          autoCapitalize="off"
+        />
+      </div>
+    </div>
+  );
+
+  if (loading && events.length === 0) return (
+    <>
+      {controls}
+      <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING CHAIN LOG…</div>
+    </>
+  );
+  if (events.length === 0) return (
+    <>
+      {controls}
+      <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
+        <p className="lead" style={{ margin: 0 }}>
+          {filtering ? 'No chain events match the current filter.' : "No indexed events yet. The chain-indexer hasn't run, or the contract has had no activity."}
+        </p>
+      </div>
+    </>
   );
   return (
     <>
+      {controls}
       <div className="pr-log">
         {events.map(ev => {
           const when = ev.occurred_at ? new Date(ev.occurred_at) : null;
@@ -755,7 +903,16 @@ function ChainEventLog() {
               <div className="pr-log-event" style={{ wordBreak: 'break-all' }}>
                 <span className="pr-log-kind approve">{ev.event_name}</span>{' '}
                 {ev.peer_addr && <b>{ev.peer_addr}</b>}{' '}
-                {ev.evidence_id && <em>{ev.evidence_id}</em>}
+                {ev.evidence_id && (
+                  <button
+                    type="button"
+                    onClick={() => setPeekId(ev.evidence_id)}
+                    className="pr-log-evidence-link"
+                    title={`Open evidence ${ev.evidence_id}`}
+                  >
+                    <em>{ev.evidence_id}</em>
+                  </button>
+                )}
               </div>
               <div className="pr-log-hash">
                 {ev.tx_hash && (
@@ -780,23 +937,86 @@ function ChainEventLog() {
           </button>
         </div>
       )}
+      <EvidencePeekModal evidenceId={peekId} onClose={() => setPeekId(null)} />
     </>
   );
 }
 
 // ── ActivityLog — live from Supabase attestations ─────────────────────────────
-function ActivityLog() {
-  const { log, loading, hasMore, loadMore, total } = useAttestationLog(30);
+const VERDICT_FILTERS = [
+  { value: 'approve',   label: 'Approved',   cls: 'approve' },
+  { value: 'reject',    label: 'Rejected',   cls: 'reject' },
+  { value: 'challenge', label: 'Challenged', cls: 'revoke' },
+  { value: 'defend',    label: 'Defended',   cls: 'endorse' },
+];
 
-  if (loading && log.length === 0) return <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING LOG…</div>;
-  if (log.length === 0) return (
-    <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
-      <p className="lead" style={{ margin: 0 }}>No attestations yet. Be the first to sign.</p>
+function ActivityLog() {
+  const [query, setQuery]         = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [verdict, setVerdict]     = useState('');
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(query.trim()), 250);
+    return () => clearTimeout(id);
+  }, [query]);
+
+  const { log, loading, hasMore, loadMore, total } = useAttestationLog(30, debounced, verdict);
+  const filtering = debounced.length > 0 || verdict.length > 0;
+
+  const controls = (
+    <div className="pr-log-controls">
+      <div className="pr-log-filters" role="group" aria-label="Filter by verdict">
+        <button
+          type="button"
+          className={`pr-log-filter${verdict === '' ? ' is-active' : ''}`}
+          onClick={() => setVerdict('')}
+        >
+          All
+        </button>
+        {VERDICT_FILTERS.map(f => (
+          <button
+            key={f.value}
+            type="button"
+            className={`pr-log-filter ${f.cls}${verdict === f.value ? ' is-active' : ''}`}
+            onClick={() => setVerdict(prev => prev === f.value ? '' : f.value)}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+      <div className="pr-log-search">
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by handle or 0x address…"
+          aria-label="Search attestation log"
+          spellCheck={false}
+          autoCapitalize="off"
+        />
+      </div>
     </div>
+  );
+
+  if (loading && log.length === 0) return (
+    <>
+      {controls}
+      <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING LOG…</div>
+    </>
+  );
+  if (log.length === 0) return (
+    <>
+      {controls}
+      <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
+        <p className="lead" style={{ margin: 0 }}>
+          {filtering ? 'No attestations match the current filter.' : 'No attestations yet. Be the first to sign.'}
+        </p>
+      </div>
+    </>
   );
 
   return (
     <>
+      {controls}
       <div className="pr-log">
         {log.map((a, i) => {
           const kindMap = { approve: 'approve', reject: 'reject', challenge: 'revoke', defend: 'endorse' };
@@ -1110,12 +1330,22 @@ function PeerRegistryTab({ me, nomineeThreshold, revokeThreshold, onEndorse, onM
   const [nomLoading, setNomLoading] = useState(false);
   const [peers, setPeers]           = useState([]);
   const [peersLoading, setPeersLoading] = useState(false);
+  const [nomSearch, setNomSearch]   = useState('');
+  const [peerSearch, setPeerSearch] = useState('');
 
   const threshold = nomineeThreshold ?? 1;
   const revThresh = revokeThreshold ?? 1;
   const nomLocked = nominationsOpen === false;
 
   const isValid = nominee.trim().startsWith('0x') && nominee.trim().length === 42;
+
+  const matchesPeer = (q) => {
+    const s = q.trim().toLowerCase();
+    if (!s) return () => true;
+    return (p) => (p.handle || '').toLowerCase().includes(s) || (p.addr || '').toLowerCase().includes(s);
+  };
+  const filteredNominees = useMemo(() => nominees.filter(matchesPeer(nomSearch)),  [nominees, nomSearch]);
+  const filteredPeers    = useMemo(() => peers.filter(matchesPeer(peerSearch)),    [peers,    peerSearch]);
 
   // Single eth_call to fetch every nominee + endorsement count.  For each
   // pending nominee, follow up with one extra read to detect whether the
@@ -1265,13 +1495,30 @@ function PeerRegistryTab({ me, nomineeThreshold, revokeThreshold, onEndorse, onM
 
       {nomLoading ? (
         <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em', marginTop: 28 }}>LOADING NOMINEES…</div>
-      ) : nominees.length === 0 ? (
-        <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)', marginTop: 28 }}>
-          <p className="lead" style={{ margin: 0 }}>No nominees yet. Be the first to nominate a peer.</p>
-        </div>
       ) : (
-        <div className="pr-peer-list" style={{ marginTop: 28 }}>
-          {nominees.map((n, i) => {
+        <>
+          <div className="pr-log-search" style={{ marginTop: 28, marginBottom: 14 }}>
+            <input
+              type="search"
+              value={nomSearch}
+              onChange={(e) => setNomSearch(e.target.value)}
+              placeholder="Search nominees by handle or 0x address…"
+              aria-label="Search nominees"
+              spellCheck={false}
+              autoCapitalize="off"
+            />
+          </div>
+          {nominees.length === 0 ? (
+            <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
+              <p className="lead" style={{ margin: 0 }}>No nominees yet. Be the first to nominate a peer.</p>
+            </div>
+          ) : filteredNominees.length === 0 ? (
+            <div style={{ padding: '40px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
+              <p className="lead" style={{ margin: 0 }}>No nominees match the search.</p>
+            </div>
+          ) : (
+        <div className="pr-peer-list">
+          {filteredNominees.map((n, i) => {
             const pct = Math.min(100, ((n.endorsements ?? 0) / threshold) * 100);
             return (
               <div key={n.addr || i} className="pr-peer-card is-pending">
@@ -1301,6 +1548,8 @@ function PeerRegistryTab({ me, nomineeThreshold, revokeThreshold, onEndorse, onM
             );
           })}
         </div>
+          )}
+        </>
       )}
 
       {/* Verified peers + revocation surface */}
@@ -1312,13 +1561,30 @@ function PeerRegistryTab({ me, nomineeThreshold, revokeThreshold, onEndorse, onM
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>
             LOADING PEERS…
           </div>
-        ) : peers.length === 0 ? (
-          <div style={{ padding: '40px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
-            <p className="lead" style={{ margin: 0 }}>No peers loaded. Is the contract reachable?</p>
-          </div>
         ) : (
+          <>
+            <div className="pr-log-search" style={{ marginBottom: 14 }}>
+              <input
+                type="search"
+                value={peerSearch}
+                onChange={(e) => setPeerSearch(e.target.value)}
+                placeholder="Search peers by handle or 0x address…"
+                aria-label="Search verified peers"
+                spellCheck={false}
+                autoCapitalize="off"
+              />
+            </div>
+            {peers.length === 0 ? (
+              <div style={{ padding: '40px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
+                <p className="lead" style={{ margin: 0 }}>No peers loaded. Is the contract reachable?</p>
+              </div>
+            ) : filteredPeers.length === 0 ? (
+              <div style={{ padding: '40px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
+                <p className="lead" style={{ margin: 0 }}>No peers match the search.</p>
+              </div>
+            ) : (
           <div className="pr-peer-list">
-            {peers.map(p => {
+            {filteredPeers.map(p => {
               const pct = p.revActive ? Math.min(100, (p.revVotes / revThresh) * 100) : 0;
               return (
                 <div key={p.addr} className={`pr-peer-card ${p.revActive ? 'is-revoking' : ''}`}>
@@ -1366,6 +1632,8 @@ function PeerRegistryTab({ me, nomineeThreshold, revokeThreshold, onEndorse, onM
               );
             })}
           </div>
+            )}
+          </>
         )}
       </section>
     </section>
