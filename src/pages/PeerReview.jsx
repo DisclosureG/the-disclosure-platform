@@ -1251,7 +1251,14 @@ function NotAPeerScreen({ addr, onDisconnect }) {
             <div className="eyebrow" style={{ marginBottom: 8 }}>◇ How to become a peer</div>
             <p className="sub" style={{ margin: 0 }}>
               The review and challenge actions are restricted to peers on the{' '}
-              <code style={{ fontFamily: 'var(--mono)', fontSize: '0.85em' }}>EvidenceConsensus</code>{' '}
+              <a
+                className="pr-mm-meta-link"
+                href={`${CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com'}/address/${CONSENSUS_ADDR}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <code style={{ fontFamily: 'var(--mono)', fontSize: '0.85em' }}>EvidenceConsensus</code>
+              </a>{' '}
               contract. The record itself is public — you can audit every signed attestation and on-chain event below.
             </p>
           </div>
