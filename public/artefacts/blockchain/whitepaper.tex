@@ -80,7 +80,7 @@
   \textbf{Neo}\\[0.3em]
   \textit{Interstellar Psychology}
 }
-\date{May 14, 2026}
+\date{May 16, 2026}
 
 % =====================================================================
 \begin{document}
@@ -91,12 +91,12 @@
 \vspace{-1em}
 \begin{plainbox}
 \textbf{Abstract.}
-Interstellar Psychology proposes a meta-scientific field that bridges
+Interstellar Psychology is a meta-scientific field that bridges
 rigorous evidence with phenomena traditionally dismissed by mainstream
 science: psychedelics, telepathy, mindsight, remote viewing,
 out-of-body experience, non-human intelligence, multiverse signal,
 and the fractal nature of reality. This paper describes the system
-we built to keep that field \emph{honest}: a public evidence archive
+built to keep that field \emph{honest}: a public evidence archive
 backed by an on-chain peer-review consensus mechanism. Every claim
 is filed, weighted by source quality, voted on by verified peers,
 and recorded in an immutable log that anyone can audit. Canon is
@@ -104,8 +104,8 @@ never final --- any peer can challenge a previously accepted claim,
 and the network can deprecate or reaffirm it. The result is a
 self-correcting record that takes the spirit of the scientific
 method --- replication, scrutiny, openness, revisability --- and
-gives it teeth that no individual, journal, or institution can quietly
-override.
+gives it teeth that no individual, journal, or institution can
+quietly override.
 \end{plainbox}
 
 \tableofcontents
@@ -354,11 +354,13 @@ tiers:
 
 \begin{plainbox}
 \begin{tabular}{@{}p{1.4cm} p{4.8cm} p{8cm}@{}}
+\toprule
 \textbf{Tier} & \textbf{Type} & \textbf{Example} \\
 \midrule
 \textbf{I}    & Peer-reviewed or declassified & Published scientific paper; CIA STARGATE files. \\
 \textbf{II}   & Documented or institutional   & Books, podcasts, documentaries, official testimony. \\
 \textbf{III}  & Testimony or first-person     & Personal experience reports; eyewitness accounts. \\
+\bottomrule
 \end{tabular}
 \end{plainbox}
 
@@ -501,6 +503,7 @@ active peer must always remain.
 \textbf{Thresholds as a function of the active peer count} $n$:
 \vspace{0.3em}
 \begin{tabular}{@{}p{6.5cm} p{8cm}@{}}
+\toprule
 \textbf{Action}                                   & \textbf{Threshold (peers required)} \\
 \midrule
 Canonize a Tier I submission                      & $\lceil 0.45\, n \rceil$, minimum 1 \\
@@ -512,6 +515,7 @@ Deprecate a Tier II canon item                    & $\lceil 0.60\, n \rceil$, mi
 Deprecate a Tier III canon item                   & $\lceil 0.55\, n \rceil$, minimum 1 \\
 Verify a peer nominee                             & $\min(9,\,\lceil n/3 \rceil)$, minimum 1 \\
 Revoke a peer                                     & $\lceil n/2 \rceil$, minimum 1 \\
+\bottomrule
 \end{tabular}
 \end{plainbox}
 
@@ -566,18 +570,28 @@ peers see it in their Peer Review dashboard and decide whether to
 approve or reject. There are several properties worth noting:
 
 \begin{itemize}[leftmargin=1.5em]
-  \item \textbf{Signed.} Every vote is an EIP-712 signature from a
-        peer's wallet plus an on-chain transaction. The two together
-        prove who voted and what they voted for.
+  \item \textbf{Doubly signed.} Each vote produces two artefacts in
+        parallel. First, an EIP-712 \emph{attestation} --- a
+        structured, human-readable message signed inside the peer's
+        wallet that names the evidence, the phase, and the verdict.
+        This signature is stored off-chain in the public
+        attestation log. Second, the same peer submits an on-chain
+        \texttt{castReviewVote} transaction, which is what the
+        contract actually counts. The attestation gives a readable
+        record of \emph{why} a peer voted; the on-chain transaction
+        gives the unforgeable count.
   \item \textbf{Final.} A peer cannot change their vote once cast.
   \item \textbf{Counted live.} The cache updates within a minute of
         the on-chain event. Anyone viewing the page sees the same
         running tally.
   \item \textbf{Batched.} Peers can vote on many items in one
-        transaction, capped at 50 per call, to keep gas costs low.
+        transaction (\texttt{castReviewVoteBatch}), capped at 50
+        items per call, to keep gas costs low.
   \item \textbf{Time-limited.} Submissions have a 30-day review
         window. After that the item lapses if no threshold was
-        reached.
+        reached. Any peer can call \texttt{markLapsed} once the
+        window closes; the function reverts if the window is still
+        open.
 \end{itemize}
 
 % =====================================================================
@@ -624,7 +638,7 @@ are preserved as part of the historical record.
 
 The most subtle failure mode of any archive is that someone changes
 the content of an old entry without anyone noticing. We defend against
-this with three independent mechanisms.
+this with several independent mechanisms.
 
 \paragraph{Content fingerprints.} At submission time, the contract
 records a \texttt{keccak256} hash of the canonical content. This
@@ -640,10 +654,27 @@ in the cache and compares the result to the on-chain hash. Any
 mismatch raises a \emph{tamper alert} that is visible on the public
 Peer Review dashboard. Alerts are not silent.
 
-Beyond content integrity, every cron job in the system writes a
-\emph{heartbeat} after each run. A stale heartbeat surfaces on the
-dashboard so that operators (and the public) can see immediately if
-the indexer or audit job has stopped.
+\paragraph{Heartbeats.} Every scheduled job in the system writes a
+heartbeat after each run. A stale heartbeat surfaces on the
+dashboard so that operators \emph{and the public} can see
+immediately if the indexer or audit job has stopped. A silent system
+cannot quietly fall behind.
+
+\paragraph{Two public logs.} The Peer Review dashboard exposes two
+read-only surfaces that anyone, peer or not, can browse: the
+\emph{attestation log} (every EIP-712 signature ever produced,
+verifiable against the signer's wallet) and the \emph{chain log}
+(every on-chain event emitted by the contract, linked to the
+matching BscScan transaction). Together they make the deliberation
+behind every state change inspectable end-to-end.
+
+\paragraph{Two-step ownership transfer.} The contract owner cannot
+hand over administrative control in a single call. Transfer is split
+into \texttt{proposeOwner} and \texttt{acceptOwnership}: the proposed
+address must itself sign the acceptance, which rules out typos and
+contracts that cannot act. The transfer can also be aborted before
+acceptance with \texttt{cancelOwnershipTransfer}. This is a small
+detail; it removes a large failure mode.
 
 % =====================================================================
 \section{The Larger Goal}
@@ -685,6 +716,7 @@ can be examined.
 
 \begin{plainbox}
 \begin{tabular}{@{}p{4.2cm} p{4.9cm} p{5.1cm}@{}}
+\toprule
                            & \textbf{Traditional journal}                & \textbf{Interstellar Consensus} \\
 \midrule
 Reviewer identity          & Anonymous                                   & Public wallet address \\
@@ -696,6 +728,8 @@ Retraction process         & Editor-driven, opaque                       & Netwo
 Tamper-evidence            & None                                        & Content hash + daily audit \\
 History of disagreement    & Lost                                        & Preserved \\
 Cost to author             & Often paid                                  & Submission is free \\
+Cost to reader             & Often paywalled                             & Free to read forever \\
+\bottomrule
 \end{tabular}
 \end{plainbox}
 
@@ -774,8 +808,9 @@ That is enough. The rest is the work.
 \textit{Interstellar Psychology --- A Multiverse of Love}\\
 \small
 The system described in this paper is live. Source contracts,
-migrations, and front-end code are public. Anyone with a wallet
-can read every vote ever cast.
+migrations, and front-end code are public at\\
+\href{https://github.com/Moenaert/interstellar-psychology}{\texttt{github.com/Moenaert/interstellar-psychology}}.\\
+Anyone with a wallet can read every vote ever cast.
 \end{center}
 
 \end{document}
