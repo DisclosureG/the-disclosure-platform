@@ -666,12 +666,17 @@ function OpsPanel() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{
                     width: 8, height: 8, borderRadius: '50%',
-                    background: stale ? 'var(--danger)' : hb.last_status === 'ok' ? 'var(--accent)' : 'var(--warn)',
+                    background: stale ? 'var(--danger)' : hb.last_status === 'ok' ? 'var(--ok)' : 'var(--warn)',
                   }} />
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--ink)' }}>
                     {hb.function_name}
                   </span>
-                  <span style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--ink-faint)' }}>
+                  <span style={{
+                    marginLeft: 'auto',
+                    fontFamily: 'var(--mono)', fontSize: 13,
+                    fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase',
+                    color: stale ? 'var(--danger)' : hb.last_status === 'ok' ? 'var(--ok)' : hb.last_status ? 'var(--warn)' : 'var(--ink-faint)',
+                  }}>
                     {hb.last_status || '—'}
                   </span>
                 </div>
