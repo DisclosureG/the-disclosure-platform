@@ -993,6 +993,7 @@ function ActivityLog() {
   const [query, setQuery]         = useState('');
   const [debounced, setDebounced] = useState('');
   const [verdict, setVerdict]     = useState('');
+  const [peekId, setPeekId]       = useState(null);
   useEffect(() => {
     const id = setTimeout(() => setDebounced(query.trim()), 250);
     return () => clearTimeout(id);
@@ -1071,7 +1072,18 @@ function ActivityLog() {
                 <span className={`pr-log-kind ${kindMap[a.verdict] || 'endorse'}`}>{a.verdict}</span>{' '}
                 <b>{a.peer_handle || SHORT(a.peer_addr)}</b>{' '}
                 <em>{didMap[a.verdict] || a.verdict}</em>{' '}
-                <span>{a.evidence?.title || a.evidence_id}</span>
+                {a.evidence_id ? (
+                  <button
+                    type="button"
+                    onClick={() => setPeekId(a.evidence_id)}
+                    className="pr-log-evidence-link"
+                    title={`Open evidence ${a.evidence_id}`}
+                  >
+                    {a.evidence?.title || SHORT(a.evidence_id)}
+                  </button>
+                ) : (
+                  <span>{a.evidence?.title}</span>
+                )}
               </div>
               <div className="pr-log-hash">
                 {a.tx_hash ? (
@@ -1098,6 +1110,7 @@ function ActivityLog() {
           </button>
         </div>
       )}
+      <EvidencePeekModal evidenceId={peekId} onClose={() => setPeekId(null)} />
     </>
   );
 }
