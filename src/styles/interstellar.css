@@ -514,6 +514,14 @@ section {
   padding-left: 14px;
   margin: 12px 0;
 }
+.pillar-detail .quote a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: opacity .2s ease;
+}
+.pillar-detail .quote a:hover {
+  opacity: 0.75;
+}
 .pillar-detail .links {
   display: flex; flex-wrap: wrap; gap: 10px;
   margin-top: 14px;

@@ -35,6 +35,7 @@ const PILLARS = [
     tag: "Mind-to-mind",
     blurb: "Non-speakers with autism reveal abilities long dismissed as fantasy.",
     quote: "Love really hates when we choose money",
+    quoteLink: { word: "money", url: "https://www.youtube.com/watch?v=WCsb1_wBzuQ" },
     body: "The Telepathy Tapes and decades of parapsychological research point to a substrate of consciousness where minds are not isolated islands.",
     links: ["The Telepathy Tapes", "Julia Mossbridge"],
   },
@@ -147,7 +148,30 @@ function PillarCard({ p, isOpen, onToggle, idx }) {
       <p className="pillar-blurb">{p.blurb}</p>
 
       <div className="pillar-detail">
-        {p.quote && <p className="quote">&ldquo;{p.quote}&rdquo;</p>}
+        {p.quote && (
+          <p className="quote">
+            &ldquo;
+            {p.quoteLink
+              ? (() => {
+                  const parts = p.quote.split(p.quoteLink.word);
+                  return parts.map((part, i) => (
+                    <span key={i}>
+                      {part}
+                      {i < parts.length - 1 && (
+                        <a
+                          href={p.quoteLink.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                        >{p.quoteLink.word}</a>
+                      )}
+                    </span>
+                  ));
+                })()
+              : p.quote}
+            &rdquo;
+          </p>
+        )}
         <p>{p.body}</p>
         <div className="links">
           {p.links.map((l) => {
