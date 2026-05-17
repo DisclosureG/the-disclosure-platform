@@ -94,6 +94,25 @@ const ORDER_MAP = {
   'title':     { col: 'title',     asc: true  },
 };
 
+// Substring search against the generated `search_text` column, which
+// concatenates title, source, excerpt, body, quote, and tags (see migration
+// 20260517000000_evidence_search_text.sql). Each whitespace-separated term
+// must appear somewhere in that surface — so "tao physics" only matches rows
+// containing both. We avoid textSearch('fts', …) because it requires exact
+// stemmed-token matches and silently drops partial words like "psych".
+function applyTextSearch(q, raw) {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return q;
+  const terms = trimmed
+    .split(/\s+/)
+    .map(t => t.replace(/[,()*"%\\]/g, ''))
+    .filter(Boolean);
+  for (const term of terms) {
+    q = q.ilike('search_text', `%${term}%`);
+  }
+  return q;
+}
+
 // ── Archive hook  (canon, reaffirmed, contested, deprecated) ─────────────────
 //
 // Default pillar view (no search, no type/tier filter) fetches all items so
@@ -121,7 +140,7 @@ export function useEvidence(searchQuery = '', type = 'All', tier = 'all', sortBy
       .select('*', isPaged ? { count: 'exact' } : undefined)
       .in('status', VISIBLE_STATUSES);
 
-    if (trimmed)      q = q.textSearch('fts', trimmed);
+    q = applyTextSearch(q, trimmed);
     if (type !== 'All') q = q.eq('type', type);
     if (tier !== 'all') q = q.eq('tier', parseInt(tier, 10));
 
@@ -150,7 +169,7 @@ export function useEvidence(searchQuery = '', type = 'All', tier = 'all', sortBy
       .select('*')
       .in('status', VISIBLE_STATUSES);
 
-    if (trimmed)        q = q.textSearch('fts', trimmed);
+    q = applyTextSearch(q, trimmed);
     if (type !== 'All') q = q.eq('type', type);
     if (tier !== 'all') q = q.eq('tier', parseInt(tier, 10));
 
