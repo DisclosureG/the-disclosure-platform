@@ -825,7 +825,11 @@ function EvidencePeekModal({ evidenceId, onClose }) {
             </div>
             <h3 className="pr-ev-modal-title">{data.title}</h3>
             <p className="pr-ev-modal-src">
-              {data.source}{data.year ? ` · ${data.year}` : ''}
+              <span className="pr-ev-modal-label">Author</span> {data.source}{data.year ? ` · ${data.year}` : ''}
+            </p>
+            <p className="pr-ev-modal-id" title={`Evidence id · ${data.id}`}>
+              <span className="pr-ev-modal-label">ID</span>
+              <span className="pr-ev-modal-id-value">{data.id}</span>
             </p>
             {data.excerpt && <p className="pr-ev-modal-body">{data.excerpt}</p>}
             {data.quote && <p className="pr-ev-modal-quote">&ldquo;{data.quote}&rdquo;</p>}
@@ -1089,7 +1093,7 @@ function ActivityLog() {
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by handle or 0x address…"
+          placeholder="Search by handle, 0x address, or evidence…"
           aria-label="Search attestation log"
           spellCheck={false}
           autoCapitalize="off"
@@ -1141,10 +1145,10 @@ function ActivityLog() {
                     className="pr-log-evidence-link"
                     title={`Open evidence ${a.evidence_id}`}
                   >
-                    {a.evidence?.title || SHORT(a.evidence_id)}
+                    {a.evidence_title || SHORT(a.evidence_id)}
                   </button>
                 ) : (
-                  <span>{a.evidence?.title}</span>
+                  <span>{a.evidence_title}</span>
                 )}
               </div>
               <div className="pr-log-hash">

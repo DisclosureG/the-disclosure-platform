@@ -684,7 +684,10 @@
 }
 .pr-ev-modal-close:hover { color: var(--ink); background: var(--bg-elev); }
 .pr-ev-modal-title { font-family: var(--serif); font-size: 26px; line-height: 1.2; margin: 0 0 8px; color: var(--ink); font-weight: 400; letter-spacing: -0.01em; }
-.pr-ev-modal-src   { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--ink-faint); margin: 0 0 18px; }
+.pr-ev-modal-src   { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--ink-faint); margin: 0 0 6px; }
+.pr-ev-modal-id       { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; color: var(--ink-faint); opacity: 0.7; margin: 0 0 18px; word-break: break-all; cursor: text; }
+.pr-ev-modal-id-value { user-select: all; }
+.pr-ev-modal-label    { display: inline-block; min-width: 78px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-faint); opacity: 0.6; margin-right: 6px; user-select: none; }
 .pr-ev-modal-body  { font-family: var(--serif); font-size: 15px; line-height: 1.55; color: var(--ink-soft); margin: 0 0 14px; }
 .pr-ev-modal-quote { font-family: var(--serif); font-size: 15px; line-height: 1.55; font-style: italic; color: var(--ink); border-left: 2px solid var(--accent); padding-left: 14px; margin: 0 0 18px; }
 .pr-ev-modal-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }

@@ -623,14 +623,33 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
   const [loading, setLoading] = useState(true);
 
   // Sanitize the query before composing a PostgREST `or` filter: strip
-  // characters that have special meaning in PostgREST syntax (`,()*"`)
-  // so they can't break out of the ilike pattern.
-  const q = query.trim().replace(/[,()*"]/g, '');
+  // characters that have special meaning in PostgREST/ilike syntax so they
+  // can't break out of the pattern. Split on whitespace and require each
+  // term to match somewhere — same per-term AND semantics as the Evidence
+  // page (see applyTextSearch).
+  const terms = query
+    .trim()
+    .replace(/[,()*"%\\]/g, '')
+    .split(/\s+/)
+    .filter(Boolean);
+  const termsKey = terms.join(' ');
   const v = ['approve', 'reject', 'challenge', 'defend'].includes(verdict) ? verdict : '';
+
+  // We query the `attestation_log_view` (migration 20260517010000) which
+  // flattens evidence.search_text + evidence.title onto each attestation row.
+  // PostgREST `or=(...)` doesn't accept dotted paths to embedded resources,
+  // so the view lets a single per-term OR filter cover handle, address, and
+  // the full evidence searchable surface (title + source + excerpt + body +
+  // quote + tags).
+  const FROM_VIEW = 'attestation_log_view';
 
   const applyFilters = (req) => {
     if (v) req = req.eq('verdict', v);
-    if (q) req = req.or(`peer_handle.ilike.%${q}%,peer_addr.ilike.%${q}%`);
+    for (const term of terms) {
+      req = req.or(
+        `peer_handle.ilike.%${term}%,peer_addr.ilike.%${term}%,evidence_search_text.ilike.%${term}%`
+      );
+    }
     return req;
   };
 
@@ -640,8 +659,8 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
     setTotal(null);
     return applyFilters(
       supabase
-        .from('attestations')
-        .select('*, evidence(title)', { count: 'estimated' })
+        .from(FROM_VIEW)
+        .select('*', { count: 'estimated' })
         .order('created_at', { ascending: false })
     )
       .range(0, pageSize - 1)
@@ -650,9 +669,9 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
         setTotal(count ?? null);
         setLoading(false);
       });
-  // applyFilters closes over q/v; pageSize is a dep too.
+  // applyFilters closes over terms/v; pageSize is a dep too.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageSize, q, v]);
+  }, [pageSize, termsKey, v]);
 
   useEffect(() => {
     let cancelled = false;
@@ -662,8 +681,8 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
 
     applyFilters(
       supabase
-        .from('attestations')
-        .select('*, evidence(title)', { count: 'estimated' })
+        .from(FROM_VIEW)
+        .select('*', { count: 'estimated' })
         .order('created_at', { ascending: false })
     )
       .range(0, pageSize - 1)
@@ -675,7 +694,8 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
       });
 
     return () => { cancelled = true; };
-  }, [pageSize, q, v]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageSize, termsKey, v]);
 
   const loadMore = () => {
     const next = page + 1;
@@ -684,8 +704,8 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
 
     applyFilters(
       supabase
-        .from('attestations')
-        .select('*, evidence(title)')
+        .from(FROM_VIEW)
+        .select('*')
         .order('created_at', { ascending: false })
     )
       .range(next * pageSize, next * pageSize + pageSize - 1)
