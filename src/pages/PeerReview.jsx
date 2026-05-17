@@ -1941,10 +1941,10 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
         try {
           await castReviewVote(item, verdict, me.addr, me.handle, null, sig, txHash, peerCount);
         } catch (syncErr) {
-          setChainErr(txHash
-            ? `Vote confirmed on-chain (${txHash.slice(0, 10)}…) but cache sync failed. Reload to see the latest state.`
-            : `Failed to record vote — ${syncErr?.message || 'unknown error'}`);
-          return;
+          if (!txHash) {
+            setChainErr(`Failed to record vote — ${syncErr?.message || 'unknown error'}`);
+            return;
+          }
         }
         setMyVotes(v => ({ ...v, [item.id]: verdict }));
       },
@@ -1985,10 +1985,10 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
         try {
           await castChallengeVote(item, supportChallenge, me.addr, me.handle, null, sig, txHash, peerCount);
         } catch (syncErr) {
-          setChainErr(txHash
-            ? `Vote confirmed on-chain (${txHash.slice(0, 10)}…) but cache sync failed. Reload to see the latest state.`
-            : `Failed to record vote — ${syncErr?.message || 'unknown error'}`);
-          return;
+          if (!txHash) {
+            setChainErr(`Failed to record vote — ${syncErr?.message || 'unknown error'}`);
+            return;
+          }
         }
         setMyChallengeVotes(v => ({ ...v, [item.id]: supportChallenge ? 'challenge' : 'defend' }));
       },
@@ -2146,8 +2146,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
     try {
       await markEvidenceOnchain(item.id, me.addr, txHash);
     } catch (syncErr) {
-      setChainErr(`Registered on-chain but cache flag not flipped — reload to refresh. (${syncErr?.message || ''})`);
-      return;
+      // On-chain succeeded; cache will catch up via indexer.
     }
     refetchUnchained();
   }, [me, refetchUnchained]);
@@ -2185,9 +2184,9 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
         try {
           await openChallenge(item, me.addr, me.handle, reason, sig, txHash, peerCount);
         } catch (syncErr) {
-          setChainErr(txHash
-            ? `Challenge confirmed on-chain (${txHash.slice(0, 10)}…) but cache sync failed. Reload to see the latest state.`
-            : `Failed to record challenge — ${syncErr?.message || 'unknown error'}`);
+          if (!txHash) {
+            setChainErr(`Failed to record challenge — ${syncErr?.message || 'unknown error'}`);
+          }
         }
         // Refresh cooldown regardless of sync outcome — the on-chain cooldown
         // started the moment the tx confirmed.

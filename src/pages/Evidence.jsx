@@ -361,7 +361,7 @@ function DetailModal({ e, onClose, walletPeer }) {
     try {
       await openChallenge(e, walletPeer.addr, walletPeer.handle || '', challengeReason.trim(), sig, txHash);
     } catch (syncErr) {
-      setChainWarning(`On-chain succeeded but cache sync failed — reload to refresh. (${syncErr?.message || ''})`);
+      // On-chain succeeded; cache will catch up via indexer.
     }
     setChallenging(false);
     setChallenged(true);
