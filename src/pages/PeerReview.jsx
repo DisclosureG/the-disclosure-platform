@@ -37,6 +37,17 @@ import '../styles/peer-review.css';
 const SHORT = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
 const NAME_OF = (p) => p.handle || SHORT(p.addr);
 
+// Mobile browsers don't have a MetaMask extension — instead we hand off to the
+// MetaMask mobile app's in-app dApp browser via its universal deep link, which
+// re-opens this URL with `window.ethereum` injected.
+function isMobile() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+function metamaskDeepLink() {
+  const host = window.location.host + window.location.pathname;
+  return `https://metamask.app.link/dapp/${host}`;
+}
+
 
 // ── Jazzicon ─────────────────────────────────────────────────────────────────
 function hashStr(s) {
@@ -1369,6 +1380,9 @@ function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attesta
   const verifiedPeers = []; // Jazzicon orbit — reserved for future on-chain peer fetch
   const electronSize  = Math.max(14, 44 - verifiedPeers.length * 2);
   const ORBIT_DUR     = 50;
+  // On mobile with no injected provider, route the CTA through MetaMask's
+  // universal deep link so the app re-opens this page in its in-app browser.
+  const mobileNoProvider = typeof window !== 'undefined' && isMobile() && !window.ethereum;
 
   return (
     <main className="pr-connect">
@@ -1399,10 +1413,17 @@ function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attesta
                 <div><b>{title}</b><p>{desc}</p></div>
               </div>
             ))}
-            <button className="pr-mm-btn" onClick={onConnect} disabled={connecting}>
-              <MetaMaskFox />
-              {connecting ? 'Awaiting signature…' : 'Connect with MetaMask'}
-            </button>
+            {mobileNoProvider ? (
+              <a className="pr-mm-btn" href={metamaskDeepLink()} style={{ textDecoration: 'none' }}>
+                <MetaMaskFox />
+                Open in MetaMask app
+              </a>
+            ) : (
+              <button className="pr-mm-btn" onClick={onConnect} disabled={connecting}>
+                <MetaMaskFox />
+                {connecting ? 'Awaiting signature…' : 'Connect with MetaMask'}
+              </button>
+            )}
             <div className="pr-mm-meta">
               <div className="pr-mm-meta-row">
                 <span className="pr-mm-meta-k">Network</span>
@@ -2503,6 +2524,10 @@ export default function PeerReview() {
 
   const handleConnect = async () => {
     if (!window.ethereum) {
+      if (isMobile()) {
+        window.location.href = metamaskDeepLink();
+        return;
+      }
       setConnectErr('MetaMask not found. Install it at metamask.io and reload.');
       return;
     }
