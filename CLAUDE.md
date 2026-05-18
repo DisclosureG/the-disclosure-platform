@@ -43,7 +43,7 @@ Two parallel pipelines, one shared registry:
 | Attestations | `attestations` | `behaviour_attestations` |
 | Chain events | `chain_events` / `chain_event_cursor` | `behaviour_chain_events` / `behaviour_chain_event_cursor` |
 | Tamper alerts | `tamper_alerts` | `behaviour_tamper_alerts` |
-| Indexer edge fn | `chain-indexer` | `chain-indexer-behaviour` |
+| Indexer edge fn | `chain-indexer-evidence` | `chain-indexer-alignment` |
 | Verify edge fn | `verify-attestation` | `verify-attestation-behaviour` |
 | Audit edge fn | `audit-content-hash` | `audit-behaviour-hash` |
 | Atomic vote RPCs | `apply_review_counts` / `apply_challenge_counts` | `apply_behaviour_review_counts` / `apply_behaviour_challenge_counts` |

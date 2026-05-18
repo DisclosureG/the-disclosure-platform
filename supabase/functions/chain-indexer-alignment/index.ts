@@ -135,7 +135,7 @@ async function writeHeartbeat(
 ) {
   const now = new Date().toISOString();
   const row: Record<string, unknown> = {
-    function_name: "chain-indexer-behaviour",
+    function_name: "chain-indexer-alignment",
     last_attempt:  now,
     last_status:   status,
     last_payload:  payload,

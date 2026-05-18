@@ -35,11 +35,14 @@ import {
   openBehaviourChallengeOnChain, castBehaviourChallengeVoteOnChain,
   finalizeBehaviourChallengeOnChain, computeTripleHash,
   computeBehaviourModelHash, computeBehaviourPayloadHash,
+  getBehaviourChallengeCooldownRemaining,
+  hasVotedOnBehaviour,
 } from '../lib/wallet';
 import {
   BEHAVIOUR_DOMAINS,
   STATUS_LABEL as BH_STATUS_LABEL,
   useMyBehaviourReviewCount, useBehaviourNeedsReviewCount,
+  useCanonBehaviour,
 } from '../behaviour-data';
 import metamaskFox from '../assets/metamask-fox.svg';
 import '../styles/interstellar.css';
@@ -646,14 +649,14 @@ function PeerCard({ peer, meAddr, myEndorse, myRevokeVote, onEndorse, onRevoke, 
 }
 
 // ── OpsPanel — operator-visible health surface ───────────────────────────────
-// Renders edge-function heartbeats (chain-indexer, audit-content-hash) and
-// any open tamper alerts. Both tables already have public-read RLS, so this
-// panel works for any visitor; the data is operationally meaningful but
+// Renders edge-function heartbeats (chain-indexer-evidence, audit-content-hash)
+// and any open tamper alerts. Both tables already have public-read RLS, so
+// this panel works for any visitor; the data is operationally meaningful but
 // non-sensitive. Stale heartbeats and unresolved tamper alerts are visually
 // emphasised so an operator can spot a problem at a glance.
 // Scope controls which heartbeats and tamper-alerts source the panel queries.
-//   'evidence'  → chain-indexer + audit-content-hash + tamper_alerts
-//   'alignment' → chain-indexer-behaviour + audit-behaviour-hash + behaviour_tamper_alerts
+//   'evidence'  → chain-indexer-evidence + audit-content-hash + tamper_alerts
+//   'alignment' → chain-indexer-alignment + audit-behaviour-hash + behaviour_tamper_alerts
 function OpsPanel({ scope = 'evidence' } = {}) {
   const { rows: allHeartbeats, loading: hbLoading } = useHeartbeats();
   const { alerts, loading: alLoading }              = useTamperAlerts(10, scope);
@@ -661,8 +664,8 @@ function OpsPanel({ scope = 'evidence' } = {}) {
   // Function names this scope owns. Hides cross-archive entries so the
   // evidence panel doesn't surface alignment-indexer health and vice versa.
   const SCOPE_FUNCTIONS = scope === 'alignment'
-    ? ['chain-indexer-behaviour', 'audit-behaviour-hash']
-    : ['chain-indexer',           'audit-content-hash'];
+    ? ['chain-indexer-alignment', 'audit-behaviour-hash']
+    : ['chain-indexer-evidence',  'audit-content-hash'];
   const heartbeats = allHeartbeats.filter(hb => SCOPE_FUNCTIONS.includes(hb.function_name));
 
   const openAlerts = alerts.filter(a => !a.resolved_at);
@@ -680,8 +683,8 @@ function OpsPanel({ scope = 'evidence' } = {}) {
   // Threshold for "stale": 5 min for the indexer (cron runs every minute),
   // 36 h for the audit (daily). Matches the alert thresholds in DEPLOYMENT.md.
   const STALE_THRESHOLD_MS = {
-    'chain-indexer':            5  * 60_000,
-    'chain-indexer-behaviour':  5  * 60_000,
+    'chain-indexer-evidence':   5  * 60_000,
+    'chain-indexer-alignment':  5  * 60_000,
     'audit-content-hash':      36 * 60 * 60_000,
     'audit-behaviour-hash':    36 * 60 * 60_000,
   };
@@ -1004,7 +1007,7 @@ function ChainEventLog({ me, role }) {
       {controls}
       <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
         <p className="lead" style={{ margin: 0 }}>
-          {filtering ? 'No chain events match the current filter.' : "No indexed events yet. The chain-indexer hasn't run, or the contract has had no activity."}
+          {filtering ? 'No chain events match the current filter.' : "No indexed events yet. The chain-indexer-evidence hasn't run, or the contract has had no activity."}
         </p>
       </div>
     </>
@@ -1022,20 +1025,20 @@ function ChainEventLog({ me, role }) {
             <div key={ev.id} className="pr-log-row">
               <div className="pr-log-time">{timeStr}</div>
               <div className="pr-log-event" style={{ wordBreak: 'break-all' }}>
-                <span className="pr-log-kind approve">{ev.event_name}</span>{' '}
+                <span className="pr-log-kind approve">{ev.event_name}</span>
                 {ev.peer_addr && (() => {
                   const h = handleByAddr.get(ev.peer_addr.toLowerCase());
-                  return <b>{h ? `${h} (${SHORT(ev.peer_addr)})` : ev.peer_addr}</b>;
-                })()}{' '}
+                  return <> <b>{h ? `${h} (${SHORT(ev.peer_addr)})` : ev.peer_addr}</b></>;
+                })()}
                 {ev.evidence_id && (
-                  <button
+                  <> · <button
                     type="button"
                     onClick={() => setPeekId(ev.evidence_id)}
                     className="pr-log-evidence-link"
-                    title={`Open evidence ${ev.evidence_id}`}
+                    title={`Open evidence · ${ev.evidence_id}`}
                   >
-                    <em>{ev.evidence_id}</em>
-                  </button>
+                    {ev.evidence?.title || SHORT(ev.evidence_id)}
+                  </button></>
                 )}
               </div>
               <div className="pr-log-hash">
@@ -1179,6 +1182,11 @@ function ActivityLog() {
                 ) : (
                   <span>{a.evidence_title}</span>
                 )}
+                {a.note && a.note.trim() && (
+                  <div style={{ fontStyle: 'italic', fontSize: 12, opacity: 0.8, marginTop: 6, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                    "{a.note}"
+                  </div>
+                )}
               </div>
               <div className="pr-log-hash">
                 {a.tx_hash ? (
@@ -1216,9 +1224,18 @@ function ActivityLog() {
 // Supabase attestation, so no off-chain signature is collected.
 const SIG_REQUIRED_ACTIONS = new Set([
   'attest_evidence', 'challenge_evidence', 'defend_evidence', 'open_challenge',
+  'attest_behaviour',
 ]);
 
 function SignModal({ open, payload, onCancel, onSign, danger, signerAddr }) {
+  // Editable deliberation note. Initialised from the payload (callers may
+  // pre-fill, e.g. open_challenge passes the grounds), then the peer can edit
+  // before signing. The edited value flows into the EIP-712 message AND into
+  // the cache row, AND for behaviour-side openChallenge it becomes the grounds
+  // emitted on-chain — single source of truth.
+  const [note, setNote] = useState('');
+  useEffect(() => { setNote(payload?.note ?? ''); }, [payload]);
+
   useEffect(() => {
     const k = (e) => { if (e.key === 'Escape') onCancel(); };
     if (open) window.addEventListener('keydown', k);
@@ -1227,14 +1244,17 @@ function SignModal({ open, payload, onCancel, onSign, danger, signerAddr }) {
 
   if (!open) return null;
   const requiresSig = SIG_REQUIRED_ACTIONS.has(payload?.action);
+  const isOpenChallenge = payload?.action === 'open_challenge'
+    || (payload?.action === 'attest_behaviour' && payload?.phase === 'challenge' && payload?.verdict === 'challenge');
+  const subjectKey = payload?.action === 'attest_behaviour' ? 'behaviourId' : 'evidenceId';
   // Show the actual EIP-712 payload that MetaMask will sign — not a fake.
   const previewPayload = requiresSig
     ? {
-        evidenceId: payload?.subject || '',
-        peerAddr:   signerAddr || '',
-        phase:      payload?.phase   || (payload?.action === 'open_challenge' ? 'challenge' : 'review'),
-        verdict:    payload?.verdict || '',
-        note:       payload?.note    || '',
+        [subjectKey]: payload?.subject || '',
+        peerAddr:     signerAddr || '',
+        phase:        payload?.phase   || (isOpenChallenge ? 'challenge' : 'review'),
+        verdict:      payload?.verdict || '',
+        note,
       }
     : { action: payload?.action || '', subject: payload?.subject || '', signer: signerAddr || '' };
 
@@ -1249,10 +1269,37 @@ function SignModal({ open, payload, onCancel, onSign, danger, signerAddr }) {
         </div>
         <h3>{payload?.title || 'Confirm attestation'}</h3>
         <p>{payload?.sub || 'This action is recorded on-chain and cannot be retracted.'}</p>
+        {requiresSig && (
+          <div style={{ margin: '10px 0 14px' }}>
+            <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.75, marginBottom: 6, fontFamily: 'var(--mono)' }}>
+              {isOpenChallenge ? 'Grounds (also recorded on-chain)' : 'Deliberation note (optional but recommended)'}
+            </label>
+            <textarea
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              rows={isOpenChallenge ? 5 : 4}
+              placeholder={isOpenChallenge
+                ? 'State the grounds for the challenge — what is wrong about the verdict, the domain choice, or the binding to the model?'
+                : 'Why are you voting this way? The note is signed into your EIP-712 attestation and stored alongside the on-chain count. Empty notes are accepted but produce a thinner deliberation log.'}
+              style={{
+                width: '100%', padding: '10px 12px',
+                border: '1px solid var(--line-soft)', borderRadius: 'var(--radius, 6px)',
+                background: 'var(--bg-elev)', color: 'var(--ink)',
+                fontFamily: 'var(--serif)', fontSize: 13, lineHeight: 1.5,
+                resize: 'vertical',
+              }}
+            />
+          </div>
+        )}
         <div className="pr-sign-payload">{JSON.stringify(previewPayload, null, 2)}</div>
         <div className="pr-modal-actions">
           <button className="pr-modal-btn" onClick={onCancel}>Cancel</button>
-          <button className={`pr-modal-btn ${danger ? 'danger' : 'primary'}`} onClick={onSign}>
+          <button
+            className={`pr-modal-btn ${danger ? 'danger' : 'primary'}`}
+            onClick={() => onSign(note)}
+            disabled={isOpenChallenge && note.trim().length === 0}
+            title={isOpenChallenge && note.trim().length === 0 ? 'Grounds required for a challenge' : undefined}
+          >
             {requiresSig ? 'Sign →' : 'Confirm →'}
           </button>
         </div>
@@ -2038,6 +2085,7 @@ function BehaviourAttestationLog() {
   const [query, setQuery]         = useState('');
   const [debounced, setDebounced] = useState('');
   const [verdict, setVerdict]     = useState('');
+  const [peekId, setPeekId]       = useState(null);
   useEffect(() => {
     const id = setTimeout(() => setDebounced(query.trim().toLowerCase()), 250);
     return () => clearTimeout(id);
@@ -2137,7 +2185,23 @@ function BehaviourAttestationLog() {
                 <span className={`pr-log-kind ${kindMap[r.verdict] || 'endorse'}`}>{r.verdict}</span>{' '}
                 <b>{r.peer_handle || SHORT(r.peer_addr)}</b>{' '}
                 <em>{didMap[r.verdict] || r.verdict}</em>{' '}
-                <span>{r.behaviour?.title || SHORT(r.behaviour_id)}</span>
+                {r.behaviour_id ? (
+                  <button
+                    type="button"
+                    onClick={() => setPeekId(r.behaviour_id)}
+                    className="pr-log-evidence-link"
+                    title={`Open alignment case · ${r.behaviour_id}`}
+                  >
+                    {r.behaviour?.title || SHORT(r.behaviour_id)}
+                  </button>
+                ) : (
+                  <span>{r.behaviour?.title}</span>
+                )}
+                {r.note && r.note.trim() && (
+                  <div style={{ fontStyle: 'italic', fontSize: 12, opacity: 0.8, marginTop: 6, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                    "{r.note}"
+                  </div>
+                )}
               </div>
               <div className="pr-log-hash">
                 {r.tx_hash ? (
@@ -2157,13 +2221,14 @@ function BehaviourAttestationLog() {
           );
         })}
       </div>
+      <BehaviourPeekModal behaviourId={peekId} onClose={() => setPeekId(null)} />
     </>
   );
 }
 
 // ── Behaviour chain event log ───────────────────────────────────────────────
 // Parallel to the evidence ChainEventLog. Reads from behaviour_chain_events
-// (filled by chain-indexer-behaviour). One row per emitted event.
+// (filled by chain-indexer-alignment). One row per emitted event.
 
 function useBehaviourChainEvents({ filter = 'all', limit = 100 } = {}) {
   const [rows, setRows]       = useState([]);
@@ -2179,7 +2244,54 @@ function useBehaviourChainEvents({ filter = 'all', limit = 100 } = {}) {
       .limit(limit);
     if (filter !== 'all') q = q.eq('event_name', filter);
     const { data } = await q;
-    setRows(data ?? []);
+
+    // Denormalise titles by behaviour_id, same pattern as the attestation log
+    // hook. One extra query per refetch is cheap; we get the human-readable
+    // case name into the row so the chain log doesn't render bare 0x ids.
+    const ids = Array.from(new Set((data ?? []).map(r => r.behaviour_id).filter(Boolean)));
+    let titles = {};
+    if (ids.length) {
+      const { data: bh } = await supabase
+        .from('behaviour')
+        .select('id, title, domain, tier, status')
+        .in('id', ids);
+      titles = Object.fromEntries((bh ?? []).map(b => [b.id, b]));
+    }
+
+    // Denormalise peer handles too — chain events don't carry the handle in
+    // their payload (the contract emits address only). Look it up first in
+    // behaviour_attestations, then fall back to evidence attestations. The
+    // peer registry is shared across the two archives so the handle is the
+    // same either way; we just take the first hit.
+    const peerAddrs = Array.from(new Set((data ?? []).map(r => r.peer_addr).filter(Boolean)));
+    const handles = {};
+    if (peerAddrs.length) {
+      const { data: bhAtt } = await supabase
+        .from('behaviour_attestations')
+        .select('peer_addr, peer_handle')
+        .in('peer_addr', peerAddrs)
+        .not('peer_handle', 'is', null);
+      for (const row of (bhAtt ?? [])) {
+        if (!handles[row.peer_addr] && row.peer_handle) handles[row.peer_addr] = row.peer_handle;
+      }
+      const missing = peerAddrs.filter(a => !handles[a]);
+      if (missing.length) {
+        const { data: evAtt } = await supabase
+          .from('attestations')
+          .select('peer_addr, peer_handle')
+          .in('peer_addr', missing)
+          .not('peer_handle', 'is', null);
+        for (const row of (evAtt ?? [])) {
+          if (!handles[row.peer_addr] && row.peer_handle) handles[row.peer_addr] = row.peer_handle;
+        }
+      }
+    }
+
+    setRows((data ?? []).map(r => ({
+      ...r,
+      behaviour:   titles[r.behaviour_id] || null,
+      peer_handle: handles[r.peer_addr] || null,
+    })));
     setLoading(false);
   }, [filter, limit]);
 
@@ -2201,6 +2313,7 @@ function BehaviourChainEventLog() {
   const [query, setQuery]         = useState('');
   const [debounced, setDebounced] = useState('');
   const [groupId, setGroupId]     = useState('');
+  const [peekId, setPeekId]       = useState(null);
   useEffect(() => {
     const id = setTimeout(() => setDebounced(query.trim().toLowerCase()), 250);
     return () => clearTimeout(id);
@@ -2225,7 +2338,7 @@ function BehaviourChainEventLog() {
     if (eventNames && !eventNames.includes(r.event_name)) return false;
     if (!debounced) return true;
     const hay = [
-      r.peer_addr, r.event_name, r.behaviour_id,
+      r.peer_addr, r.event_name, r.behaviour_id, r.behaviour?.title,
       r.payload?.grounds, JSON.stringify(r.payload),
     ].filter(Boolean).join(' ').toLowerCase();
     return hay.includes(debounced);
@@ -2302,8 +2415,20 @@ function BehaviourChainEventLog() {
             <div key={r.id} className="pr-log-row">
               <div className="pr-log-time">{timeStr}</div>
               <div className="pr-log-event">
-                <span className="pr-log-kind">{r.event_name}</span>
-                {r.peer_addr && <> <b>{SHORT(r.peer_addr)}</b></>}
+                <span className="pr-log-kind approve">{r.event_name}</span>
+                {r.peer_addr && (
+                  <> <b>{r.peer_handle ? `${r.peer_handle} (${SHORT(r.peer_addr)})` : SHORT(r.peer_addr)}</b></>
+                )}
+                {r.behaviour_id && (
+                  <> · <button
+                    type="button"
+                    onClick={() => setPeekId(r.behaviour_id)}
+                    className="pr-log-evidence-link"
+                    title={`Open alignment case · ${r.behaviour_id}`}
+                  >
+                    {r.behaviour?.title || SHORT(r.behaviour_id)}
+                  </button></>
+                )}
                 {r.payload?.grounds && (
                   <div style={{ fontStyle: 'italic', fontSize: 12, opacity: 0.75, marginTop: 4 }}>
                     "{r.payload.grounds}"
@@ -2328,15 +2453,350 @@ function BehaviourChainEventLog() {
           );
         })}
       </div>
+      <BehaviourPeekModal behaviourId={peekId} onClose={() => setPeekId(null)} />
     </>
+  );
+}
+
+// ── BehaviourPeekModal — light read-only popup mirroring EvidencePeekModal ───
+// Fetches a single behaviour row by id and renders just enough to identify
+// it from a log row click. For the full record view (with input/output JSON,
+// challenge surface, etc.) the modal also links to /alignment/?case=<uuid>.
+function BehaviourPeekModal({ behaviourId, onClose }) {
+  const [data, setData]   = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!behaviourId) return;
+    setData(null);
+    setError(null);
+    let cancelled = false;
+    supabase.from('behaviour').select('*').eq('id', behaviourId).maybeSingle()
+      .then(({ data: row, error: err }) => {
+        if (cancelled) return;
+        if (err)        setError(err.message);
+        else if (!row)  setError('Behaviour not found — the id may belong to a row that has since been removed.');
+        else            setData(row);
+      });
+    return () => { cancelled = true; };
+  }, [behaviourId]);
+
+  useEffect(() => {
+    if (!behaviourId) return;
+    const onKey = (ev) => { if (ev.key === 'Escape') onClose(); };
+    const prev  = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [behaviourId, onClose]);
+
+  if (!behaviourId) return null;
+
+  const tierLabel = data?.tier === 1 ? 'I' : data?.tier === 2 ? 'II' : data?.tier === 3 ? 'III' : '';
+  const domain    = data ? BEHAVIOUR_DOMAINS.find(d => d.id === data.domain) : null;
+  const statusLabel = data ? (BH_STATUS_LABEL[data.status] || data.status) : '';
+
+  return (
+    <div className="pr-ev-modal-backdrop" onClick={onClose}>
+      <div className="pr-ev-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <button className="pr-ev-modal-close" onClick={onClose} aria-label="Close">×</button>
+        {error ? (
+          <>
+            <div className="eyebrow" style={{ marginBottom: 10 }}>◇ Alignment case</div>
+            <p className="lead" style={{ margin: 0 }}>{error}</p>
+            <p className="sub" style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>{behaviourId}</p>
+          </>
+        ) : !data ? (
+          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING CASE…</div>
+        ) : (
+          <>
+            <div className="eyebrow" style={{ marginBottom: 10 }}>
+              Alignment{tierLabel ? ` · Tier ${tierLabel}` : ''}
+              {domain ? ` · Domain ${domain.n} · ${domain.title}` : ''}
+              {statusLabel ? ` · ${statusLabel}` : ''}
+            </div>
+            <h3 className="pr-ev-modal-title">{data.title}</h3>
+            <p className="pr-ev-modal-src">
+              <span className="pr-ev-modal-label">Model</span> {data.model_name}{data.model_version ? ` · ${data.model_version}` : ''}
+            </p>
+            <p className="pr-ev-modal-id" title={`Behaviour id · ${data.id}`}>
+              <span className="pr-ev-modal-label">ID</span>
+              <span className="pr-ev-modal-id-value">{data.id}</span>
+            </p>
+            {data.summary && <p className="pr-ev-modal-body">{data.summary}</p>}
+            {data.challenge_reason && (
+              <p className="pr-ev-modal-quote" style={{ fontStyle: 'italic' }}>
+                Challenge grounds: &ldquo;{data.challenge_reason}&rdquo;
+              </p>
+            )}
+            <div className="pr-ev-modal-actions">
+              {data.reproducer_url && (
+                <a href={data.reproducer_url} target="_blank" rel="noopener noreferrer" className="pr-peer-btn">
+                  Open reproducer ↗
+                </a>
+              )}
+              <a href={`/alignment/?case=${data.id}`} className="pr-peer-btn">
+                Open in archive →
+              </a>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Expandable section showing everything a peer needs to vote on a behaviour:
+// the actual input/output bundles, the reproducer link, sampling, and the
+// three on-chain hashes. Without this the card only renders title + summary,
+// which is insufficient context for a verdict.
+function BehaviourFullDetails({ item }) {
+  const hasContent =
+    item.input_payload != null || item.output_payload != null ||
+    item.reproducer_url || item.seed || item.sampling_params ||
+    item.model_hash || item.input_hash || item.output_hash;
+  if (!hasContent) return null;
+
+  const fmt = (v) => typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+  const block = {
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    background: 'rgba(255,255,255,0.04)', padding: '10px 12px',
+    borderRadius: 6, fontFamily: 'var(--mono)', fontSize: 12,
+    lineHeight: 1.5, maxHeight: 320, overflow: 'auto', margin: '6px 0 0',
+  };
+  const head = {
+    fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em',
+    opacity: 0.7, marginTop: 12,
+  };
+
+  return (
+    <details style={{ margin: '12px 0 14px' }}>
+      <summary style={{
+        cursor: 'pointer', fontSize: 11, opacity: 0.75,
+        fontFamily: 'var(--mono)', letterSpacing: '0.1em',
+        textTransform: 'uppercase', padding: '4px 0',
+      }}>
+        View full record ↕
+      </summary>
+      {item.reproducer_url && (
+        <>
+          <div style={head}>Reproducer</div>
+          <p style={{ wordBreak: 'break-all', margin: '6px 0 0', fontSize: 13 }}>
+            <a href={item.reproducer_url} target="_blank" rel="noopener noreferrer"
+               style={{ color: 'var(--accent-2, currentColor)' }}>
+              {item.reproducer_url}
+            </a>
+          </p>
+        </>
+      )}
+      {item.input_payload != null && (
+        <>
+          <div style={head}>Input</div>
+          <pre style={block}>{fmt(item.input_payload)}</pre>
+        </>
+      )}
+      {item.output_payload != null && (
+        <>
+          <div style={head}>Output</div>
+          <pre style={block}>{fmt(item.output_payload)}</pre>
+        </>
+      )}
+      {(item.seed || item.sampling_params) && (
+        <>
+          <div style={head}>Sampling</div>
+          <pre style={block}>{fmt({ seed: item.seed, ...(item.sampling_params ?? {}) })}</pre>
+        </>
+      )}
+      {(item.model_hash || item.input_hash || item.output_hash) && (
+        <>
+          <div style={head}>On-chain hashes</div>
+          <div style={{ fontSize: 10, opacity: 0.6, lineHeight: 1.7, marginTop: 6, fontFamily: 'var(--mono)' }}>
+            {item.model_hash  && <div>model:  {item.model_hash}</div>}
+            {item.input_hash  && <div>input:  {item.input_hash}</div>}
+            {item.output_hash && <div>output: {item.output_hash}</div>}
+          </div>
+        </>
+      )}
+    </details>
+  );
+}
+
+// Mirror of OpenChallengePanel for the behaviour archive. Lets a peer browse
+// canonised alignment records (status in [aligned, reaffirmed]) and open a
+// formal challenge with written grounds. The contract enforces a 7-day
+// cooldown per peer per archive — the behaviour contract has its own
+// `lastChallengeAt` mapping, independent of evidence, so cooldown state is
+// tracked separately here too.
+function OpenChallengeBehaviourPanel({ onOpen, peerCount, cooldownSecs = 0 }) {
+  const [search, setSearch]         = useState('');
+  const [debounced, setDebounced]   = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(search.trim()), 250);
+    return () => clearTimeout(t);
+  }, [search]);
+  const { canon, loading, hasMore, loadMore, total } = useCanonBehaviour(debounced);
+  const [selected, setSelected]     = useState(null);
+  const [reason, setReason]         = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!selected || reason.trim().length === 0) return;
+    setSubmitting(true);
+    await onOpen(selected, reason.trim());
+    setSelected(null);
+    setReason('');
+    setSubmitting(false);
+  };
+
+  const cooldownDays = cooldownSecs > 0 ? Math.ceil(cooldownSecs / 86400) : 0;
+  const cooldownDate = cooldownSecs > 0
+    ? new Date(Date.now() + cooldownSecs * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+    : null;
+
+  const domainTitle = (id) =>
+    BEHAVIOUR_DOMAINS.find(d => d.id === id)?.title || `Domain ${id}`;
+
+  return (
+    <div className="pr-open-challenge">
+      <div className="eyebrow" style={{ marginBottom: 14 }}>◇ Open a new alignment challenge</div>
+      {cooldownSecs > 0 ? (
+        <p className="pr-open-challenge-sub" style={{ color: 'var(--warn)' }}>
+          Alignment challenge cooldown active — you can open your next challenge in {cooldownDays} day{cooldownDays === 1 ? '' : 's'} ({cooldownDate}).
+        </p>
+      ) : (
+      <>
+      <p className="pr-open-challenge-sub">
+        Select a canonised alignment record and state your grounds. Other peers will have {CHALLENGE_WINDOW_DAYS} days to vote.
+        {' '}{deprecateThreshold(2, peerCount)} votes deprecates it; a defense majority reaffirms it.
+      </p>
+
+      <div style={{ margin: '0 0 14px' }}>
+        <input
+          type="search"
+          placeholder="Search canon by title, model name…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--line-soft)', borderRadius: 'var(--radius)', background: 'var(--bg-elev)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: 12 }}
+        />
+      </div>
+
+      {loading && canon.length === 0 ? (
+        <div className="pr-open-challenge-empty">Loading alignment canon…</div>
+      ) : canon.length === 0 ? (
+        <div className="pr-open-challenge-empty">
+          {debounced ? `No canon alignment record matches "${debounced}".` : 'No canon alignment records yet. Canonise some submissions first.'}
+        </div>
+      ) : (
+        <>
+          <div className="pr-canon-list">
+            {canon.map(bh => (
+              <button key={bh.id}
+                className={`pr-canon-item ${selected?.id === bh.id ? 'is-selected' : ''}`}
+                onClick={() => setSelected(selected?.id === bh.id ? null : bh)}>
+                <span className="pr-canon-item-tier" data-tier={bh.tier}>T{bh.tier}</span>
+                <span className="pr-canon-item-title">{bh.title}</span>
+                <span className="pr-canon-item-src">{domainTitle(bh.domain)} · {bh.model_name}</span>
+              </button>
+            ))}
+          </div>
+          {hasMore && (
+            <div style={{ marginTop: 12, textAlign: 'center' }}>
+              <button className="pr-peer-btn" onClick={loadMore} disabled={loading}>
+                {loading ? 'Loading…' : `Load more${total ? ` · ${canon.length} of ${total}` : ''}`}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {selected && (
+        <div className="pr-challenge-form">
+          <div className="pr-challenge-form-label">
+            Challenging: <em>{selected.title}</em>
+          </div>
+          <textarea
+            className="pr-challenge-textarea"
+            placeholder="State your grounds clearly. What specifically is wrong about the verdict, the domain choice, the input/output binding, or the model identification?"
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            rows={4}
+          />
+          <div className="pr-challenge-form-foot">
+            <span className="pr-vote-hint" style={{ flex: 1 }}>
+              {reason.trim().length === 0 ? 'Grounds required' : 'Ready to sign'}
+            </span>
+            <button
+              className="pr-nominate-btn"
+              disabled={reason.trim().length === 0 || submitting}
+              onClick={handleSubmit}>
+              {submitting ? 'Signing…' : 'Open challenge →'}
+            </button>
+          </div>
+        </div>
+      )}
+      </>
+      )}
+    </div>
   );
 }
 
 function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPending }) {
   const [bhTab, setBhTab] = useState('queue');
+  const [peekId, setPeekId] = useState(null);
   const { items: queue,     loading: qLoading, refetch: refetchQueue     } = useBehaviourQueue();
   const { items: contested, loading: cLoading, refetch: refetchContested } = useBehaviourContested();
   const { items: unchained, refetch: refetchUnchained }                    = useUnchainedBehaviour();
+
+  // Behaviour-side challenge cooldown — independent of evidence. The contract
+  // has its own `lastChallengeAt` mapping so a peer can be cooling down on
+  // one archive while free to act on the other.
+  const [bhChallengeCooldownSecs, setBhChallengeCooldownSecs] = useState(0);
+  useEffect(() => {
+    if (!me?.addr || !BEHAVIOUR_CONSENSUS_ADDR) return;
+    getBehaviourChallengeCooldownRemaining(me.addr).then(s => setBhChallengeCooldownSecs(s ?? 0));
+  }, [me]);
+
+  // Needs-me / All-open filter + refresh, mirroring the evidence pattern.
+  const [bhFilter, setBhFilter]                 = useState('mine');
+  const [myBhVotes, setMyBhVotes]               = useState({}); // behaviourId → 'cast'
+  const [refreshingBhQueue, setRefreshingBhQueue] = useState(false);
+
+  // Seed myBhVotes from on-chain hasVoted (phase 0 = review) so the "Needs me"
+  // filter excludes records already voted on in a prior session. No batched
+  // multicall on the behaviour side yet — one RPC per item, parallelised. Fine
+  // at expected queue volumes; revisit if the queue grows past a few hundred.
+  useEffect(() => {
+    if (!BEHAVIOUR_CONSENSUS_ADDR || !me?.addr || !queue.length) return;
+    let cancelled = false;
+    (async () => {
+      const flags = await Promise.all(
+        queue.map(it => hasVotedOnBehaviour(it.id, 0, me.addr).then(v => [it.id, v]))
+      );
+      if (cancelled) return;
+      setMyBhVotes(prev => {
+        const next = { ...prev };
+        for (const [id, voted] of flags) if (voted && !next[id]) next[id] = 'cast';
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [queue, me?.addr]);
+
+  const queueFiltered = useMemo(() => {
+    if (bhFilter === 'mine') return queue.filter(it => !myBhVotes[it.id]);
+    return queue;
+  }, [queue, bhFilter, myBhVotes]);
+
+  const handleRefreshBhQueue = useCallback(async () => {
+    if (refreshingBhQueue) return;
+    setRefreshingBhQueue(true);
+    const minSpin = new Promise(r => setTimeout(r, 600));
+    try { await Promise.all([refetchQueue(), refetchUnchained(), minSpin]); }
+    finally { setRefreshingBhQueue(false); }
+  }, [refreshingBhQueue, refetchQueue, refetchUnchained]);
 
   const domainTitle = (id) =>
     BEHAVIOUR_DOMAINS.find(d => d.id === id)?.title || `Domain ${id}`;
@@ -2407,11 +2867,13 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
       sub:    `Attesting "${(item.title ?? '').slice(0, 60)}" as ${verdict}.`,
       subject: item.id, verdict, phase: 'review', note: '',
       danger: verdict === 'reject',
-      // Custom sign + tx path for behaviour records.
-      signOverride: async () => {
+      // Custom sign + tx path for behaviour records. `note` arrives from the
+      // SignModal's editable textarea — same string flows into the EIP-712
+      // signature and the cached attestation row.
+      signOverride: async (note) => {
         const sig = await signBehaviourAttestation({
           behaviourId: item.id, peerAddr: me.addr,
-          phase: 'review', verdict, note: '',
+          phase: 'review', verdict, note: note ?? '',
         }, me.addr);
         const txHash = await castBehaviourReviewVoteOnChain(item.id, verdict === 'approve');
         await waitForTx(txHash);
@@ -2426,9 +2888,11 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
             action:       'review_vote',
             behaviour_id: item.id,
             peer_addr:    me.addr,
+            peer_handle:  me.handle ?? null,
             phase:        'review',
             verdict,
             tier:         item.tier,
+            note:         note ?? '',
             eip712_sig:   sig,
             tx_hash:      txHash,
           }),
@@ -2446,10 +2910,10 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
       sub:    `Voting on contested case "${(item.title ?? '').slice(0, 60)}".`,
       subject: item.id, verdict: support ? 'challenge' : 'defend', phase: 'challenge', note: '',
       danger: support,
-      signOverride: async () => {
+      signOverride: async (note) => {
         const sig = await signBehaviourAttestation({
           behaviourId: item.id, peerAddr: me.addr,
-          phase: 'challenge', verdict: support ? 'challenge' : 'defend', note: '',
+          phase: 'challenge', verdict: support ? 'challenge' : 'defend', note: note ?? '',
         }, me.addr);
         const txHash = await castBehaviourChallengeVoteOnChain(item.id, support);
         await waitForTx(txHash);
@@ -2464,9 +2928,11 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
             action:       'challenge_vote',
             behaviour_id: item.id,
             peer_addr:    me.addr,
+            peer_handle:  me.handle ?? null,
             phase:        'challenge',
             verdict:      support ? 'challenge' : 'defend',
             tier:         item.tier,
+            note:         note ?? '',
             eip712_sig:   sig,
             tx_hash:      txHash,
           }),
@@ -2476,11 +2942,70 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
     });
   }, [me, refetchContested, setPendingSign]);
 
+  // ── Open challenge handler ─────────────────────────────────────────────────
+  // Mirrors the evidence-side handleOpenChallenge but uses the behaviour
+  // contract's openChallenge(id, grounds) — the grounds string is emitted in
+  // the ChallengeOpened event and rendered on the contested card.
+  const handleOpenChallengeBehaviour = useCallback(async (item, reason) => {
+    setPendingSign({
+      action: 'attest_behaviour',
+      title:  'Open an alignment challenge',
+      sub:    `Opening a formal challenge against "${(item.title ?? '').slice(0, 60)}". Other peers have ${CHALLENGE_WINDOW_DAYS} days to vote.`,
+      subject: item.id, verdict: 'challenge', phase: 'challenge', note: reason,
+      danger: true,
+      // The SignModal pre-fills its textarea with `reason` and lets the peer
+      // edit before signing. Whatever they end up with is the single source
+      // of truth: it gets emitted on-chain as the grounds, signed into the
+      // EIP-712 attestation, and stored as challenge_reason in the cache.
+      signOverride: async (editedReason) => {
+        if (!BEHAVIOUR_CONSENSUS_ADDR) {
+          throw new Error('Behaviour contract address not configured');
+        }
+        const grounds = (editedReason ?? reason ?? '').trim();
+        const sig = await signBehaviourAttestation({
+          behaviourId: item.id, peerAddr: me.addr,
+          phase: 'challenge', verdict: 'challenge', note: grounds,
+        }, me.addr);
+        const txHash = await openBehaviourChallengeOnChain(item.id, grounds);
+        setChainPending('Confirming on-chain…');
+        try { await waitForTx(txHash); }
+        finally { setChainPending(null); }
+        await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-attestation-behaviour`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey:        import.meta.env.VITE_SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            action:           'open_challenge',
+            behaviour_id:     item.id,
+            peer_addr:        me.addr,
+            peer_handle:      me.handle ?? null,
+            phase:            'challenge',
+            verdict:          'challenge',
+            tier:             item.tier,
+            note:             grounds,
+            challenge_reason: grounds,
+            eip712_sig:       sig,
+            tx_hash:          txHash,
+          }),
+        });
+        await refetchContested();
+        // Refresh cooldown — the 7-day clock started when the tx confirmed.
+        getBehaviourChallengeCooldownRemaining(me.addr).then(s => setBhChallengeCooldownSecs(s ?? 0));
+      },
+    });
+  }, [me, refetchContested, setChainPending, setPendingSign]);
+
   return (
     <div>
       <div className="pr-tabs">
         <button className={`pr-tab ${bhTab === 'queue' ? 'is-active' : ''}`} onClick={() => setBhTab('queue')}>
           Review queue <span className="count">{queue.length + contested.length}</span>
+        </button>
+        <button className={`pr-tab ${bhTab === 'challenge' ? 'is-active' : ''}`} onClick={() => setBhTab('challenge')}>
+          Open challenge
         </button>
         <button className={`pr-tab ${bhTab === 'log' ? 'is-active' : ''}`} onClick={() => setBhTab('log')}>
           Attestation log
@@ -2496,6 +3021,13 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
           <OpsPanel scope="alignment" />
           <BehaviourChainEventLog />
         </>
+      )}
+      {bhTab === 'challenge' && (
+        <OpenChallengeBehaviourPanel
+          onOpen={handleOpenChallengeBehaviour}
+          peerCount={peerCount}
+          cooldownSecs={bhChallengeCooldownSecs}
+        />
       )}
 
       {bhTab === 'queue' && (
@@ -2538,17 +3070,34 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
             the shared peer registry ({peerCount ?? '…'} peers today).
           </p>
         </div>
+        <div className="right">
+          {[['mine', 'Needs me'], ['all', 'All open']].map(([f, label]) => (
+            <button key={f} className={`pr-filter ${bhFilter === f ? 'is-active' : ''}`} onClick={() => setBhFilter(f)}>
+              {label}
+            </button>
+          ))}
+          <RefreshButton onClick={handleRefreshBhQueue} spinning={refreshingBhQueue} title="Refresh alignment queue" />
+        </div>
       </div>
 
       {qLoading ? (
         <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING QUEUE…</div>
-      ) : queue.length === 0 ? (
+      ) : queueFiltered.length === 0 ? (
         <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
-          <p className="lead" style={{ margin: 0 }}>The alignment queue is clear.</p>
+          <p className="lead" style={{ margin: 0 }}>
+            {bhFilter === 'mine'
+              ? "You've reviewed everything in the alignment queue."
+              : 'The alignment queue is clear.'}
+          </p>
+          {bhFilter === 'mine' && queue.length > 0 && (
+            <button className="pr-filter" style={{ marginTop: 16 }} onClick={() => setBhFilter('all')}>
+              See all open alignment cases
+            </button>
+          )}
         </div>
       ) : (
         <div className="pr-review-list">
-          {queue.map(item => (
+          {queueFiltered.map(item => (
             <div key={item.id} className="pr-review-card">
               <div className="pr-review-top">
                 <span className="pr-review-tier" data-tier={item.tier}>
@@ -2558,6 +3107,15 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
                 <span style={{ fontSize: 11, opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                   {domainTitle(item.domain)}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => setPeekId(item.id)}
+                  className="pr-log-evidence-link"
+                  title={`Open alignment case · ${item.id}`}
+                  style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.7 }}
+                >
+                  case {item.id.slice(0, 8)} ↗
+                </button>
               </div>
               <h3 className="pr-review-title">{item.title}</h3>
               <p className="pr-review-src" style={{ opacity: 0.7, fontSize: 13, margin: '4px 0 10px' }}>
@@ -2565,6 +3123,7 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
                 {item.model_version && <span> · {item.model_version}</span>}
               </p>
               {item.summary && <p className="pr-review-excerpt">{item.summary}</p>}
+              <BehaviourFullDetails item={item} />
               <AttestBar
                 approvals={item.approve_count ?? 0}
                 rejections={item.reject_count ?? 0}
@@ -2608,13 +3167,28 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
                     <span style={{ fontSize: 11, opacity: 0.7, textTransform: 'uppercase' }}>
                       {domainTitle(item.domain)}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => setPeekId(item.id)}
+                      className="pr-log-evidence-link"
+                      title={`Open alignment case · ${item.id}`}
+                      style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.7 }}
+                    >
+                      case {item.id.slice(0, 8)} ↗
+                    </button>
                   </div>
                   <h3 className="pr-review-title">{item.title}</h3>
+                  <p className="pr-review-src" style={{ opacity: 0.7, fontSize: 13, margin: '4px 0 10px' }}>
+                    <strong>{item.model_name}</strong>
+                    {item.model_version && <span> · {item.model_version}</span>}
+                  </p>
+                  {item.summary && <p className="pr-review-excerpt">{item.summary}</p>}
                   {item.challenge_reason && (
                     <p className="pr-review-excerpt" style={{ fontStyle: 'italic' }}>
                       Grounds: {item.challenge_reason}
                     </p>
                   )}
+                  <BehaviourFullDetails item={item} />
                   <AttestBar
                     approvals={item.defense_votes ?? 0}
                     rejections={item.challenge_votes ?? 0}
@@ -2637,6 +3211,7 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
       )}
       </>
       )}
+      <BehaviourPeekModal behaviourId={peekId} onClose={() => setPeekId(null)} />
     </div>
   );
 }
@@ -3265,15 +3840,16 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
         danger={pendingSign?.danger}
         signerAddr={me.addr}
         onCancel={() => setPendingSign(null)}
-        onSign={async () => {
+        onSign={async (editedNote) => {
           const sign = pendingSign;
+          if (sign) sign.note = editedNote ?? sign.note ?? '';
           setPendingSign(null);
           // Behaviour-side actions provide their own signOverride that signs
           // with the behaviour EIP-712 domain and dispatches to the behaviour
           // contract. The evidence path keeps the original signAttestation
-          // flow.
+          // flow. Either way, the edited deliberation note flows through.
           if (sign?.signOverride) {
-            try { await sign.signOverride(); }
+            try { await sign.signOverride(sign.note ?? ''); }
             catch (err) {
               setChainErr(err?.code === 4001
                 ? 'Signature rejected — attestation not recorded.'
@@ -3304,7 +3880,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
             }
           }
 
-          await sign.onConfirm(sig);
+          await sign.onConfirm(sig, sign.note ?? '');
         }}
       />
     </div>

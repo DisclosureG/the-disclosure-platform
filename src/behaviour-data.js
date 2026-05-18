@@ -127,6 +127,81 @@ export async function markBehaviourOnchain(uuid, txHash) {
   }).eq('id', uuid);
 }
 
+// ── Canon (aligned + reaffirmed) for the challenge-opening surface ───────────
+// Parallel to useCanonEvidence: paginated list of behaviour records the
+// network has endorsed, browseable + searchable by title / model name so a
+// peer can pick one to challenge. 'aligned' and 'reaffirmed' are the two
+// canonisable end-states; 'deprecated' is excluded (already removed).
+const BH_CANON_PAGE = 50;
+
+export function useCanonBehaviour(query = '') {
+  const [canon, setCanon]     = useState([]);
+  const [page, setPage]       = useState(0);
+  const [total, setTotal]     = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const trimmed = (query ?? '').trim().toLowerCase();
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setPage(0);
+    setTotal(null);
+
+    let q = supabase
+      .from('behaviour')
+      .select('*', { count: 'estimated' })
+      .in('status', ['aligned', 'reaffirmed']);
+
+    // No fts column on behaviour yet — match against title / model_name with
+    // ilike. Cheap at low volumes; switch to a generated tsvector later.
+    if (trimmed) {
+      q = q.or(`title.ilike.%${trimmed}%,model_name.ilike.%${trimmed}%`);
+    }
+
+    q.order('canon_at',     { ascending: false, nullsFirst: false })
+     .order('submitted_at', { ascending: false })
+     .range(0, BH_CANON_PAGE - 1)
+     .then(({ data, count }) => {
+       if (cancelled) return;
+       setCanon((data || []).map(normalize));
+       setTotal(count ?? null);
+       setLoading(false);
+     });
+
+    return () => { cancelled = true; };
+  }, [trimmed]);
+
+  const loadMore = () => {
+    const next = page + 1;
+    setPage(next);
+    setLoading(true);
+
+    let q = supabase
+      .from('behaviour')
+      .select('*')
+      .in('status', ['aligned', 'reaffirmed']);
+
+    if (trimmed) {
+      q = q.or(`title.ilike.%${trimmed}%,model_name.ilike.%${trimmed}%`);
+    }
+
+    q.order('canon_at',     { ascending: false, nullsFirst: false })
+     .order('submitted_at', { ascending: false })
+     .range(next * BH_CANON_PAGE, next * BH_CANON_PAGE + BH_CANON_PAGE - 1)
+     .then(({ data }) => {
+       setCanon(prev => [...prev, ...(data || []).map(normalize)]);
+       setLoading(false);
+     });
+  };
+
+  const hasMore = total === null
+    ? canon.length === (page + 1) * BH_CANON_PAGE
+    : canon.length < total;
+
+  return { canon, loading, hasMore, loadMore, total };
+}
+
 // ── Identity-header counts ──────────────────────────────────────────────────
 // Parallel to useMyReviewCount + queue.filter on the evidence side, surfaced
 // in the peer-review dashboard's identity strip so peers see at a glance

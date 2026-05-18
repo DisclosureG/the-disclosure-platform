@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { BrandMark } from '../components/Sigil';
+import { supabase } from '../lib/supabase';
 import {
   BEHAVIOUR_DOMAINS,
   useBehaviour,
@@ -316,6 +317,24 @@ function DetailModal({ b, onClose }) {
             <p>{b.challenge_reason}</p>
           </div>
         )}
+
+        {(b.status === 'aligned' || b.status === 'reaffirmed') && (
+          <div className="ev-modal-section" style={{ borderTop: '1px solid var(--line-soft)', paddingTop: 16, marginTop: 16 }}>
+            <p style={{ fontSize: 13, opacity: 0.75, margin: '0 0 8px' }}>
+              Disagree with this canonisation? Verified peers can open a formal challenge.
+              The {21}-day deliberation window stays open for any peer to vote deprecate or defend.
+            </p>
+            <a href="/peer-review/" className="mono" style={{
+              display: 'inline-block', padding: '8px 14px',
+              border: '1px solid var(--accent-2, currentColor)',
+              borderRadius: 'var(--radius, 6px)', textDecoration: 'none',
+              color: 'var(--accent-2, currentColor)', fontSize: 12,
+              letterSpacing: '0.08em', textTransform: 'uppercase',
+            }}>
+              Challenge this in peer review →
+            </a>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -480,6 +499,15 @@ function matchesSearch(b, q) {
   );
 }
 
+// Minimal normalisation for direct-fetched rows so DetailModal renders the
+// same shape useBehaviour produces. Mirrors the normalize() in behaviour-data
+// for the one field the modal actually consumes (domainTitle).
+function decorateRow(row) {
+  if (!row) return row;
+  const dom = BEHAVIOUR_DOMAINS.find(d => d.id === row.domain) || {};
+  return { ...row, domainTitle: dom.title || `Domain ${row.domain}` };
+}
+
 export default function Behaviour() {
   const { rows, loading, refresh } = useBehaviour();
   const [q, setQ]               = useState('');
@@ -488,6 +516,35 @@ export default function Behaviour() {
   const [sort, setSort]         = useState('domain');
   const [active, setActive]     = useState(null);
   const [submitOpen, setSubmit] = useState(false);
+
+  // Deep-link support: opening /alignment/?case=<uuid> auto-opens the matching
+  // detail modal. Used by the peer-review attestation log to make case titles
+  // clickable. The fetch path bypasses the public-archive status filter so
+  // pending and misaligned records are still openable by direct link. After
+  // the modal opens, the ?case param is stripped from the URL so a refresh
+  // or modal close does not re-trigger the auto-open.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const caseId = params.get('case');
+    if (!caseId || active) return;
+
+    const cleanUrl = () => {
+      params.delete('case');
+      const qs = params.toString();
+      const next = window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash;
+      window.history.replaceState(null, '', next);
+    };
+
+    const local = rows.find(r => r.id === caseId);
+    if (local) { setActive(local); cleanUrl(); return; }
+    let cancelled = false;
+    supabase.from('behaviour').select('*').eq('id', caseId).maybeSingle().then(({ data }) => {
+      if (cancelled) return;
+      if (data) setActive(decorateRow(data));
+      cleanUrl();
+    });
+    return () => { cancelled = true; };
+  }, [rows, active]);
 
   const visible = useMemo(() => rows.filter(b => {
     if (domain !== 'all' && b.domain !== domain) return false;

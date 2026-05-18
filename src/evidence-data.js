@@ -380,7 +380,7 @@ export function useTamperAlerts(limit = 20, scope = 'evidence') {
   return { alerts, loading };
 }
 
-// Edge function heartbeat — populated by chain-indexer + audit-content-hash
+// Edge function heartbeat — populated by chain-indexer-evidence + audit-content-hash
 // on every run. The UI surfaces stale rows so operators can spot a silently
 // failing cron without needing to query SQL directly.
 export function useHeartbeats() {
@@ -446,6 +446,20 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNa
     return req;
   };
 
+  // Attach evidence titles by evidence_id so the chain log renders the human
+  // identifier instead of a bare UUID. One extra query per page; same idiom
+  // the behaviour chain events hook uses.
+  const enrichWithTitles = async (rows) => {
+    const ids = Array.from(new Set((rows || []).map(r => r.evidence_id).filter(Boolean)));
+    if (!ids.length) return (rows || []).map(r => ({ ...r, evidence: null }));
+    const { data: evs } = await supabase
+      .from('evidence')
+      .select('id, title')
+      .in('id', ids);
+    const titles = Object.fromEntries((evs ?? []).map(e => [e.id, e]));
+    return (rows || []).map(r => ({ ...r, evidence: titles[r.evidence_id] || null }));
+  };
+
   const refetch = useCallback(() => {
     setLoading(true);
     setPage(0);
@@ -458,8 +472,9 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNa
         .order('log_index',    { ascending: false })
     )
       .range(0, pageSize - 1)
-      .then(({ data, count }) => {
-        setEvents(data || []);
+      .then(async ({ data, count }) => {
+        const enriched = await enrichWithTitles(data || []);
+        setEvents(enriched);
         setTotal(count ?? null);
         setLoading(false);
       });
@@ -481,9 +496,11 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNa
         .order('log_index',    { ascending: false })
     )
       .range(0, pageSize - 1)
-      .then(({ data, count }) => {
+      .then(async ({ data, count }) => {
         if (cancelled) return;
-        setEvents(data || []);
+        const enriched = await enrichWithTitles(data || []);
+        if (cancelled) return;
+        setEvents(enriched);
         setTotal(count ?? null);
         setLoading(false);
       });
@@ -504,8 +521,9 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNa
         .order('log_index',    { ascending: false })
     )
       .range(next * pageSize, next * pageSize + pageSize - 1)
-      .then(({ data }) => {
-        setEvents(prev => [...prev, ...(data || [])]);
+      .then(async ({ data }) => {
+        const enriched = await enrichWithTitles(data || []);
+        setEvents(prev => [...prev, ...enriched]);
         setLoading(false);
       });
   };
