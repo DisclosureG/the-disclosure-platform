@@ -1264,7 +1264,8 @@ function SignModal({ open, payload, onCancel, onSign, danger, signerAddr }) {
 // Unverified wallets can't attest, but the consensus record is public — they
 // can still inspect the attestation log and the indexed chain log.
 function NotAPeerScreen({ addr, onDisconnect }) {
-  const [tab, setTab] = useState('log');
+  const [recordType, setRecordType] = useState('evidence');
+  const [tab,        setTab]        = useState('log');
   const me = { addr, handle: null, nameSource: 'none' };
 
   return (
@@ -1320,6 +1321,25 @@ function NotAPeerScreen({ addr, onDisconnect }) {
         </div>
       </section>
 
+      {/* Top-level archive toggle (matches VerifiedPanel). Read-only on this
+          observer screen — no Peer registry tab since unverified addresses
+          can't act on it; the "How to become a peer" section above covers
+          the registry path. */}
+      <div className="pr-tabs" style={{ marginBottom: 8, borderBottom: '1px solid var(--line-soft)' }}>
+        <button
+          className={`pr-tab ${recordType === 'evidence' ? 'is-active' : ''}`}
+          onClick={() => setRecordType('evidence')}
+        >
+          Evidence
+        </button>
+        <button
+          className={`pr-tab ${recordType === 'alignment' ? 'is-active' : ''}`}
+          onClick={() => setRecordType('alignment')}
+        >
+          Alignment
+        </button>
+      </div>
+
       <div className="pr-tabs">
         <button className={`pr-tab ${tab === 'log' ? 'is-active' : ''}`} onClick={() => setTab('log')}>
           Attestation log
@@ -1329,11 +1349,11 @@ function NotAPeerScreen({ addr, onDisconnect }) {
         </button>
       </div>
 
-      {tab === 'log' && (
+      {recordType === 'evidence' && tab === 'log' && (
         <section>
           <div className="pr-section-head">
             <div>
-              <h2>Attestation log</h2>
+              <h2>Evidence attestation log</h2>
               <p className="sub">
                 Every signed action — approvals, rejections, challenges, defenses. The public, append-only
                 record of who said what and when.
@@ -1344,18 +1364,49 @@ function NotAPeerScreen({ addr, onDisconnect }) {
         </section>
       )}
 
-      {tab === 'chain' && (
+      {recordType === 'evidence' && tab === 'chain' && (
         <section>
           <div className="pr-section-head">
             <div>
-              <h2>Chain log</h2>
+              <h2>Evidence chain log</h2>
               <p className="sub">
-                Indexed events from the consensus contract. The chain is the receipt; this is the receipt.
+                Indexed events from the EvidenceConsensus contract. The chain is the receipt; this is the receipt.
               </p>
             </div>
           </div>
-          <OpsPanel />
+          <OpsPanel scope="evidence" />
           <ChainEventLog me={me} role="unverified" />
+        </section>
+      )}
+
+      {recordType === 'alignment' && tab === 'log' && (
+        <section>
+          <div className="pr-section-head">
+            <div>
+              <h2>Alignment attestation log</h2>
+              <p className="sub">
+                Every signed verdict on an AI behaviour record. EIP-712 signatures verifiable against the peer's
+                address; tx hashes link to BscScan.
+              </p>
+            </div>
+          </div>
+          <BehaviourAttestationLog />
+        </section>
+      )}
+
+      {recordType === 'alignment' && tab === 'chain' && (
+        <section>
+          <div className="pr-section-head">
+            <div>
+              <h2>Alignment chain log</h2>
+              <p className="sub">
+                Raw events emitted by the BehaviourConsensus contract, indexed every minute. Every state
+                transition appears here.
+              </p>
+            </div>
+          </div>
+          <OpsPanel scope="alignment" />
+          <BehaviourChainEventLog />
         </section>
       )}
 
