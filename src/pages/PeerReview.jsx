@@ -644,9 +644,19 @@ function PeerCard({ peer, meAddr, myEndorse, myRevokeVote, onEndorse, onRevoke, 
 // panel works for any visitor; the data is operationally meaningful but
 // non-sensitive. Stale heartbeats and unresolved tamper alerts are visually
 // emphasised so an operator can spot a problem at a glance.
-function OpsPanel() {
-  const { rows: heartbeats, loading: hbLoading } = useHeartbeats();
-  const { alerts, loading: alLoading }           = useTamperAlerts(10);
+// Scope controls which heartbeats and tamper-alerts source the panel queries.
+//   'evidence'  → chain-indexer + audit-content-hash + tamper_alerts
+//   'alignment' → chain-indexer-behaviour + audit-behaviour-hash + behaviour_tamper_alerts
+function OpsPanel({ scope = 'evidence' } = {}) {
+  const { rows: allHeartbeats, loading: hbLoading } = useHeartbeats();
+  const { alerts, loading: alLoading }              = useTamperAlerts(10, scope);
+
+  // Function names this scope owns. Hides cross-archive entries so the
+  // evidence panel doesn't surface alignment-indexer health and vice versa.
+  const SCOPE_FUNCTIONS = scope === 'alignment'
+    ? ['chain-indexer-behaviour', 'audit-behaviour-hash']
+    : ['chain-indexer',           'audit-content-hash'];
+  const heartbeats = allHeartbeats.filter(hb => SCOPE_FUNCTIONS.includes(hb.function_name));
 
   const openAlerts = alerts.filter(a => !a.resolved_at);
 
@@ -663,8 +673,10 @@ function OpsPanel() {
   // Threshold for "stale": 5 min for the indexer (cron runs every minute),
   // 36 h for the audit (daily). Matches the alert thresholds in DEPLOYMENT.md.
   const STALE_THRESHOLD_MS = {
-    'chain-indexer':      5  * 60_000,
-    'audit-content-hash': 36 * 60 * 60_000,
+    'chain-indexer':            5  * 60_000,
+    'chain-indexer-behaviour':  5  * 60_000,
+    'audit-content-hash':      36 * 60 * 60_000,
+    'audit-behaviour-hash':    36 * 60 * 60_000,
   };
   function isStale(row) {
     if (!row.last_success) return true;
@@ -753,7 +765,9 @@ function OpsPanel() {
             {openAlerts.map(a => (
               <div key={a.id} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 12, fontFamily: 'var(--mono)', fontSize: 11, alignItems: 'center' }}>
                 <span style={{ color: 'var(--ink-faint)' }}>{fmtAge(a.detected_at)}</span>
-                <span style={{ color: 'var(--ink)' }}>{a.evidence?.title || a.evidence_id}</span>
+                <span style={{ color: 'var(--ink)' }}>
+                  {(a.evidence?.title || a.behaviour?.title) || a.evidence_id || a.behaviour_id}
+                </span>
                 <span style={{ color: 'var(--ink-faint)', fontSize: 10 }}>
                   <span title={`expected ${a.expected_hash}`}>exp {a.expected_hash?.slice(0, 10)}…</span>
                   {' '}<span title={`stored ${a.stored_hash}`}>stored {a.stored_hash?.slice(0, 10)}…</span>
@@ -2301,7 +2315,12 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
       </div>
 
       {bhTab === 'log'   && <BehaviourAttestationLog />}
-      {bhTab === 'chain' && <BehaviourChainEventLog />}
+      {bhTab === 'chain' && (
+        <>
+          <OpsPanel scope="alignment" />
+          <BehaviourChainEventLog />
+        </>
+      )}
 
       {bhTab === 'queue' && (
       <>

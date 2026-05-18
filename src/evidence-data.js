@@ -343,14 +343,21 @@ export function useUnchainedPending() {
 // evidence row's stored content_hash no longer matches its canonical hash.
 // Live-updated via realtime so a fresh alert appears without needing the
 // operator to refresh the page.
-export function useTamperAlerts(limit = 20) {
+// scope: 'evidence' (tamper_alerts joined with evidence) or
+//        'alignment' (behaviour_tamper_alerts joined with behaviour).
+// Both tables are normalised the same way; the joined title field lets the
+// dashboard render the affected record's name inline.
+export function useTamperAlerts(limit = 20, scope = 'evidence') {
   const [alerts, setAlerts]   = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const table = scope === 'alignment' ? 'behaviour_tamper_alerts' : 'tamper_alerts';
+  const join  = scope === 'alignment' ? 'behaviour(title)'        : 'evidence(title)';
+
   const refetch = () => {
     supabase
-      .from('tamper_alerts')
-      .select('*, evidence(title)')
+      .from(table)
+      .select(`*, ${join}`)
       .order('detected_at', { ascending: false })
       .limit(limit)
       .then(({ data }) => {
@@ -363,12 +370,12 @@ export function useTamperAlerts(limit = 20) {
     refetch();
     const debouncedRefetch = debounce(refetch, 200);
     const ch = supabase
-      .channel('tamper-alerts')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tamper_alerts' }, debouncedRefetch)
+      .channel(`tamper-alerts-${scope}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table }, debouncedRefetch)
       .subscribe();
     return () => supabase.removeChannel(ch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [limit]);
+  }, [limit, scope]);
 
   return { alerts, loading };
 }
