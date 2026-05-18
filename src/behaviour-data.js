@@ -125,3 +125,63 @@ export async function markBehaviourOnchain(uuid, txHash) {
     submission_tx_hash:   txHash,
   }).eq('id', uuid);
 }
+
+// ── Identity-header counts ──────────────────────────────────────────────────
+// Parallel to useMyReviewCount + queue.filter on the evidence side, surfaced
+// in the peer-review dashboard's identity strip so peers see at a glance
+// how much alignment work they've done and how much is waiting.
+
+export function useMyBehaviourReviewCount(addr) {
+  const [count, setCount] = useState(null);
+
+  useEffect(() => {
+    if (!addr) { setCount(null); return; }
+    let cancelled = false;
+    supabase
+      .from('behaviour_attestations')
+      .select('*', { count: 'exact', head: true })
+      .eq('peer_addr', addr)
+      .then(({ count: c }) => { if (!cancelled) setCount(c ?? 0); });
+    return () => { cancelled = true; };
+  }, [addr]);
+
+  return count;
+}
+
+// "Needs review" — pending, on-chain behaviour rows the peer hasn't voted on.
+// Computed as (pending on-chain) minus (this peer's review attestations against
+// pending rows). Two short queries; refresh on either table changing.
+export function useBehaviourNeedsReviewCount(addr) {
+  const [count, setCount] = useState(0);
+
+  const refetch = useCallback(async () => {
+    if (!addr) { setCount(0); return; }
+    const { data: pending } = await supabase
+      .from('behaviour')
+      .select('id')
+      .eq('status', 'pending')
+      .eq('submitted_onchain', true);
+    if (!pending || pending.length === 0) { setCount(0); return; }
+    const ids = pending.map(r => r.id);
+    const { data: voted } = await supabase
+      .from('behaviour_attestations')
+      .select('behaviour_id')
+      .eq('peer_addr', addr)
+      .eq('phase', 'review')
+      .in('behaviour_id', ids);
+    const votedSet = new Set((voted ?? []).map(v => v.behaviour_id));
+    setCount(ids.filter(id => !votedSet.has(id)).length);
+  }, [addr]);
+
+  useEffect(() => {
+    refetch();
+    const ch = supabase
+      .channel(`needs-review-behaviour-${addr ?? 'none'}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'behaviour' },              refetch)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'behaviour_attestations' }, refetch)
+      .subscribe();
+    return () => supabase.removeChannel(ch);
+  }, [addr, refetch]);
+
+  return count;
+}

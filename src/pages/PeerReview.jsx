@@ -35,7 +35,11 @@ import {
   openBehaviourChallengeOnChain, castBehaviourChallengeVoteOnChain,
   finalizeBehaviourChallengeOnChain, computeTripleHash,
 } from '../lib/wallet';
-import { BEHAVIOUR_DOMAINS, STATUS_LABEL as BH_STATUS_LABEL } from '../behaviour-data';
+import {
+  BEHAVIOUR_DOMAINS,
+  STATUS_LABEL as BH_STATUS_LABEL,
+  useMyBehaviourReviewCount, useBehaviourNeedsReviewCount,
+} from '../behaviour-data';
 import metamaskFox from '../assets/metamask-fox.svg';
 import '../styles/interstellar.css';
 import '../styles/peer-review.css';
@@ -169,7 +173,7 @@ function Nav({ wallet, role, onDisconnect }) {
 }
 
 // ── IdentityHeader ────────────────────────────────────────────────────────────
-function IdentityHeader({ me, role, pendingCount, reviewCount }) {
+function IdentityHeader({ me, role, pendingCount, reviewCount, bhPendingCount, bhReviewCount }) {
   const tags = [];
   if (role === 'elder') tags.push({ label: 'Genesis peer', cls: 'elder' });
   if (role === 'peer' || role === 'elder') tags.push({ label: 'Verified · can attest', cls: 'ok' });
@@ -190,8 +194,10 @@ function IdentityHeader({ me, role, pendingCount, reviewCount }) {
         </div>
       </div>
       <div className="pr-id-stats">
-        <div className="pr-id-stat"><b>{reviewCount ?? '…'}</b><span>Reviews signed</span></div>
-        <div className="pr-id-stat"><b>{pendingCount}</b><span>Needs review</span></div>
+        <div className="pr-id-stat"><b>{reviewCount ?? '…'}</b><span>Evidence signed</span></div>
+        <div className="pr-id-stat"><b>{pendingCount}</b><span>Evidence pending</span></div>
+        <div className="pr-id-stat"><b>{bhReviewCount ?? '…'}</b><span>Alignment signed</span></div>
+        <div className="pr-id-stat"><b>{bhPendingCount ?? 0}</b><span>Alignment pending</span></div>
       </div>
     </section>
   );
@@ -2642,7 +2648,9 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
     return queue;
   }, [queue, filter, myVotes]);
 
-  const reviewCount = useMyReviewCount(me?.addr);
+  const reviewCount    = useMyReviewCount(me?.addr);
+  const bhReviewCount  = useMyBehaviourReviewCount(me?.addr);
+  const bhPendingCount = useBehaviourNeedsReviewCount(me?.addr);
 
   // ── Review vote handler ────────────────────────────────────────────────────
   const handleVote = (item, verdict) => {
@@ -2934,7 +2942,13 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
 
   return (
     <div>
-      <IdentityHeader me={me} role={role} pendingCount={queue.filter(e => !myVotes[e.id]).length} reviewCount={reviewCount} />
+      <IdentityHeader
+        me={me} role={role}
+        pendingCount={queue.filter(e => !myVotes[e.id]).length}
+        reviewCount={reviewCount}
+        bhPendingCount={bhPendingCount}
+        bhReviewCount={bhReviewCount}
+      />
 
       {/* Top-level toggle: evidence | alignment | peers (shared registry) */}
       <div className="pr-tabs" style={{ marginBottom: 8, borderBottom: '1px solid var(--line-soft)' }}>
