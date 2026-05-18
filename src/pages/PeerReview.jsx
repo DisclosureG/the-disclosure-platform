@@ -2818,7 +2818,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
     <div>
       <IdentityHeader me={me} role={role} pendingCount={queue.filter(e => !myVotes[e.id]).length} reviewCount={reviewCount} />
 
-      {/* Record-type toggle: evidence (default) | behaviour (alignment archive) */}
+      {/* Top-level toggle: evidence | alignment | peers (shared registry) */}
       <div className="pr-tabs" style={{ marginBottom: 8, borderBottom: '1px solid var(--line-soft)' }}>
         <button
           className={`pr-tab ${recordType === 'evidence' ? 'is-active' : ''}`}
@@ -2832,6 +2832,12 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
         >
           Alignment
         </button>
+        <button
+          className={`pr-tab ${recordType === 'peers' ? 'is-active' : ''}`}
+          onClick={() => setRecordType('peers')}
+        >
+          Peer registry
+        </button>
       </div>
 
       {recordType === 'behaviour' && (
@@ -2844,6 +2850,20 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
         />
       )}
 
+      {recordType === 'peers' && (
+        <PeerRegistryTab
+          me={me}
+          nomineeThreshold={nomineeThreshold}
+          revokeThreshold={revokeThreshold}
+          nominationsOpen={nominationsOpen}
+          seedPhaseK={seedPhaseK}
+          peerCount={peerCount}
+          onEndorse={handleEndorse}
+          onMotionRevoke={handleMotionRevoke}
+          onVoteRevoke={handleVoteRevoke}
+        />
+      )}
+
       {recordType === 'evidence' && (
       <>
       <div className="pr-tabs">
@@ -2852,9 +2872,6 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
         </button>
         <button className={`pr-tab ${tab === 'challenges' ? 'is-active' : ''}`} onClick={() => setTab('challenges')}>
           Challenges <span className="count">{contested.length}</span>
-        </button>
-        <button className={`pr-tab ${tab === 'peers' ? 'is-active' : ''}`} onClick={() => setTab('peers')}>
-          Peer registry
         </button>
         <button className={`pr-tab ${tab === 'log' ? 'is-active' : ''}`} onClick={() => setTab('log')}>
           Attestation log
@@ -2965,20 +2982,8 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
         </section>
       )}
 
-      {/* ── Peer registry ── */}
-      {tab === 'peers' && (
-        <PeerRegistryTab
-          me={me}
-          nomineeThreshold={nomineeThreshold}
-          revokeThreshold={revokeThreshold}
-          nominationsOpen={nominationsOpen}
-          seedPhaseK={seedPhaseK}
-          peerCount={peerCount}
-          onEndorse={handleEndorse}
-          onMotionRevoke={handleMotionRevoke}
-          onVoteRevoke={handleVoteRevoke}
-        />
-      )}
+      {/* Peer registry is now promoted to a top-level toggle (above) since
+          the same registry governs both evidence and alignment. */}
 
       {/* ── Attestation log ── */}
       {tab === 'log' && (
