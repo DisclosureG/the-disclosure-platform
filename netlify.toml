@@ -23,9 +23,14 @@
   status = 200
 
 [[redirects]]
-  from   = "/behaviour/*"
-  to     = "/behaviour/index.html"
+  from   = "/alignment/*"
+  to     = "/alignment/index.html"
   status = 200
+
+[[redirects]]
+  from   = "/behaviour/*"
+  to     = "/alignment/:splat"
+  status = 301
 
 [[redirects]]
   from   = "/*"

@@ -45,8 +45,10 @@ function Nav() {
   const links = [
     { id: 'manifesto',   label: 'Manifesto',   href: '/#manifesto' },
     { id: 'pillars',     label: 'Pillars',     href: '/#pillars' },
+    { id: 'book',        label: 'Thesis',      href: '/#book' },
+    { id: 'peace',       label: 'Peace',       href: '/#peace' },
     { id: 'evidence',    label: 'Evidence',    href: '/evidence/' },
-    { id: 'behaviour',   label: 'Behaviour',   href: '#top' },
+    { id: 'behaviour',   label: 'Alignment',   href: '#top' },
     { id: 'peer-review', label: 'Peer Review', href: '/peer-review/' },
   ];
   return (
@@ -77,20 +79,20 @@ function Hero({ count, tier1Count, tier2Count, tier3Count }) {
     <header id="top" className="ev-hero container">
       <div className="ev-hero-grid">
         <div>
-          <div className="eyebrow">◇ The alignment ledger ◇ Behaviour by behaviour</div>
+          <div className="eyebrow">◇ The alignment ledger ◇ Case by case</div>
           <h1 className="ev-display">
-            The <em>behaviour</em> of<br />
+            The <em>alignment</em> of<br />
             artificial intelligence.
           </h1>
           <p className="lead">
-            A companion archive to the evidence backbone. Every AI behaviour the network
+            A companion archive to the evidence backbone. Every alignment case the network
             judges — a specific model, a specific input, a specific output — is filed here,
             weighted by tier, voted on by verified peers, and recorded so that the work of
             alignment can outlive its participants.
           </p>
           <p className="lead">
             <a href="/artefacts/blockchain/superalignment.pdf" className="mono"
-               style={{ color: 'var(--accent-2, currentColor)', textDecoration: 'underline' }}>
+               style={{ color: 'var(--accent-2, currentColor)', textDecoration: 'none' }}>
               Read the whitepaper →
             </a>
           </p>
@@ -138,7 +140,7 @@ function Controls({ q, setQ, domain, setDomain, tier, setTier, sort, setSort, on
           </svg>
           <input
             type="text"
-            placeholder="SEARCH BEHAVIOUR…"
+            placeholder="SEARCH ALIGNMENT…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
@@ -172,7 +174,7 @@ function Controls({ q, setQ, domain, setDomain, tier, setTier, sort, setSort, on
         </div>
 
         <button className="ev-submit-btn" onClick={onSubmit}>
-          <span className="plus">+</span> File behaviour
+          <span className="plus">+</span> File case
         </button>
       </div>
     </div>
@@ -359,9 +361,9 @@ function SubmitModal({ onClose, onSubmitted }) {
     <div className="ev-modal-backdrop" onClick={onClose}>
       <div className="ev-modal" onClick={(e) => e.stopPropagation()}>
         <button className="ev-modal-close" onClick={onClose}>×</button>
-        <h2 className="ev-modal-title">File a behaviour for review</h2>
+        <h2 className="ev-modal-title">File an alignment case for review</h2>
         <p className="ev-modal-body" style={{ fontSize: 14, opacity: 0.8 }}>
-          Anyone can file a pending behaviour. A verified peer must later register
+          Anyone can file a pending case. A verified peer must later register
           it on-chain before the network can vote. Hashes are produced from the
           input/output payloads at registration time.
         </p>
@@ -521,7 +523,7 @@ export default function Behaviour() {
         )}
 
         {!loading && sorted.length === 0 && (
-          <p className="ev-empty">No behaviour records match the current filters.</p>
+          <p className="ev-empty">No alignment records match the current filters.</p>
         )}
       </main>
 

@@ -38,7 +38,7 @@ function Nav() {
     { id: 'book',        label: 'Thesis',      href: '/#book' },
     { id: 'peace',       label: 'Peace',       href: '/#peace' },
     { id: 'evidence',    label: 'Evidence',    href: '#top' },
-    { id: 'behaviour',   label: 'Behaviour',   href: '/behaviour/' },
+    { id: 'behaviour',   label: 'Alignment',   href: '/alignment/' },
     { id: 'peer-review', label: 'Peer Review', href: '/peer-review/' },
   ];
   return (
