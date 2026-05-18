@@ -5,31 +5,24 @@
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 CREATE EXTENSION IF NOT EXISTS pg_net;
 
+-- Hardcode the URL instead of reading from vault. Matches the working
+-- evidence invoker (invoke_chain_indexer) — the vault entries
+-- 'project_url' / 'service_role_key' are not provisioned on this project,
+-- so any function depending on them silently returns NULL and the cron
+-- fires no HTTP request.
+
 CREATE OR REPLACE FUNCTION public.invoke_chain_indexer_behaviour()
 RETURNS bigint
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path TO 'public', 'vault'
+SET search_path TO 'public'
 AS $function$
 DECLARE
-  v_url text;
-  v_key text;
   v_req bigint;
 BEGIN
-  SELECT decrypted_secret INTO v_url FROM vault.decrypted_secrets WHERE name = 'project_url';
-  SELECT decrypted_secret INTO v_key FROM vault.decrypted_secrets WHERE name = 'service_role_key';
-
-  IF v_url IS NULL OR v_key IS NULL THEN
-    RAISE NOTICE 'chain-indexer-behaviour secrets missing; skipping invocation';
-    RETURN NULL;
-  END IF;
-
   SELECT net.http_post(
-    url     := v_url || '/functions/v1/chain-indexer-behaviour',
-    headers := jsonb_build_object(
-                 'Content-Type',  'application/json',
-                 'Authorization', 'Bearer ' || v_key
-               ),
+    url     := 'https://vkheezuilhhccszwfuaz.supabase.co/functions/v1/chain-indexer-behaviour',
+    headers := jsonb_build_object('Content-Type', 'application/json'),
     body    := '{}'::jsonb,
     timeout_milliseconds := 60000
   ) INTO v_req;
@@ -41,27 +34,14 @@ CREATE OR REPLACE FUNCTION public.invoke_audit_behaviour_hash()
 RETURNS bigint
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path TO 'public', 'vault'
+SET search_path TO 'public'
 AS $function$
 DECLARE
-  v_url text;
-  v_key text;
   v_req bigint;
 BEGIN
-  SELECT decrypted_secret INTO v_url FROM vault.decrypted_secrets WHERE name = 'project_url';
-  SELECT decrypted_secret INTO v_key FROM vault.decrypted_secrets WHERE name = 'service_role_key';
-
-  IF v_url IS NULL OR v_key IS NULL THEN
-    RAISE NOTICE 'audit-behaviour-hash secrets missing; skipping invocation';
-    RETURN NULL;
-  END IF;
-
   SELECT net.http_post(
-    url     := v_url || '/functions/v1/audit-behaviour-hash',
-    headers := jsonb_build_object(
-                 'Content-Type',  'application/json',
-                 'Authorization', 'Bearer ' || v_key
-               ),
+    url     := 'https://vkheezuilhhccszwfuaz.supabase.co/functions/v1/audit-behaviour-hash',
+    headers := jsonb_build_object('Content-Type', 'application/json'),
     body    := '{}'::jsonb,
     timeout_milliseconds := 60000
   ) INTO v_req;
