@@ -79,6 +79,12 @@ function Hero({ count, tier1Count, tier2Count, tier3Count }) {
             record that supports it — papers, books, podcasts, declassified files, testimony.
             Organised by pillar, weighted by tier, open to the world for additions.
           </p>
+          <p className="lead">
+            <a href="/artefacts/blockchain/whitepaper.pdf" className="mono"
+               style={{ color: 'var(--accent-2, currentColor)', textDecoration: 'none' }}>
+              Read the whitepaper →
+            </a>
+          </p>
         </div>
         <aside className="ev-counter">
           <div className="ev-counter-head">

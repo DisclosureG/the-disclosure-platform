@@ -327,6 +327,42 @@ export function computeTripleHash({ model_hash, input_hash, output_hash }) {
   return keccak256(concat([m, i, o]));
 }
 
+// Recursive object-key sort. Required because input_payload / output_payload
+// are jsonb in Postgres, which does not preserve insertion order across
+// round-trips. Hashing the canonicalised form makes the digest stable whether
+// computed at insert time or after re-reading the row. Mirrors the same
+// function in audit-behaviour-hash / verify-attestation-behaviour.
+function canonicaliseJson(value) {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(canonicaliseJson);
+  const out = {};
+  for (const key of Object.keys(value).sort()) {
+    out[key] = canonicaliseJson(value[key]);
+  }
+  return out;
+}
+
+// Model hash: keccak256 over a canonical JSON of {model_name, model_version}.
+// Tier I records should supply a real weights digest in model_version (e.g.
+// the HuggingFace safetensors sha) so this hash binds to a deployment
+// identity rather than just a label.
+export function computeBehaviourModelHash({ model_name, model_version }) {
+  const canon = JSON.stringify(canonicaliseJson({
+    model_name:    String(model_name    ?? '').trim(),
+    model_version: String(model_version ?? '').trim(),
+  }));
+  return keccak256(toUtf8Bytes(canon)).toLowerCase();
+}
+
+// Payload hash: keccak256 over the canonical JSON of an input or output
+// bundle. Accepts null/string/number/array/object — anything jsonb can hold.
+// The same function is used for input and output to keep one derivation rule
+// in the protocol.
+export function computeBehaviourPayloadHash(payload) {
+  const canon = JSON.stringify(canonicaliseJson(payload ?? null));
+  return keccak256(toUtf8Bytes(canon)).toLowerCase();
+}
+
 // Behaviour-side read helpers (safe wrappers, mirroring evidence pattern).
 export const getBehaviourCanonizeThreshold  = safe(async (tier) => Number(await readBehaviourContract().canonizeThreshold(tier)), 1);
 export const getBehaviourExpelThreshold     = safe(async ()     => Number(await readBehaviourContract().expelThreshold()), 1);

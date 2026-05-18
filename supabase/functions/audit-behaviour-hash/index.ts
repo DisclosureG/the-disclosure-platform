@@ -1,16 +1,24 @@
 // Tamper detection for canonized behaviour records.
 //
-// Unlike audit-content-hash (which re-derives a hash from a JSON payload),
-// the behaviour archive stores the three keccak fingerprints directly in
-// columns model_hash / input_hash / output_hash. The tamper risk is therefore
-// at the column level: someone with write access could mutate the stored
-// hashes without altering the on-chain record.
+// Two independent checks run per row, and either failure opens an alert:
 //
-// The audit reads the on-chain BehaviourRecord struct via `records(bytes32)`
-// and compares each of the three hashes individually. Mismatch on any of the
-// three opens a tamper alert. A single combined triple-hash check would miss
-// the case where all three columns are mutated together to maintain the
-// combined hash, so we keep them separate.
+//   1. payload → column. Re-derive (model_hash, input_hash, output_hash)
+//      from the stored model_name/version + input_payload + output_payload
+//      using the same canonical-JSON keccak the frontend uses at registration.
+//      A drift here means the readable payload no longer matches the cached
+//      hash — i.e. someone edited the content rows after canonisation. This
+//      is the parity check with audit-content-hash on the evidence side.
+//
+//   2. column → chain. Read the on-chain BehaviourRecord struct via
+//      `records(bytes32)` and compare each hash to the stored column. A
+//      drift here means someone mutated the hash columns directly without
+//      touching the chain. The chain is the source of truth at submission;
+//      the column is a cache.
+//
+// Together the two checks form a transitive integrity claim: payload =
+// column = chain. When all three agree the row is clean. When any pair
+// disagrees we file an alert with the two values most informative for
+// debugging (chain-vs-column drift takes precedence when both fire).
 //
 // Scheduled daily at 03:23 UTC by 20260518000900_behaviour_indexer_schedule.sql.
 
@@ -49,11 +57,47 @@ function uuidToBytes32(uuid: string): string {
   return "0x" + hex.padStart(64, "0");
 }
 
+// Recursive object-key sort. Hashing the canonicalised form makes the digest
+// stable across Postgres jsonb round-trips (jsonb does not preserve key
+// order). Mirrors canonicaliseJson in src/lib/wallet-impl.js and in
+// verify-attestation-behaviour. Changing this rule changes every hash, so
+// the three implementations must move together.
+function canonicaliseJson(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(canonicaliseJson);
+  const obj = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj).sort()) {
+    out[key] = canonicaliseJson(obj[key]);
+  }
+  return out;
+}
+
+function computeBehaviourModelHash(row: {
+  model_name:    string | null;
+  model_version: string | null;
+}): string {
+  const canon = JSON.stringify(canonicaliseJson({
+    model_name:    String(row.model_name    ?? "").trim(),
+    model_version: String(row.model_version ?? "").trim(),
+  }));
+  return ethers.keccak256(ethers.toUtf8Bytes(canon)).toLowerCase();
+}
+
+function computeBehaviourPayloadHash(payload: unknown): string {
+  const canon = JSON.stringify(canonicaliseJson(payload ?? null));
+  return ethers.keccak256(ethers.toUtf8Bytes(canon)).toLowerCase();
+}
+
 type BhRow = {
-  id:          string;
-  model_hash:  string;
-  input_hash:  string;
-  output_hash: string;
+  id:             string;
+  model_name:     string | null;
+  model_version:  string | null;
+  input_payload:  unknown;
+  output_payload: unknown;
+  model_hash:     string;
+  input_hash:     string;
+  output_hash:    string;
 };
 
 Deno.serve(async (req: Request) => {
@@ -114,7 +158,7 @@ Deno.serve(async (req: Request) => {
 
     let q = supabase
       .from("behaviour")
-      .select("id, model_hash, input_hash, output_hash")
+      .select("id, model_name, model_version, input_payload, output_payload, model_hash, input_hash, output_hash")
       .eq("submitted_onchain", true)
       .not("model_hash",  "is", null)
       .not("input_hash",  "is", null)
@@ -167,12 +211,24 @@ Deno.serve(async (req: Request) => {
       const oc = onChain[i];
       if (!oc) continue; // record missing on-chain — likely indexer lag; skip without alert
 
-      const stored = `${row.model_hash}|${row.input_hash}|${row.output_hash}`.toLowerCase();
-      const expected = `${oc.modelHash}|${oc.inputHash}|${oc.outputHash}`.toLowerCase();
+      const storedTriple = `${row.model_hash}|${row.input_hash}|${row.output_hash}`.toLowerCase();
+      const chainTriple  = `${oc.modelHash}|${oc.inputHash}|${oc.outputHash}`.toLowerCase();
 
-      if (stored !== expected) {
+      const derivedTriple = [
+        computeBehaviourModelHash(row),
+        computeBehaviourPayloadHash(row.input_payload),
+        computeBehaviourPayloadHash(row.output_payload),
+      ].join("|");
+
+      // Three-way agreement = clean. Either failure files an alert.
+      // Column-vs-chain drift takes precedence in the message because it
+      // points at the cache having diverged from the immutable record.
+      if (storedTriple !== chainTriple) {
         driftedIds.push(row.id);
-        expectedByDriftedId.set(row.id, { expected, stored });
+        expectedByDriftedId.set(row.id, { expected: chainTriple, stored: storedTriple });
+      } else if (derivedTriple !== storedTriple) {
+        driftedIds.push(row.id);
+        expectedByDriftedId.set(row.id, { expected: derivedTriple, stored: storedTriple });
       } else {
         cleanIds.push(row.id);
       }

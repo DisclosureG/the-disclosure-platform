@@ -34,6 +34,7 @@ import {
   submitBehaviourOnChain, castBehaviourReviewVoteOnChain,
   openBehaviourChallengeOnChain, castBehaviourChallengeVoteOnChain,
   finalizeBehaviourChallengeOnChain, computeTripleHash,
+  computeBehaviourModelHash, computeBehaviourPayloadHash,
 } from '../lib/wallet';
 import {
   BEHAVIOUR_DOMAINS,
@@ -1484,7 +1485,7 @@ function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attesta
             <div style={{ display: 'flex', marginBottom: 8, gap: 12, alignItems: 'center' }}>
               <span className="eyebrow">How it works</span>
               <span style={{ flex: 1 }} />
-              <a href="/artefacts/blockchain/whitepaper.pdf" target="_blank" rel="noopener noreferrer" className="mono" style={{ fontSize: 9, color: 'var(--accent-2)', letterSpacing: '0.18em', textDecoration: 'none', textTransform: 'uppercase' }}>Whitepaper ↗</a>
+              <a href="/artefacts/blockchain/superalignment.pdf" target="_blank" rel="noopener noreferrer" className="mono" style={{ fontSize: 9, color: 'var(--accent-2)', letterSpacing: '0.18em', textDecoration: 'none', textTransform: 'uppercase' }}>Whitepaper ↗</a>
             </div>
             {[
               ['01', 'Connect your wallet', 'We never read your balance. The signature only proves you control the address.'],
@@ -2351,16 +2352,18 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
     setChainErr(null);
     try {
       // Hash the off-chain bundles so the on-chain record binds to them. The
-      // model_hash, input_hash, output_hash are produced here and persisted to
-      // the row via the verify-attestation-behaviour edge function after the
-      // tx confirms. For Tier I we expect callers to supply a published model
-      // digest; absent one, hashing the model_name+version is the working
-      // fallback.
-      const enc = (v) => '0x' + Array.from(new TextEncoder().encode(JSON.stringify(v ?? null)))
-        .map(b => b.toString(16).padStart(2, '0')).join('').padEnd(64, '0').slice(0, 64);
-      const m = enc(`${item.model_name}|${item.model_version || ''}`);
-      const i = enc(item.input_payload);
-      const o = enc(item.output_payload);
+      // three hashes are real keccak256 over a key-sorted JSON canonicalisation
+      // — the same derivation rule the audit-behaviour-hash edge function and
+      // any independent auditor can replay against the cache. Tier I records
+      // should supply a published weights digest in model_version (e.g. the
+      // HuggingFace safetensors sha) so model_hash binds to a deployment
+      // identity rather than just a label.
+      const m = await computeBehaviourModelHash({
+        model_name:    item.model_name,
+        model_version: item.model_version,
+      });
+      const i = await computeBehaviourPayloadHash(item.input_payload);
+      const o = await computeBehaviourPayloadHash(item.output_payload);
 
       // Persist hashes locally so the trigger / detail view can show them.
       await supabase.from('behaviour').update({

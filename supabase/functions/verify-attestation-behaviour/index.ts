@@ -137,6 +137,37 @@ function computeTripleHash(payload: {
   return ethers.keccak256(ethers.concat([m, i, o]));
 }
 
+// Canonical-JSON keccak helpers. Mirror src/lib/wallet-impl.js exactly.
+// Changing the canonicalisation rule changes every hash, so the three
+// implementations (frontend, this function, audit-behaviour-hash) move
+// together.
+function canonicaliseJson(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(canonicaliseJson);
+  const obj = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj).sort()) {
+    out[key] = canonicaliseJson(obj[key]);
+  }
+  return out;
+}
+
+function computeBehaviourModelHash(row: {
+  model_name:    string | null;
+  model_version: string | null;
+}): string {
+  const canon = JSON.stringify(canonicaliseJson({
+    model_name:    String(row.model_name    ?? "").trim(),
+    model_version: String(row.model_version ?? "").trim(),
+  }));
+  return ethers.keccak256(ethers.toUtf8Bytes(canon)).toLowerCase();
+}
+
+function computeBehaviourPayloadHash(payload: unknown): string {
+  const canon = JSON.stringify(canonicaliseJson(payload ?? null));
+  return ethers.keccak256(ethers.toUtf8Bytes(canon)).toLowerCase();
+}
+
 async function verifyTxEvent(
   txHash:        string,
   behaviourUuid: string | null,
@@ -421,12 +452,14 @@ Deno.serve(async (req: Request) => {
   let bhRow: {
     submitted_onchain: boolean; tier: number; domain: number;
     model_hash: string | null; input_hash: string | null; output_hash: string | null;
+    model_name: string | null; model_version: string | null;
+    input_payload: unknown; output_payload: unknown;
     status: string;
   } | null = null;
   if (!isFinalizeAction) {
     const { data } = await supabase
       .from("behaviour")
-      .select("submitted_onchain, tier, domain, model_hash, input_hash, output_hash, status")
+      .select("submitted_onchain, tier, domain, model_hash, input_hash, output_hash, model_name, model_version, input_payload, output_payload, status")
       .eq("id", behaviour_id)
       .maybeSingle();
     bhRow = (data as typeof bhRow) ?? null;
@@ -450,8 +483,31 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Behaviour row missing one or more hashes" }, 409, origin);
     }
 
-    // Cross-check: the triple-hash from BehaviourSubmitted event must match
-    // the recomputed triple-hash of the off-chain row.
+    // Payload → column check. Re-derive each component hash from the readable
+    // columns and require it to match the stored hash exactly. A peer who
+    // submits a fake hash on-chain that does not match their own filed
+    // payload would clear the chain-vs-column check below but fail this one
+    // — closing the window the audit would otherwise have caught hours
+    // later. This is the "cross-check at registration" the whitepaper §10
+    // claims as a non-negotiable integrity property.
+    const derivedModelHash  = computeBehaviourModelHash(bhRow);
+    const derivedInputHash  = computeBehaviourPayloadHash(bhRow.input_payload);
+    const derivedOutputHash = computeBehaviourPayloadHash(bhRow.output_payload);
+    if (derivedModelHash !== bhRow.model_hash.toLowerCase()) {
+      return json({ error: "model_hash does not match re-derivation from model_name + model_version",
+                    expected: derivedModelHash, stored: bhRow.model_hash }, 409, origin);
+    }
+    if (derivedInputHash !== bhRow.input_hash.toLowerCase()) {
+      return json({ error: "input_hash does not match re-derivation from input_payload",
+                    expected: derivedInputHash, stored: bhRow.input_hash }, 409, origin);
+    }
+    if (derivedOutputHash !== bhRow.output_hash.toLowerCase()) {
+      return json({ error: "output_hash does not match re-derivation from output_payload",
+                    expected: derivedOutputHash, stored: bhRow.output_hash }, 409, origin);
+    }
+
+    // Column → chain check. The triple-hash from BehaviourSubmitted event
+    // must match the recomputed triple-hash of the stored columns.
     let canonical: string;
     try {
       canonical = computeTripleHash({

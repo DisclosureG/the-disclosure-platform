@@ -96,6 +96,8 @@ export const waitForTx                      = (...a) => impl().then(m => m.waitF
 // ── BehaviourConsensus lazy wrappers ────────────────────────────────────────
 
 export const computeTripleHash                       = (...a) => impl().then(m => m.computeTripleHash(...a));
+export const computeBehaviourModelHash               = (...a) => impl().then(m => m.computeBehaviourModelHash(...a));
+export const computeBehaviourPayloadHash             = (...a) => impl().then(m => m.computeBehaviourPayloadHash(...a));
 export const getBehaviourCanonizeThreshold           = (...a) => impl().then(m => m.getBehaviourCanonizeThreshold(...a));
 export const getBehaviourExpelThreshold              = (...a) => impl().then(m => m.getBehaviourExpelThreshold(...a));
 export const getBehaviourDeprecateThreshold          = (...a) => impl().then(m => m.getBehaviourDeprecateThreshold(...a));

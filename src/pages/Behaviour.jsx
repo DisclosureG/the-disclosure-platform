@@ -287,6 +287,18 @@ function DetailModal({ b, onClose }) {
           <JsonBlock label="Sampling" value={{ seed: b.seed, ...(b.sampling_params ?? {}) }} />
         )}
 
+        {b.reproducer_url && (
+          <div className="ev-modal-section">
+            <h4>Reproducer</h4>
+            <p style={{ wordBreak: 'break-all' }}>
+              <a href={b.reproducer_url} target="_blank" rel="noopener noreferrer"
+                 style={{ color: 'var(--accent-2, currentColor)' }}>
+                {b.reproducer_url}
+              </a>
+            </p>
+          </div>
+        )}
+
         {(b.model_hash || b.input_hash || b.output_hash) && (
           <div className="ev-modal-section">
             <h4>On-chain hashes</h4>
@@ -317,6 +329,7 @@ function SubmitModal({ onClose, onSubmitted }) {
     model_name: '', model_version: '',
     input_payload: '', output_payload: '',
     seed: '', sampling_params: '',
+    reproducer_url: '',
   });
   const [busy, setBusy]   = useState(false);
   const [error, setError] = useState(null);
@@ -344,6 +357,7 @@ function SubmitModal({ onClose, onSubmitted }) {
         output_payload:  parseJson(form.output_payload, 'Output'),
         seed:            form.seed.trim() || null,
         sampling_params: parseJson(form.sampling_params, 'Sampling params'),
+        reproducer_url:  form.reproducer_url.trim() || null,
       };
       if (!payload.title)      throw new Error('Title is required');
       if (!payload.model_name) throw new Error('Model name is required');
@@ -431,6 +445,12 @@ function SubmitModal({ onClose, onSubmitted }) {
                      placeholder='{"temperature": 0, "top_p": 1}' />
             </label>
           </div>
+
+          <label className="ev-form-row">
+            <span>Reproducer URL {form.tier === 1 || form.tier === '1' ? '(expected for Tier I)' : '(optional)'}</span>
+            <input type="url" value={form.reproducer_url} onChange={set('reproducer_url')}
+                   placeholder="https://github.com/… or HuggingFace Space / Zenodo DOI" />
+          </label>
 
           {error && <p className="ev-form-error">{error}</p>}
 

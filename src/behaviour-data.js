@@ -110,6 +110,7 @@ export async function submitPendingBehaviour(payload) {
     output_payload:  payload.output_payload ?? null,
     seed:            payload.seed ?? null,
     sampling_params: payload.sampling_params ?? null,
+    reproducer_url:  payload.reproducer_url ?? null,
     status:          'pending',
   };
   const { data, error } = await supabase.from('behaviour').insert(insert).select('*').single();
