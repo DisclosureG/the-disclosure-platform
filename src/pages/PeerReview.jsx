@@ -1958,82 +1958,131 @@ function useBehaviourAttestationLog({ filter = 'all', limit = 50 } = {}) {
 }
 
 function BehaviourAttestationLog() {
-  const [filter, setFilter] = useState('all');
-  const { rows, loading, refetch } = useBehaviourAttestationLog({ filter });
-  const [refreshing, setRefreshing] = useState(false);
+  // Mirrors the evidence ActivityLog control shape: debounced search +
+  // verdict filter chips + refresh, all inside .pr-log-controls.
+  const [query, setQuery]         = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [verdict, setVerdict]     = useState('');
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(query.trim().toLowerCase()), 250);
+    return () => clearTimeout(id);
+  }, [query]);
 
-  const handleRefresh = async () => {
+  const { rows, loading, refetch } = useBehaviourAttestationLog({ filter: 'all', limit: 200 });
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = useCallback(async () => {
     if (refreshing) return;
     setRefreshing(true);
-    const minSpin = new Promise(r => setTimeout(r, 500));
+    const minSpin = new Promise(r => setTimeout(r, 600));
     try { await Promise.all([refetch(), minSpin]); }
     finally { setRefreshing(false); }
-  };
+  }, [refreshing, refetch]);
+
+  // Client-side filter — the hook fetches the last 200 rows; query and verdict
+  // refine that locally so the UI feels instant.
+  const filtered = useMemo(() => rows.filter(r => {
+    if (verdict && r.verdict !== verdict) return false;
+    if (!debounced) return true;
+    const hay = [
+      r.behaviour?.title, r.peer_handle, r.peer_addr, r.note, r.behaviour_id,
+    ].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(debounced);
+  }), [rows, debounced, verdict]);
+
+  const filtering = debounced.length > 0 || verdict.length > 0;
+
+  const controls = (
+    <div className="pr-log-controls">
+      <div className="pr-log-filters" role="group" aria-label="Filter by verdict">
+        <button
+          type="button"
+          className={`pr-log-filter${verdict === '' ? ' is-active' : ''}`}
+          onClick={() => setVerdict('')}
+        >
+          All
+        </button>
+        {VERDICT_FILTERS.map(f => (
+          <button
+            key={f.value}
+            type="button"
+            className={`pr-log-filter ${f.cls}${verdict === f.value ? ' is-active' : ''}`}
+            onClick={() => setVerdict(prev => prev === f.value ? '' : f.value)}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+      <div className="pr-log-search">
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by handle, 0x address, or alignment case…"
+          aria-label="Search alignment attestation log"
+          spellCheck={false}
+          autoCapitalize="off"
+        />
+        <RefreshButton onClick={handleRefresh} spinning={refreshing} title="Refresh attestation log" />
+      </div>
+    </div>
+  );
+
+  if (loading && rows.length === 0) return (
+    <>
+      {controls}
+      <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING LOG…</div>
+    </>
+  );
+  if (filtered.length === 0) return (
+    <>
+      {controls}
+      <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
+        <p className="lead" style={{ margin: 0 }}>
+          {filtering ? 'No attestations match the current filter.' : 'No alignment attestations yet.'}
+        </p>
+      </div>
+    </>
+  );
 
   return (
-    <section>
-      <div className="pr-section-head">
-        <div>
-          <h2>Alignment attestation log</h2>
-          <p className="sub">
-            Every wallet-signed verdict on a behaviour record. EIP-712 signatures
-            verifiable against the peer's address; tx hashes link to BscScan.
-          </p>
-        </div>
-        <div className="right">
-          {[['all', 'All'], ['review', 'Review'], ['challenge', 'Challenge']].map(([f, label]) => (
-            <button key={f} className={`pr-filter ${filter === f ? 'is-active' : ''}`} onClick={() => setFilter(f)}>
-              {label}
-            </button>
-          ))}
-          <RefreshButton onClick={handleRefresh} spinning={refreshing} title="Refresh log" />
-        </div>
-      </div>
-
-      {loading ? (
-        <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING…</div>
-      ) : rows.length === 0 ? (
-        <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
-          <p className="lead" style={{ margin: 0 }}>No alignment attestations yet.</p>
-        </div>
-      ) : (
-        <div className="pr-attest-list">
-          {rows.map(r => {
-            const verdictCls = (r.verdict === 'approve' || r.verdict === 'defend') ? 'good'
-                             : (r.verdict === 'reject'  || r.verdict === 'challenge') ? 'bad'
-                             : '';
-            return (
-              <div key={r.id} className="pr-attest-row">
-                <div className="pr-attest-meta">
-                  <span className="pr-attest-when">{new Date(r.created_at).toLocaleString()}</span>
-                  <span className={`pr-attest-verdict ${verdictCls}`}>
-                    {r.phase === 'review' ? r.verdict : `${r.phase}:${r.verdict}`}
-                  </span>
-                </div>
-                <div className="pr-attest-body">
-                  <div style={{ fontFamily: 'var(--serif)', fontSize: 14 }}>
-                    {r.behaviour?.title || <span style={{ opacity: 0.5 }}>(unknown behaviour)</span>}
-                  </div>
-                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.6, marginTop: 4 }}>
-                    {r.peer_handle || SHORT(r.peer_addr)}
-                    {r.tx_hash && (
-                      <>
-                        {' · '}
-                        <a href={`https://bscscan.com/tx/${r.tx_hash}`} target="_blank" rel="noopener noreferrer"
-                           style={{ color: 'var(--accent-2)', textDecoration: 'none' }}>
-                          tx ↗
-                        </a>
-                      </>
-                    )}
-                  </div>
-                  {r.note && <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>{r.note}</div>}
-                </div>
+    <>
+      {controls}
+      <div className="pr-log">
+        {filtered.map((r, i) => {
+          const kindMap = { approve: 'approve', reject: 'reject', challenge: 'revoke', defend: 'endorse' };
+          const didMap  = { approve: 'aligned', reject: 'misaligned', challenge: 'challenged', defend: 'defended' };
+          const when    = new Date(r.created_at);
+          const diffH   = Math.floor((Date.now() - when.getTime()) / 3_600_000);
+          const timeStr = diffH < 1 ? 'Just now' : diffH < 24 ? `${diffH}h ago` : `${Math.floor(diffH / 24)}d ago`;
+          const explorerBase = CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com';
+          return (
+            <div key={i} className="pr-log-row">
+              <div className="pr-log-time">{timeStr}</div>
+              <div className="pr-log-event">
+                <span className={`pr-log-kind ${kindMap[r.verdict] || 'endorse'}`}>{r.verdict}</span>{' '}
+                <b>{r.peer_handle || SHORT(r.peer_addr)}</b>{' '}
+                <em>{didMap[r.verdict] || r.verdict}</em>{' '}
+                <span>{r.behaviour?.title || SHORT(r.behaviour_id)}</span>
               </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
+              <div className="pr-log-hash">
+                {r.tx_hash ? (
+                  <a
+                    href={`${explorerBase}/tx/${r.tx_hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={r.tx_hash}
+                  >
+                    {SHORT(r.tx_hash)} ↗
+                  </a>
+                ) : (
+                  <span style={{ color: 'var(--ink-faint)' }}>{SHORT(r.id)}</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
@@ -2063,98 +2112,148 @@ function useBehaviourChainEvents({ filter = 'all', limit = 100 } = {}) {
   return { rows, loading, refetch };
 }
 
-function BehaviourChainEventLog() {
-  const [filter, setFilter] = useState('all');
-  const { rows, loading, refetch } = useBehaviourChainEvents({ filter });
-  const [refreshing, setRefreshing] = useState(false);
+// Behaviour-side event-type groups (mirrors CHAIN_EVENT_FILTERS for evidence).
+const BEHAVIOUR_CHAIN_EVENT_FILTERS = [
+  { id: 'submission', label: 'Submissions', cls: 'nominate', names: ['BehaviourSubmitted'] },
+  { id: 'vote',       label: 'Votes',       cls: 'endorse',  names: ['ReviewVoteCast', 'ChallengeVoteCast'] },
+  { id: 'outcome',    label: 'Outcomes',    cls: 'approve',  names: ['BehaviourAligned', 'BehaviourMisaligned', 'BehaviourLapsed', 'BehaviourDeprecated', 'BehaviourReaffirmed'] },
+  { id: 'challenge',  label: 'Challenges',  cls: 'revoke',   names: ['ChallengeOpened'] },
+];
 
-  const handleRefresh = async () => {
+function BehaviourChainEventLog() {
+  // Mirrors the evidence ChainEventLog control shape exactly: debounced search
+  // + event-group filter chips + refresh, all inside .pr-log-controls.
+  const [query, setQuery]         = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [groupId, setGroupId]     = useState('');
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(query.trim().toLowerCase()), 250);
+    return () => clearTimeout(id);
+  }, [query]);
+
+  const { rows, loading, refetch } = useBehaviourChainEvents({ filter: 'all', limit: 300 });
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = useCallback(async () => {
     if (refreshing) return;
     setRefreshing(true);
-    const minSpin = new Promise(r => setTimeout(r, 500));
+    const minSpin = new Promise(r => setTimeout(r, 600));
     try { await Promise.all([refetch(), minSpin]); }
     finally { setRefreshing(false); }
-  };
+  }, [refreshing, refetch]);
 
-  const EVENT_FILTERS = [
-    ['all',                  'All'],
-    ['BehaviourSubmitted',   'Submitted'],
-    ['ReviewVoteCast',       'Review vote'],
-    ['BehaviourAligned',     'Aligned'],
-    ['BehaviourMisaligned',  'Misaligned'],
-    ['ChallengeOpened',      'Challenge'],
-    ['ChallengeVoteCast',    'Challenge vote'],
-    ['BehaviourDeprecated',  'Deprecated'],
-    ['BehaviourReaffirmed',  'Reaffirmed'],
-  ];
+  const activeGroup = BEHAVIOUR_CHAIN_EVENT_FILTERS.find(f => f.id === groupId);
+  const eventNames  = activeGroup ? activeGroup.names : null;
 
-  return (
-    <section>
-      <div className="pr-section-head">
-        <div>
-          <h2>Alignment chain log</h2>
-          <p className="sub">
-            Raw events emitted by the BehaviourConsensus contract, indexed every minute.
-            The chain is the receipt — every state transition appears here.
-          </p>
-        </div>
-        <div className="right">
-          <RefreshButton onClick={handleRefresh} spinning={refreshing} title="Refresh log" />
-        </div>
-      </div>
+  // Client-side filter — last 300 rows fetched once, refined locally on every
+  // keystroke / chip click.
+  const filtered = useMemo(() => rows.filter(r => {
+    if (eventNames && !eventNames.includes(r.event_name)) return false;
+    if (!debounced) return true;
+    const hay = [
+      r.peer_addr, r.event_name, r.behaviour_id,
+      r.payload?.grounds, JSON.stringify(r.payload),
+    ].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(debounced);
+  }), [rows, debounced, eventNames]);
 
-      <div className="pr-chain-filters" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
-        {EVENT_FILTERS.map(([f, label]) => (
-          <button key={f} className={`pr-filter ${filter === f ? 'is-active' : ''}`} onClick={() => setFilter(f)}>
-            {label}
+  const filtering = debounced.length > 0 || groupId.length > 0;
+
+  const controls = (
+    <div className="pr-log-controls">
+      <div className="pr-log-filters" role="group" aria-label="Filter by event type">
+        <button
+          type="button"
+          className={`pr-log-filter${groupId === '' ? ' is-active' : ''}`}
+          onClick={() => setGroupId('')}
+        >
+          All
+        </button>
+        {BEHAVIOUR_CHAIN_EVENT_FILTERS.map(f => (
+          <button
+            key={f.id}
+            type="button"
+            className={`pr-log-filter ${f.cls}${groupId === f.id ? ' is-active' : ''}`}
+            onClick={() => setGroupId(prev => prev === f.id ? '' : f.id)}
+          >
+            {f.label}
           </button>
         ))}
       </div>
+      <div className="pr-log-search">
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by handle, 0x address, or full behaviour id…"
+          aria-label="Search alignment chain log"
+          spellCheck={false}
+          autoCapitalize="off"
+        />
+        <RefreshButton onClick={handleRefresh} spinning={refreshing} title="Refresh chain log" />
+      </div>
+    </div>
+  );
 
-      {loading ? (
-        <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING…</div>
-      ) : rows.length === 0 ? (
-        <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
-          <p className="lead" style={{ margin: 0 }}>No chain events yet.</p>
-          <p className="sub" style={{ margin: '8px 0 0' }}>
-            Once a behaviour is registered on-chain, events stream in within ~60 seconds.
-          </p>
-        </div>
-      ) : (
-        <div className="pr-chain-list">
-          {rows.map(r => (
-            <div key={r.id} className="pr-chain-row" style={{
-              display: 'grid', gridTemplateColumns: '160px 1fr auto', gap: 12,
-              padding: '10px 14px', borderBottom: '1px solid var(--line-soft)',
-              alignItems: 'baseline',
-            }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.7 }}>
-                {r.occurred_at ? new Date(r.occurred_at).toLocaleString() : `block ${r.block_number}`}
-              </span>
-              <div>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600 }}>
-                  {r.event_name}
-                </span>
-                {r.peer_addr && (
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.6, marginLeft: 8 }}>
-                    by {SHORT(r.peer_addr)}
-                  </span>
-                )}
+  if (loading && rows.length === 0) return (
+    <>
+      {controls}
+      <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING CHAIN LOG…</div>
+    </>
+  );
+  if (filtered.length === 0) return (
+    <>
+      {controls}
+      <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
+        <p className="lead" style={{ margin: 0 }}>
+          {filtering ? 'No chain events match the current filter.' : 'No alignment chain events yet. Register a case on-chain to start the log.'}
+        </p>
+      </div>
+    </>
+  );
+
+  return (
+    <>
+      {controls}
+      <div className="pr-log">
+        {filtered.map(r => {
+          const when    = r.occurred_at ? new Date(r.occurred_at) : null;
+          const diffH   = when ? Math.floor((Date.now() - when.getTime()) / 3_600_000) : null;
+          const timeStr = when == null ? `block ${r.block_number}`
+                        : diffH < 1   ? 'Just now'
+                        : diffH < 24  ? `${diffH}h ago`
+                        :               `${Math.floor(diffH / 24)}d ago`;
+          const explorerBase = CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com';
+          return (
+            <div key={r.id} className="pr-log-row">
+              <div className="pr-log-time">{timeStr}</div>
+              <div className="pr-log-event">
+                <span className="pr-log-kind">{r.event_name}</span>
+                {r.peer_addr && <> <b>{SHORT(r.peer_addr)}</b></>}
                 {r.payload?.grounds && (
                   <div style={{ fontStyle: 'italic', fontSize: 12, opacity: 0.75, marginTop: 4 }}>
                     "{r.payload.grounds}"
                   </div>
                 )}
               </div>
-              <a href={`https://bscscan.com/tx/${r.tx_hash}`} target="_blank" rel="noopener noreferrer"
-                 style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--accent-2)', textDecoration: 'none' }}>
-                tx ↗
-              </a>
+              <div className="pr-log-hash">
+                {r.tx_hash ? (
+                  <a
+                    href={`${explorerBase}/tx/${r.tx_hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={r.tx_hash}
+                  >
+                    {SHORT(r.tx_hash)} ↗
+                  </a>
+                ) : (
+                  <span style={{ color: 'var(--ink-faint)' }}>block {r.block_number}</span>
+                )}
+              </div>
             </div>
-          ))}
-        </div>
-      )}
-    </section>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
