@@ -263,7 +263,7 @@ function JsonBlock({ value, label }) {
 function DetailModal({ b, onClose }) {
   if (!b) return null;
   return (
-    <div className="ev-modal-backdrop" onClick={onClose}>
+    <div className="ev-modal-backdrop is-open" onClick={onClose}>
       <div className="ev-modal" onClick={(e) => e.stopPropagation()}>
         <button className="ev-modal-close" onClick={onClose}>×</button>
         <div className="ev-modal-top">
@@ -358,7 +358,7 @@ function SubmitModal({ onClose, onSubmitted }) {
   }
 
   return (
-    <div className="ev-modal-backdrop" onClick={onClose}>
+    <div className="ev-modal-backdrop is-open" onClick={onClose}>
       <div className="ev-modal" onClick={(e) => e.stopPropagation()}>
         <button className="ev-modal-close" onClick={onClose}>×</button>
         <h2 className="ev-modal-title">File an alignment case for review</h2>
