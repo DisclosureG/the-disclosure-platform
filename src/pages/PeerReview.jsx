@@ -1464,15 +1464,32 @@ function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attesta
                 </span>
               </div>
               <div className="pr-mm-meta-row">
-                <span className="pr-mm-meta-k">Contract</span>
+                <span className="pr-mm-meta-k">Evidence contract</span>
                 {CONSENSUS_ADDR ? (
                   <a
                     className="pr-mm-meta-link"
                     href={`${CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com'}/address/${CONSENSUS_ADDR}`}
                     target="_blank"
                     rel="noopener noreferrer"
+                    title={CONSENSUS_ADDR}
                   >
                     {CONSENSUS_ADDR.slice(0, 8)}…{CONSENSUS_ADDR.slice(-6)} ↗
+                  </a>
+                ) : (
+                  <span className="pr-mm-meta-v">unset</span>
+                )}
+              </div>
+              <div className="pr-mm-meta-row">
+                <span className="pr-mm-meta-k">Alignment contract</span>
+                {BEHAVIOUR_CONSENSUS_ADDR ? (
+                  <a
+                    className="pr-mm-meta-link"
+                    href={`${CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com'}/address/${BEHAVIOUR_CONSENSUS_ADDR}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={BEHAVIOUR_CONSENSUS_ADDR}
+                  >
+                    {BEHAVIOUR_CONSENSUS_ADDR.slice(0, 8)}…{BEHAVIOUR_CONSENSUS_ADDR.slice(-6)} ↗
                   </a>
                 ) : (
                   <span className="pr-mm-meta-v">unset</span>
