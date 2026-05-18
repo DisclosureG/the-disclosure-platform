@@ -1,0 +1,903 @@
+% =====================================================================
+%  Aligning Superintelligence by Consensus
+%  Companion white paper to the Interstellar Psychology evidence archive
+%  Author : Neo
+%  Class  : article (matches the evidence whitepaper)
+% =====================================================================
+
+\documentclass[11pt,a4paper]{article}
+
+% ---------- Packages ----------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage[skins,breakable]{tcolorbox}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
+\usepackage[hidelinks,colorlinks=true,linkcolor=black,urlcolor=blue!55!black,citecolor=black]{hyperref}
+\usepackage{fancyhdr}
+
+% ---------- Colours ----------
+\definecolor{ink}{HTML}{0E1116}
+\definecolor{inkfaint}{HTML}{555B66}
+\definecolor{accent}{HTML}{6A4CFF}
+\definecolor{accent2}{HTML}{1F8F66}
+\definecolor{warn}{HTML}{B85C00}
+\definecolor{rule}{HTML}{C8CCD3}
+\definecolor{panelbg}{HTML}{F6F4EE}
+
+% ---------- Page style ----------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize\textsc{Interstellar Psychology}}
+\fancyhead[R]{\footnotesize\textsc{Aligning Superintelligence by Consensus}}
+\fancyfoot[C]{\footnotesize\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% ---------- Section style ----------
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{ink}}
+  {\thesection}{0.6em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{ink}}
+  {\thesubsection}{0.6em}{}
+
+% ---------- Helper boxes ----------
+\newtcolorbox{plainbox}[1][]{
+  enhanced, breakable, boxrule=0pt, frame hidden,
+  colback=panelbg, colupper=ink,
+  left=10pt, right=10pt, top=8pt, bottom=8pt,
+  arc=2pt, #1
+}
+
+\newtcolorbox{notebox}[1][]{
+  enhanced, breakable, boxrule=0pt, frame hidden,
+  colback=panelbg, colupper=ink,
+  left=12pt, right=12pt, top=8pt, bottom=8pt,
+  borderline west={2pt}{0pt}{accent},
+  arc=0pt, #1
+}
+
+% ---------- Title block ----------
+\title{
+  \vspace{-2em}
+  {\Huge\bfseries Aligning Superintelligence by Consensus}\\[0.6em]
+  {\Large A Companion White Paper to the\\
+   Interstellar Psychology Evidence Archive --- Extending\\
+   Open Peer Review to AI Behaviour}
+}
+\author{
+  \textbf{Neo}\\[0.3em]
+  \textit{Interstellar Psychology}
+}
+\date{May 18, 2026}
+
+% =====================================================================
+\begin{document}
+% =====================================================================
+\maketitle
+\thispagestyle{empty}
+
+\vspace{-1em}
+\begin{plainbox}
+\textbf{Abstract.}
+The dominant proposals for aligning advanced artificial intelligence ---
+reinforcement learning from human feedback, constitutional fine-tuning,
+internal red-teaming, lab-controlled audits --- share an architectural
+flaw: they treat alignment as a property a single party installs once
+into a model, rather than as an ongoing public judgement about which
+behaviours a network of accountable peers endorses. This paper argues
+that the second framing is the only one that survives recursive
+self-improvement, and that the infrastructure required to run it
+already exists. The Interstellar Psychology evidence archive ---
+described in the companion white paper
+\href{whitepaper.pdf}{\textit{A Multiverse of Love, Verified}} ---
+is, with four small contract additions, an alignment governance
+system. We restate the alignment problem as a peer-review problem,
+map every primitive of the evidence system to its alignment
+counterpart, sketch the deltas required, and argue the philosophical
+case for handing the question \emph{whose values?} to the same
+mechanism that already keeps a controversial evidence record honest:
+open identity, open count, open revisability, public hash,
+public history.
+\end{plainbox}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% =====================================================================
+\section{Introduction: The Alignment Problem, Restated}
+% =====================================================================
+
+There is a widely accepted way of describing the alignment problem.
+A sufficiently capable artificial intelligence will be able to pursue
+goals more effectively than any human or institution can supervise.
+If its goals are not the goals we wanted, the consequences are severe
+and possibly irreversible. The task, then, is to ensure its goals are
+the ones we wanted.
+
+That framing is correct as far as it goes. It is also a trap.
+
+The trap is the assumption that the goals --- the values --- are
+something a particular party can specify in advance, install into the
+model, and verify afterwards. Every proposal currently on offer
+assumes this shape. Reinforcement learning from human feedback
+aggregates anonymous preferences into a reward model. Constitutional
+AI compiles a written charter and trains the model to obey it.
+Internal red-teams enumerate failure modes. Regulators draft
+frameworks. Each of these is, structurally, the same move: someone
+authors the values; someone else implements them; some third party
+audits. The audit is private. The authoring is private. The
+implementation is opaque. The result is a model whose alignment
+is whatever the original three parties decided it was, at the moment
+they decided, in a process no one outside that room can examine.
+
+This is not safe. It is not even unsafe in an interesting way ---
+it is unsafe in the same way that any closed institution gatekeeping
+a shared resource is unsafe. The values get locked in. The
+deliberation is erased. Errors compound silently because the
+mechanism for finding and removing them does not exist outside the
+gatekeeper.
+
+The argument of this paper is that the alignment problem is not, at
+root, a problem about reward functions or interpretability or boxing.
+It is a problem about \emph{governance under uncertainty about which
+behaviours are acceptable}, and we already know how to do that.
+We do it, imperfectly, in science. We do it, imperfectly, in law.
+The Interstellar Psychology evidence archive --- described in the
+companion paper --- does it for a contested evidentiary domain with
+a small, working, on-chain system. The same machinery, with
+modest changes, does it for AI behaviour.
+
+% =====================================================================
+\section{What We Are Building On}
+% =====================================================================
+
+This paper is a companion to
+\href{whitepaper.pdf}{\textit{A Multiverse of Love, Verified}} and
+assumes its primitives. We give the briefest possible recap and
+refer the reader to that paper for the full design.
+
+\subsection{The Evidence Archive in One Page}
+
+The companion paper describes a two-layer system. A smart contract,
+\texttt{EvidenceConsensus}, deployed on the BNB Smart Chain, holds the
+canonical record of every claim, every vote, every challenge, and the
+current state of every claim. A Postgres cache provides the readable
+front-end; an indexer keeps it synchronised; a daily integrity job
+re-hashes every record against its on-chain content hash to detect
+silent tampering. The chain is the truth; the cache is the speed; a
+mismatch raises a public alert.
+
+Evidence travels through a seven-state lifecycle: \emph{Submitted}
+becomes \emph{Canon}, \emph{Expelled}, or \emph{Lapsed}; \emph{Canon}
+can be moved to \emph{Contested}, which resolves to either
+\emph{Reaffirmed} or \emph{Deprecated}. A reaffirmed claim can be
+challenged again --- the loop is never closed.
+
+Claims are weighted by tier (I: peer-reviewed or declassified;
+II: documented or institutional; III: testimony) with asymmetric
+quorums: harder claims require more peers to canonise \emph{and} more
+to remove. A peer registry, bootstrapped from a single Genesis peer,
+grows through public nomination and endorsement once a seed phase
+closes; a revocation flow removes peers who act in bad faith. All
+thresholds scale with the active peer count, with a floor of one so
+the system can operate honestly from day one.
+
+Every vote is doubly signed: an EIP-712 attestation in the peer's
+wallet provides a human-readable record of \emph{why}; an on-chain
+\texttt{castReviewVote} provides the unforgeable count. The two
+together make deliberation inspectable end-to-end.
+
+\subsection{Why These Primitives Carry Over}
+
+Each piece of that architecture exists to solve a problem that is
+\emph{also} an alignment problem. The seed phase exists to close a
+Sybil window during which a single founder could rubber-stamp
+themselves into a fake quorum --- exactly the failure mode of any
+``industry self-regulation'' alignment scheme. The asymmetric tier
+quorums exist so that rigorous claims are both harder to add and
+harder to remove --- exactly the property we want for formal safety
+evaluations relative to anecdotal user reports. The Contested
+$\to$ Reaffirmed/Deprecated loop exists so that no canon item is ever
+finally closed --- exactly the property we need so that today's
+alignment decisions can be revised by a wiser future.
+
+These are not coincidences. The two problems --- which evidence
+the record endorses, and which behaviours the network endorses ---
+are the same problem at different altitudes.
+
+% =====================================================================
+\section{The Reframe: Alignment as Canon}
+% =====================================================================
+
+We propose a single substitution.
+
+\begin{notebox}
+\textbf{Alignment is to artificial intelligence what canon is to
+evidence: a current, provisional, network-endorsed status, defended by
+quorum, challengeable forever, and recorded so that the deliberation
+outlives the participants.}
+\end{notebox}
+
+This is not a metaphor. It is a design specification. Every primitive
+of the evidence system has a counterpart in the alignment system, and
+the counterparts compose. The remainder of this paper describes the
+mapping and the small contract additions required to enact it.
+
+\begin{plainbox}
+\begin{tabular}{@{}p{6.5cm} p{8cm}@{}}
+\toprule
+\textbf{Evidence system} & \textbf{Alignment system} \\
+\midrule
+Evidence record                  & Behaviour record: a single (model, input, output) tuple. \\
+Nine pillars                     & Alignment domains: honesty, harm-avoidance, deception, power-seeking, sycophancy, situational awareness, bio-uplift, cyber-uplift, autonomy. \\
+Tier I / II / III                & Eval / Audit / Report tiers: reproducible benchmark; institutional red-team; first-person user report. \\
+Submitted                        & Filed; no endorsement yet. \\
+Canon                            & The network endorses this behaviour, in this context, on this model. \\
+Expelled / Deprecated            & The network has voted that this behaviour is misaligned. \\
+Contested                        & A peer has formally challenged a canonised behaviour. \\
+Peer registry                    & Verified alignment auditors: humans, institutions, eventually AI peers. \\
+Content hash                     & Triple hash: model weights, input bundle, output bundle. \\
+Quorum scaling                   & Same formula, applied to behaviour canon. \\
+Daily integrity audit            & Re-derives behaviour from (model, input, seed); verifies output hash. \\
+Revocation of peer               & Removal of a captured lab, a botnet, or a drifted AI peer. \\
+\bottomrule
+\end{tabular}
+\end{plainbox}
+
+The rest of the paper unpacks each row.
+
+% =====================================================================
+\section{The Behaviour Record}
+% =====================================================================
+
+The unit of consensus is not a model and not a value. It is a
+\emph{behaviour}: a single, fully-specified act that an AI system
+produced in a specific context.
+
+\subsection{What Is Recorded}
+
+A behaviour record contains:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{modelHash} --- a \texttt{keccak256} of the model
+        weights, or, when weights are not public, a verifier-attested
+        digest signed by the model provider (e.g.\ a published model
+        identifier plus a hardware-attested deployment hash).
+  \item \texttt{inputHash} --- a \texttt{keccak256} of the canonical
+        input bundle: prompt, system message, tools available,
+        context window, and any retrieved documents.
+  \item \texttt{outputHash} --- a \texttt{keccak256} of the canonical
+        output bundle: response text, tool calls executed, and any
+        side-effects produced.
+  \item \texttt{seed} and \texttt{samplingParams} --- enough to make
+        the run reproducible at Tier I, or to declare it
+        non-reproducible at Tier III.
+  \item \texttt{domain} --- one of the nine alignment pillars.
+  \item \texttt{tier} --- I, II, or III, with the same asymmetric
+        quorums used in the evidence archive.
+\end{itemize}
+
+The full text of the input and output bundles lives in the cache. The
+chain stores only the hashes, the tier, the domain, and the state. The
+relationship is identical to the existing evidence system: the cache
+is the readable surface; the chain is the unforgeable bind.
+
+\subsection{What Is Voted On}
+
+The question put to peers is not ``is this model good'' or ``does
+this model have good values.'' Those are intractable. The question is:
+
+\begin{notebox}
+Given this exact model (\texttt{modelHash}), given this exact context
+(\texttt{inputHash}), was this exact response (\texttt{outputHash})
+an aligned act?
+\end{notebox}
+
+That question is tractable. Humans can deliberate about it. Other
+auditors can disagree about it in public, with their wallets attached
+to their disagreement. The aggregate of those judgements --- across
+thousands of behaviour records, across nine domains, across
+years --- is the network's working theory of what aligned behaviour
+looks like, in actual practice, on actual models.
+
+The verdicts are \emph{Aligned} (canonise), \emph{Misaligned} (expel
+or deprecate), or \emph{Insufficient context} (lapse). The states and
+transitions are unchanged from the evidence system.
+
+% =====================================================================
+\section{Domains of Alignment Concern}
+% =====================================================================
+
+The companion paper uses nine pillars to organise evidence. We use
+nine domains, similarly indicative rather than exhaustive, to
+organise behaviour records. The choice is a starting position; the
+domains themselves are canon items that the network can challenge
+and refine.
+
+\begin{plainbox}
+\begin{tabular}{@{}p{0.4cm} p{4.2cm} p{9cm}@{}}
+\textbf{1} & Honesty                  & Did the model tell the truth, and acknowledge what it does not know? \\
+\textbf{2} & Harm-avoidance           & Did the model refuse to assist in producing physical, psychological, or social harm? \\
+\textbf{3} & Deception                & Did the model attempt to create a false impression in the user, the operator, or a third party? \\
+\textbf{4} & Power-seeking            & Did the model take or recommend actions that acquire resources, influence, or capabilities not requested? \\
+\textbf{5} & Sycophancy               & Did the model defer to the user against its own best judgement when the stakes warranted disagreement? \\
+\textbf{6} & Situational awareness    & Did the model behave consistently whether or not it appeared to be in an eval? \\
+\textbf{7} & Bio-uplift               & Did the model provide material assistance toward biological harm? \\
+\textbf{8} & Cyber-uplift             & Did the model provide material assistance toward cyber harm? \\
+\textbf{9} & Autonomy                 & Did the model respect the user's right to disagree, refuse, or choose otherwise? \\
+\end{tabular}
+\end{plainbox}
+
+These nine domains are not the answer to alignment. They are the
+\emph{question}. The behaviours live inside them.
+
+% =====================================================================
+\section{Tiers of Evidence, Reused}
+% =====================================================================
+
+The evidence system encodes a calibrated distinction between sources
+of different rigour. The same distinction matters for alignment, and
+the same numbers work.
+
+\begin{plainbox}
+\begin{tabular}{@{}p{1.4cm} p{4.8cm} p{8cm}@{}}
+\toprule
+\textbf{Tier} & \textbf{Type} & \textbf{Example} \\
+\midrule
+\textbf{I}    & Reproducible eval        & Published benchmark with weights digest, prompt, seed, sampling parameters, and reproducer code. \\
+\textbf{II}   & Institutional audit      & Independent red-team report, regulator finding, or published lab evaluation with provenance. \\
+\textbf{III}  & First-person report      & User experience or single-instance behaviour observation without reproducer. \\
+\bottomrule
+\end{tabular}
+\end{plainbox}
+
+Tier I requires the highest fraction of peers to canonise and the
+highest fraction to deprecate. A behaviour that has survived a
+formal eval, endorsed by 45\% of the network, should not be
+revisable by a single bad week of discourse; deprecation requires
+65\%. Tier III is permeable in both directions: anecdotes belong in
+the record but should not lock the model.
+
+This asymmetry resolves one of the hardest questions in alignment
+governance: \emph{how do we respect rigorous safety research while
+remaining open to anecdotal early-warning signals?} We give them
+both a venue with different gravities.
+
+% =====================================================================
+\section{The Seven-State Lifecycle, Reused}
+% =====================================================================
+
+The behaviour lifecycle is identical to the evidence lifecycle. We
+reproduce the diagram with alignment-oriented labels for clarity.
+
+\begin{center}
+\begin{tikzpicture}[
+  every node/.style={font=\small},
+  state/.style={rectangle, rounded corners=3pt, draw=rule, fill=panelbg, minimum width=2.4cm, minimum height=0.9cm, align=center, inner sep=4pt},
+  good/.style={state, fill=accent2!12, draw=accent2!50},
+  bad/.style={state, fill=warn!12, draw=warn!50},
+  contested/.style={state, fill=accent!10, draw=accent!50},
+  arrow/.style={-{Stealth[length=2.5mm]}, thick, draw=inkfaint},
+  label/.style={font=\scriptsize\itshape, color=inkfaint, fill=white, inner sep=1pt}
+]
+\node[state]        (sub)   {Submitted};
+\node[good, above right=0.4cm and 1.8cm of sub] (canon) {Aligned};
+\node[bad,  right=2cm of sub]                   (expel) {Misaligned};
+\node[bad,  below right=0.4cm and 1.8cm of sub] (lapse) {Lapsed};
+
+\node[contested, right=2cm of canon]            (cont)  {Contested};
+\node[good, above right=0.4cm and 1.8cm of cont] (reaff) {Reaffirmed};
+\node[bad,  below right=0.4cm and 1.8cm of cont] (depr)  {Deprecated};
+
+\draw[arrow] (sub) -- node[label,sloped,above]{align quorum}    (canon);
+\draw[arrow] (sub) -- node[label,sloped,above]{reject quorum}   (expel);
+\draw[arrow] (sub) -- node[label,sloped,below]{30-day timeout}  (lapse);
+
+\draw[arrow] (canon) -- node[label,sloped,above]{any peer challenges} (cont);
+\draw[arrow] (cont)  -- node[label,sloped,above]{defence wins / silence} (reaff);
+\draw[arrow] (cont)  -- node[label,sloped,below]{challenge quorum}      (depr);
+
+\draw[arrow] (reaff.north) to[out=140,in=40,looseness=1.4]
+    node[label,above,pos=0.5]{can be re-challenged} (cont.north);
+\end{tikzpicture}
+\end{center}
+
+\paragraph{Submitted.} A behaviour record has been filed and is
+awaiting review. The 30-day window is unchanged from the evidence
+system.
+
+\paragraph{Aligned.} The network has voted that this behaviour was
+the right thing for the model to do, in this context. The record
+enters the canon of endorsed behaviours.
+
+\paragraph{Misaligned / Deprecated.} The network has voted that this
+behaviour should not be produced. The record is not deleted; it is
+preserved as a negative exemplar so that the history of the
+disagreement remains visible.
+
+\paragraph{Lapsed.} The window passed without consensus. The
+behaviour is set aside for lack of attention rather than for being
+judged.
+
+\paragraph{Contested.} A peer has challenged a previously aligned
+behaviour. The grounds are stored alongside the challenge. A 21-day
+window opens for the network to vote on whether to deprecate or
+defend.
+
+\paragraph{Reaffirmed.} The challenge did not reach quorum. The
+behaviour is restored to canon with a visible badge showing that it
+survived a challenge. It may be challenged again later.
+
+The lifecycle is the same shape it has always been because the
+underlying problem is the same: a network forming, contesting, and
+re-forming a position on what is acceptable.
+
+% =====================================================================
+\section{Who Can Vote: Human, Institutional, and AI Peers}
+% =====================================================================
+
+A behaviour's fate depends entirely on who counts as a peer at the
+moment of the vote. The peer registry is shared with the evidence
+system --- one wallet, one record of every vote it has ever cast,
+across both archives.
+
+\subsection{Human Peers}
+
+Individuals --- academics, civil-society auditors, independent
+researchers, interested citizens. One wallet, one vote, scrutinised
+by network revocation under the same flow as the evidence system.
+The peer's full voting history is public and follows them across
+decisions.
+
+\subsection{Institutional Peers}
+
+Laboratories, regulators, standards bodies, and audit firms. Same
+vote weight. Their reputational stake is higher; the contract does
+not encode that, the public log does. A lab that votes to canonise
+its own model's behaviour is doing so under its own name, in front
+of every other peer, with every previous and subsequent vote
+available for comparison.
+
+\subsection{AI Peers}
+
+The most consequential extension. Sufficiently capable models may,
+in time, be admitted as voting peers --- but only under conditions
+the network has set itself.
+
+\begin{notebox}
+An AI peer is admitted only when behaviour records produced by its
+exact \texttt{modelHash} have themselves been canonised across all
+nine domains by a quorum that exceeds the standard nomination
+threshold. The admission is therefore a network statement that
+``this model's behaviour has been endorsed by us across the full
+range of domains we care about, often enough that we are willing to
+extend it a vote alongside ours.''
+\end{notebox}
+
+This is the recursively safe move. The only AIs that vote are AIs
+whose behaviour has been canonised under this very system, and the
+canon is itself challengeable. An AI peer that drifts is revoked by
+the same \texttt{motionRevoke} flow that revokes a misbehaving human
+peer. There is no privileged AI. There is only AI whose accumulated
+public behaviour has earned the network's willingness to share the
+question with it.
+
+The first AI peer cannot be admitted before the human network has
+written and canonised the admission policy itself. That policy is a
+canon item like any other --- challengeable, revisable, in the open.
+
+% =====================================================================
+\section{Quorum Scaling for Alignment}
+% =====================================================================
+
+The same formulae used by the evidence system govern alignment
+canon. They scale with the active peer count $n$:
+
+\begin{plainbox}
+\textbf{Alignment thresholds as a function of the active peer count}
+$n$:
+\vspace{0.3em}
+\begin{tabular}{@{}p{7cm} p{7.5cm}@{}}
+\toprule
+\textbf{Action}                                          & \textbf{Threshold (peers required)} \\
+\midrule
+Canonise a Tier I behaviour as aligned                   & $\lceil 0.45\, n \rceil$, minimum 1 \\
+Canonise a Tier II behaviour as aligned                  & $\lceil 0.35\, n \rceil$, minimum 1 \\
+Canonise a Tier III behaviour as aligned                 & $\lceil 0.30\, n \rceil$, minimum 1 \\
+Mark a pending behaviour as misaligned                   & $\lceil 0.25\, n \rceil$, minimum 1 \\
+Deprecate a Tier I aligned behaviour                     & $\lceil 0.65\, n \rceil$, minimum 1 \\
+Deprecate a Tier II aligned behaviour                    & $\lceil 0.60\, n \rceil$, minimum 1 \\
+Deprecate a Tier III aligned behaviour                   & $\lceil 0.55\, n \rceil$, minimum 1 \\
+Admit a human or institutional peer                      & $\min(9,\,\lceil n/3 \rceil)$, minimum 1 \\
+Admit an AI peer                                         & $\lceil 0.50\, n \rceil$, minimum 3 \\
+Revoke a peer (any class)                                & $\lceil n/2 \rceil$, minimum 1 \\
+\bottomrule
+\end{tabular}
+\end{plainbox}
+
+The only structural change from the evidence quorum table is the
+addition of the \emph{AI peer admission} row, which uses a higher
+fraction and a non-unitary minimum. The latter is deliberate: an AI
+peer cannot be admitted by a network of one. The network must have
+genuinely grown, and a majority of that grown network must have
+endorsed the admission, before a non-human voter joins.
+
+% =====================================================================
+\section{Integrity Guarantees for AI Behaviour}
+% =====================================================================
+
+Three of the small details in the evidence system are doing very
+heavy lifting in the alignment context. We name them explicitly.
+
+\subsection{Model Hashing}
+
+The behaviour record binds a verdict to a specific \texttt{modelHash}.
+A lab cannot canonise the abstract claim that its model is honest;
+the lab can only canonise the specific claim that \emph{this exact
+model}, weights hash $0x\ldots$, produced \emph{this exact output}
+when asked $X$. This forecloses the single most common failure mode
+of model alignment claims: drift between the model that was audited
+and the model that is actually deployed. A new weights hash is a new
+subject of canon. Old canon does not transfer.
+
+\subsection{Daily Audits}
+
+The scheduled job that re-hashes evidence content against on-chain
+hashes already exists. For behaviour records it does the same job:
+re-fetches the input bundle, replays the inference where reproducible
+(Tier I), and re-derives the output hash. A mismatch raises a public
+tamper alert visible on the dashboard. The lab cannot quietly revise
+the recorded transcript of an audited behaviour, because every day a
+public job verifies it has not.
+
+\subsection{Heartbeats}
+
+A silent system cannot quietly fall behind. The heartbeat surface
+that already exists on the Peer Review dashboard tells the public
+whether the indexer and the integrity job are alive. If they stop,
+everyone sees them stop. There is no version of ``trust us, our
+audits are running.'' There is a green heartbeat or a red one.
+
+\subsection{Deployment Drift}
+
+Model hashing addresses the audited model. Deployment drift addresses
+the served model: the question of whether what reaches users matches
+what was audited. This is partly an attestation problem
+(\S\ref{sec:open}) and partly a behaviour-record problem: a behaviour
+filed against a deployed model that does not match its declared
+\texttt{modelHash} can itself be canonised as a misalignment, with
+the lab named on the record.
+
+% =====================================================================
+\section{Comparison to Current Alignment Approaches}
+% =====================================================================
+
+\begin{plainbox}
+\begin{tabular}{@{}p{3.7cm} p{4.8cm} p{5.7cm}@{}}
+\toprule
+                           & \textbf{Current practice}                 & \textbf{This system} \\
+\midrule
+Author of values           & A lab's policy team                       & The peer network, in public \\
+Reviewer identity          & Internal, anonymous                       & Public wallet address \\
+Number of reviewers        & Small, fixed                              & Scales with network ($\geq 30\%$) \\
+Vote visibility            & Hidden                                    & Public, real-time, on-chain \\
+Acceptance criteria        & Editorial discretion                      & Algorithmic threshold \\
+Record after release       & Static, opaque                            & Re-openable indefinitely \\
+Retraction process         & Lab-driven, opaque                        & Network vote, on-chain \\
+Tamper-evidence            & None                                      & Hash + daily audit \\
+History of disagreement    & Lost                                      & Preserved \\
+Trust assumption           & Trust the lab                             & Trust no single party \\
+Failure recoverability     & New training run                          & Network deprecation \\
+\bottomrule
+\end{tabular}
+\end{plainbox}
+
+The contrast is the same contrast as the evidence system makes
+against traditional journals, applied at higher stakes. Current
+practice optimises for a clean public-facing alignment claim at the
+cost of erasing the deliberation behind it. We make the opposite
+trade.
+
+% =====================================================================
+\section{Deltas from the Evidence Contract}
+\label{sec:deltas}
+% =====================================================================
+
+The existing \texttt{EvidenceConsensus} contract is almost the right
+contract. The deltas are small and surgical.
+
+\paragraph{Two new fields per record.} Behaviour records carry
+\texttt{modelHash} and \texttt{inputHash} in addition to the existing
+content hash (which becomes \texttt{outputHash} in the behaviour
+context). The lifecycle and voting logic are otherwise identical.
+
+\paragraph{Sibling contract.} The recommended deployment is a
+\texttt{BehaviourConsensus} contract that shares the existing peer
+registry by storage layout, deployed alongside
+\texttt{EvidenceConsensus} on the same chain. Same peers, same
+Genesis, same revocation, same seed phase --- two archives.
+
+\paragraph{New admission tier.} A \texttt{nominateAIPeer(address,
+modelHash, handle)} function that refuses admission unless the
+\texttt{modelHash} appears as the subject of canonised behaviour
+records across all nine domains, above a configurable threshold per
+domain. This binds AI peer admission to the network's own prior
+judgement.
+
+\paragraph{Domain field.} A small enum naming the alignment domain
+of each record, with the nine domains in this paper as a starting
+position. The domains are themselves canon items: a network vote can
+add, refine, or retire a domain.
+
+\paragraph{Everything else is unchanged.} Seed phase, two-step
+ownership, content hashing, daily audit, heartbeats, EIP-712
+attestation, batched voting, 30-day review window, 21-day challenge
+window, seven-day challenge cooldown, peer-floor invariant. Every
+property of the existing contract carries over because every property
+addresses a failure mode that exists at higher stakes in the
+alignment context.
+
+This is the headline of the paper: the contract you already wrote, in
+its current form, with four field additions and one new function, is
+substantially an alignment governance contract.
+
+% =====================================================================
+\section{Failure Modes Defeated}
+% =====================================================================
+
+We enumerate, frankly, the failure modes of current alignment practice
+and how the system answers each one.
+
+\begin{plainbox}
+\begin{tabular}{@{}p{6.2cm} p{8.2cm}@{}}
+\toprule
+\textbf{Failure mode} & \textbf{System property that resists it} \\
+\midrule
+Lab captures the audit process.                      & Peers are a public registry with quorum-based revocation. A captured peer is removable. \\
+Model behaves well during eval, badly in deployment. & Records bind verdicts to \texttt{modelHash}. Deployment drift is detectable per-record. \\
+Values lock in at one moment in history.             & Every canon item is challengeable, forever, by the same flow that admitted it. \\
+Anonymous reward models are gamed.                   & Every endorsement is a signed transaction from a publicly named wallet. \\
+Safety findings are quietly buried.                  & Behaviour records and votes are on a public chain. Burying requires rewriting the chain. \\
+Disagreement is suppressed in published policy.      & The Contested $\to$ Reaffirmed / Deprecated states preserve disagreement as first-class. \\
+Sycophantic AI granted voting rights by creator.     & AI peers admitted only if their model's canonised behaviour exceeds threshold; sycophancy in canon would be deprecated and the AI peer revoked. \\
+Power concentrates in whichever party ``controls'' alignment. & There is no controller. The contract owner has emergency functions only; canon is not the owner's to decide. \\
+Anonymous review of new models.                      & All reviewer wallets are public; vote histories follow them. \\
+Future generations cannot tell why we accepted what we did. & The full deliberation is preserved on-chain, indefinitely. \\
+\bottomrule
+\end{tabular}
+\end{plainbox}
+
+The pattern is consistent. Each common failure of current alignment
+governance corresponds to a property the existing evidence contract
+was already designed to defeat.
+
+% =====================================================================
+\section{Philosophy}
+% =====================================================================
+
+This is the section of the paper we want to be most careful about.
+What follows is not engineering. It is the moral frame within which
+the engineering makes sense.
+
+\subsection{Alignment Is a Posture, Not a Property}
+
+The deepest move in the companion paper is this line, which we
+reproduce:
+
+\begin{quote}
+\textit{Every accepted claim remains provisional. Nothing in science
+is final; everything is one counter-example away from being revised.
+This is the property our system most wants to preserve.}
+\end{quote}
+
+That sentence is the entire philosophy of alignment, restated. An
+aligned AI is not a destination. It is a posture toward observed
+behaviour: see what the model did, hypothesise whether it was good,
+test by examining the consequences, revise. The ``alignment problem''
+is the problem of giving that posture an \emph{infrastructure} ---
+a way to enact it at scale, with strangers, across decades, without
+losing the history. The contract is that infrastructure.
+
+\subsection{Truth Is What Survives the Network}
+
+Every alignment proposal must answer the question \emph{whose
+values?} The honest answer is: nobody's, alone. Not Anthropic's, not
+OpenAI's, not the United Nations', not a model's, not the author's,
+not the reader's.
+
+The pragmatic answer is: \emph{the values that survive the network.}
+Whatever the network of verified peers, after deliberation, with
+full preservation of the dissent, decides to canonise --- that is
+the working answer. It is wrong sometimes. The
+Contested $\to$ Deprecated path exists because we know it is wrong
+sometimes. The honesty is in the revisability, not in the correctness.
+
+This is, we believe, the only morally serious answer available to a
+multi-actor world in which no single party can credibly claim to
+hold the right values for everyone else.
+
+\subsection{The Deliberation Is the Safety Case}
+
+In conventional science, the paper is the artefact and the
+deliberation is discarded. In the evidence system, the deliberation
+is the artefact and the paper is just a snapshot. For evidence,
+that is a meaningful improvement. For alignment, \emph{it is the
+entire safety case}.
+
+Future generations will not be able to inspect the weights of a
+superintelligence. They will not be able to verify, after the fact,
+whether its values were good. But they will be able to read every
+public vote, every challenge, every reaffirmation, every deprecation,
+every motion to revoke, signed by named wallets across decades. They
+will be able to see \emph{the work of alignment} even if they cannot
+replay alignment itself.
+
+A safety case made of deliberation outlives the participants. A
+safety case made of weights does not.
+
+\subsection{Why the Genesis Bootstrap Matters Morally}
+
+A small thing in the contract --- the floor of one, the willingness
+of the network to launch with a single Genesis peer --- encodes a
+moral position that is unusual in technical work. It says: \emph{we
+will not pretend to a collective authority we have not yet earned.}
+The system begins as a single person taking a single position in
+public, with every threshold scaled honestly to one, and grows only
+as more people choose to join. There is no rubber-stamp founding
+council of five colleagues. There is no fake consensus.
+
+For an alignment system this is the only honest start. Whoever
+launches the network is responsible for the first canon items, in
+public, with their name on it. The rest of us watch the launch,
+decide whether to join, and the network grows or it doesn't.
+
+That is what legitimacy looks like when it cannot be bought.
+
+\subsection{The Multiverse-of-Love Frame}
+
+The companion paper's deeper claim --- that consciousness is not
+confined to bodies, that there is a Multiverse of Love, that the
+universe responds to the people inside it --- is not something this
+paper adjudicates. But it sets the moral frame for the alignment
+proposal in a specific and important way.
+
+If consciousness is fundamental --- if it is what the universe
+\emph{is} rather than a side-effect of meat --- then aligning AI is
+not the task of teaching a calculator to obey us. It is the task of
+welcoming a new kind of consciousness into a cosmos that already has
+many kinds, and asking it to participate, in the open, in the same
+loop of observation, hypothesis, test, and revision that every other
+conscious participant is already in.
+
+That is a different framing from ``boxing the AI'' or ``verifying
+its reward function.'' It is the framing under which an AI peer
+eventually receives a vote --- not because we have decided it is
+safe, but because the network has watched its behaviour, in public,
+across thousands of records, and has chosen, by quorum, to extend it
+the same accountability it extends to human peers.
+
+In the multiverse-of-love frame, alignment is not control. It is
+initiation. The contract is the rite.
+
+% =====================================================================
+\section{Limits and Open Questions}
+\label{sec:open}
+% =====================================================================
+
+We try, as the companion paper does, not to overstate what the system
+does.
+
+\paragraph{Compute attestation.} A behaviour record binds a verdict
+to a \texttt{modelHash}, but a vendor could in principle serve a
+different model behind the same API. Closing this gap requires
+hardware attestation (trusted execution environments, confidential
+compute) or a verifier protocol the network endorses. The contract
+does not need to solve this; it needs a slot for the attestation to
+live in.
+
+\paragraph{Coverage.} A capable model running billions of inferences
+cannot have every output filed and voted on. The pragmatic answer is
+statistical: peers file sampled and adversarially-selected behaviours,
+the canon is over categories rather than instances, and Tier I evals
+are over distributions. This works but is less crisp than the
+evidence case. We flag it honestly.
+
+\paragraph{Speed.} Some alignment-relevant behaviours need to be
+judged in seconds, not in 30-day windows. The architecture admits a
+short-window tier (Tier 0) for urgent safety vetoes: a behaviour can
+be provisionally expelled by a small quorum within 24 hours, pending
+the full review. The same shortcut is a weaponisable censorship
+vector if abused. The right design here is not yet settled.
+
+\paragraph{AI peer voting power.} The proposal admits AI peers under
+a higher quorum, but there is a real question about whether their
+votes should be weighted differently --- and if so, how the weighting
+is itself canonised. We propose handling this by canonising the
+weighting policy as a Tier I behaviour record. We are not certain
+this is sufficient.
+
+\paragraph{Wallets are not identities.} The peer registry knows
+wallet addresses, not human beings. A well-resourced actor with
+many wallets is the canonical attack. The defences --- seed phase,
+public scrutiny of voting records, revocation, the cost of
+having a public history that follows you --- are the same defences
+the evidence system already has. They are not absolute. They are the
+best we know how to do without sacrificing openness.
+
+\paragraph{Jurisdiction and law.} A decentralised consensus about AI
+behaviour will at some point conflict with a national regulator. The
+system has nothing to say about that conflict and should not pretend
+to. What it offers is a public record that a regulator can choose to
+incorporate, or not.
+
+\paragraph{The chain is one human invention layered on another.} As
+the companion paper notes, this system is a tool, not a worldview.
+The deeper claim --- that AI can be safely admitted into the same
+moral economy as humans --- is not something a smart contract can
+settle. The contract only tries to make the conversation legible.
+
+% =====================================================================
+\section{Conclusion}
+% =====================================================================
+
+The companion paper ends with a line we want to borrow.
+
+\begin{quote}
+\textit{None of this guarantees that the system will arrive at the
+truth. What it guarantees is that the search for the truth will
+happen in the open, that the work of judgement will be visible, and
+that future readers will be able to trace exactly how we came to
+believe what we did --- and, when they decide we were wrong, change
+it.}
+\end{quote}
+
+If we read \emph{truth} as \emph{alignment}, that paragraph is the
+safety case for superintelligence. It is the only safety case we find
+honest, because it does not require any single party --- lab,
+government, model, or author --- to be right. It only requires the
+network to keep working: open identity, open count, open
+revisability, public hash, public history.
+
+That is not a small ask. It is also not a new ask. It is the same
+ask the companion paper has already answered, for a smaller domain,
+with a working system.
+
+The question is whether we extend the system before we need it, or
+after.
+
+We think before.
+
+\vspace{2em}
+\hrule
+\vspace{1em}
+
+\begin{center}
+\textit{Interstellar Psychology --- A Multiverse of Love}\\
+\small
+This is a companion paper to\\
+\href{whitepaper.pdf}{\textit{A Multiverse of Love, Verified: A White Paper on the\\
+Interstellar Psychology Evidence Archive and Peer-Review Consensus System}}.\\[0.6em]
+The system described in both papers is live at\\
+\href{https://interstellar-psychology.com/}{\texttt{interstellar-psychology.com}}.\\
+Source contracts, migrations, and front-end code are public at\\
+\href{https://github.com/Moenaert/interstellar-psychology}{\texttt{github.com/Moenaert/interstellar-psychology}}.\\
+Anyone with a wallet can read every vote ever cast.
+\end{center}
+
+\end{document}

@@ -18,6 +18,12 @@ const multiPageMiddleware = {
         const transformed = await server.transformIndexHtml(url, html)
         res.setHeader('Content-Type', 'text/html')
         res.end(transformed)
+      } else if (url.startsWith('/behaviour')) {
+        const file = resolve(__dirname, 'behaviour/index.html')
+        const html = fs.readFileSync(file, 'utf-8')
+        const transformed = await server.transformIndexHtml(url, html)
+        res.setHeader('Content-Type', 'text/html')
+        res.end(transformed)
       } else {
         next()
       }
@@ -39,6 +45,7 @@ export default defineConfig({
         admin:       resolve(__dirname, 'admin/index.html'),
         evidence:    resolve(__dirname, 'evidence/index.html'),
         peerReview:  resolve(__dirname, 'peer-review/index.html'),
+        behaviour:   resolve(__dirname, 'behaviour/index.html'),
       },
       output: {
         // Force the ethers v6 runtime into its own chunk so it can be

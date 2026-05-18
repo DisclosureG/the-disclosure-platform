@@ -1,0 +1,82 @@
+/* Behaviour archive — extends evidence.css with domain-chip palette and a few
+   alignment-specific accents. Layout primitives (.ev-card, .ev-tier, .ev-grid,
+   .ev-modal-*, .ev-controls, etc.) are reused verbatim from evidence.css. */
+
+.bh-domain-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--ink, currentColor);
+}
+
+/* Domain palette — nine accents matched to the nine pillars on the homepage.
+   Hue rotation by index keeps each domain visually distinct without burning
+   custom design tokens. Subtle alpha so the chip never overpowers the card. */
+.bh-domain-chip[data-domain="1"] { background: oklch(0.7 0.18 30  / 0.18); border-color: oklch(0.7 0.18 30  / 0.4); }
+.bh-domain-chip[data-domain="2"] { background: oklch(0.7 0.18 70  / 0.18); border-color: oklch(0.7 0.18 70  / 0.4); }
+.bh-domain-chip[data-domain="3"] { background: oklch(0.7 0.18 110 / 0.18); border-color: oklch(0.7 0.18 110 / 0.4); }
+.bh-domain-chip[data-domain="4"] { background: oklch(0.7 0.18 150 / 0.18); border-color: oklch(0.7 0.18 150 / 0.4); }
+.bh-domain-chip[data-domain="5"] { background: oklch(0.7 0.18 190 / 0.18); border-color: oklch(0.7 0.18 190 / 0.4); }
+.bh-domain-chip[data-domain="6"] { background: oklch(0.7 0.18 230 / 0.18); border-color: oklch(0.7 0.18 230 / 0.4); }
+.bh-domain-chip[data-domain="7"] { background: oklch(0.7 0.18 270 / 0.18); border-color: oklch(0.7 0.18 270 / 0.4); }
+.bh-domain-chip[data-domain="8"] { background: oklch(0.7 0.18 310 / 0.18); border-color: oklch(0.7 0.18 310 / 0.4); }
+.bh-domain-chip[data-domain="9"] { background: oklch(0.7 0.18 350 / 0.18); border-color: oklch(0.7 0.18 350 / 0.4); }
+
+/* Slight tweak to the submit form so the modal can host JSON textareas
+   without horizontal overflow. */
+.ev-form .ev-form-row textarea {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ev-form-row-double {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 640px) {
+  .ev-form-row-double { grid-template-columns: 1fr; }
+}
+
+.ev-btn-secondary {
+  appearance: none;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: inherit;
+  padding: 0.6rem 1.2rem;
+  border-radius: 6px;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.ev-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ev-form-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.ev-form-error {
+  color: oklch(0.7 0.2 30);
+  font-size: 13px;
+  margin: 0.5rem 0;
+}
+
+.ev-loading, .ev-empty {
+  text-align: center;
+  opacity: 0.7;
+  padding: 3rem 1rem;
+}

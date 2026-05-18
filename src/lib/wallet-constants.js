@@ -122,3 +122,80 @@ export async function signAttestation(payload, addr) {
     params: [addr, JSON.stringify(typedData)],
   });
 }
+
+// ── BehaviourConsensus (alignment archive) ──────────────────────────────────
+// Sibling contract that reads the peer registry from EvidenceConsensus.
+// Chain id is shared (same network); deploy block / address differ.
+
+export const BEHAVIOUR_CONSENSUS_ADDR = import.meta.env.VITE_BEHAVIOUR_CONSENSUS_ADDR || null;
+
+export const BEHAVIOUR_CONSENSUS_ABI = [
+  // Views
+  "function peers() view returns (address)",
+  "function records(bytes32 id) view returns (uint8 state, uint8 tier, uint8 domain, uint32 approveCount, uint32 rejectCount, uint32 challengeVotes, uint32 defenseVotes, uint48 submittedAt, uint48 canonAt, uint48 challengedAt, bytes32 modelHash, bytes32 inputHash, bytes32 outputHash, bytes32 challengerFirst)",
+  "function hasVoted(bytes32,uint8,address) view returns (bool)",
+  "function challengeCooldownRemaining(address) view returns (uint256)",
+  "function canonizeThreshold(uint8 tier) view returns (uint256)",
+  "function expelThreshold() view returns (uint256)",
+  "function deprecateThreshold(uint8 tier) view returns (uint256)",
+  "function getThresholds(bytes32 id) view returns (uint256, uint256, uint256)",
+  "function tripleHash(bytes32 modelHash, bytes32 inputHash, bytes32 outputHash) pure returns (bytes32)",
+  "function paused() view returns (bool)",
+  // Writes
+  "function submitBehaviour(bytes32 id, uint8 tier, uint8 domain, bytes32 modelHash, bytes32 inputHash, bytes32 outputHash)",
+  "function castReviewVote(bytes32 id, bool approve)",
+  "function castReviewVoteBatch(bytes32[] ids, bool[] approves)",
+  "function openChallenge(bytes32 id, string grounds)",
+  "function castChallengeVote(bytes32 id, bool supportChallenge)",
+  "function markLapsed(bytes32 id)",
+  "function finalizeChallenge(bytes32 id)",
+];
+
+// Same chainId as evidence — both contracts live on the same network.
+export const BEHAVIOUR_ATTESTATION_DOMAIN = {
+  name:    'BehaviourConsensus',
+  version: '1',
+  chainId: CONSENSUS_CHAIN_ID,
+  ...(BEHAVIOUR_CONSENSUS_ADDR ? { verifyingContract: BEHAVIOUR_CONSENSUS_ADDR } : {}),
+};
+
+export function buildBehaviourEIP712DomainType() {
+  const fields = [
+    { name: 'name',    type: 'string'  },
+    { name: 'version', type: 'string'  },
+    { name: 'chainId', type: 'uint256' },
+  ];
+  if (BEHAVIOUR_CONSENSUS_ADDR) fields.push({ name: 'verifyingContract', type: 'address' });
+  return fields;
+}
+
+export const BEHAVIOUR_ATTESTATION_TYPES = {
+  Attestation: [
+    { name: 'behaviourId', type: 'string'  },
+    { name: 'peerAddr',    type: 'address' },
+    { name: 'phase',       type: 'string'  },
+    { name: 'verdict',     type: 'string'  },
+    { name: 'note',        type: 'string'  },
+  ],
+};
+
+export async function signBehaviourAttestation(payload, addr) {
+  if (!window.ethereum) throw new Error('MetaMask not available');
+  const message = {
+    behaviourId: String(payload.behaviourId ?? ''),
+    peerAddr:    addr,
+    phase:       String(payload.phase   ?? ''),
+    verdict:     String(payload.verdict ?? ''),
+    note:        String(payload.note    ?? ''),
+  };
+  const typedData = {
+    types:       { EIP712Domain: buildBehaviourEIP712DomainType(), ...BEHAVIOUR_ATTESTATION_TYPES },
+    domain:      BEHAVIOUR_ATTESTATION_DOMAIN,
+    primaryType: 'Attestation',
+    message,
+  };
+  return window.ethereum.request({
+    method: 'eth_signTypedData_v4',
+    params: [addr, JSON.stringify(typedData)],
+  });
+}

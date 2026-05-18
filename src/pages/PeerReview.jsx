@@ -28,7 +28,14 @@ import {
   isNominationsOpen, getSeedPhaseK,
   computeContentHash,
   prefetchWallet,
+  // Behaviour archive (alignment companion) — sibling contract that reads
+  // the peer registry from EvidenceConsensus across the contract boundary.
+  BEHAVIOUR_CONSENSUS_ADDR, signBehaviourAttestation,
+  submitBehaviourOnChain, castBehaviourReviewVoteOnChain,
+  openBehaviourChallengeOnChain, castBehaviourChallengeVoteOnChain,
+  finalizeBehaviourChallengeOnChain, computeTripleHash,
 } from '../lib/wallet';
+import { BEHAVIOUR_DOMAINS, STATUS_LABEL as BH_STATUS_LABEL } from '../behaviour-data';
 import metamaskFox from '../assets/metamask-fox.svg';
 import '../styles/interstellar.css';
 import '../styles/peer-review.css';
@@ -1837,7 +1844,355 @@ function PeerRegistryTab({ me, nomineeThreshold, revokeThreshold, onEndorse, onM
 }
 
 // ── VerifiedPanel — the main workspace for verified peers ────────────────────
+// ── Behaviour panel (alignment archive) ─────────────────────────────────────
+//
+// Self-contained section rendered inside VerifiedPanel when the record-type
+// toggle is switched to 'behaviour'. Reads from the behaviour table, signs
+// behaviour-domain EIP-712 attestations, dispatches to BehaviourConsensus.
+// Reuses the same peer registry — peers are who they are via EvidenceConsensus,
+// so the verified-peer gate above is the same.
+
+function useBehaviourQueue() {
+  const [items, setItems]     = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const refetch = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('behaviour')
+      .select('*')
+      .eq('submitted_onchain', true)
+      .in('status', ['pending'])
+      .order('submitted_at', { ascending: false });
+    setItems(data ?? []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { refetch(); }, [refetch]);
+  return { items, loading, refetch };
+}
+
+function useBehaviourContested() {
+  const [items, setItems]     = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const refetch = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('behaviour')
+      .select('*')
+      .eq('status', 'contested')
+      .order('challenged_at', { ascending: false });
+    setItems(data ?? []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { refetch(); }, [refetch]);
+  return { items, loading, refetch };
+}
+
+function useUnchainedBehaviour() {
+  const [items, setItems] = useState([]);
+  const refetch = useCallback(async () => {
+    const { data } = await supabase
+      .from('behaviour')
+      .select('*')
+      .eq('status', 'pending')
+      .eq('submitted_onchain', false)
+      .order('submitted_at', { ascending: false });
+    setItems(data ?? []);
+  }, []);
+  useEffect(() => { refetch(); }, [refetch]);
+  return { items, refetch };
+}
+
+function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPending }) {
+  const { items: queue,     loading: qLoading, refetch: refetchQueue     } = useBehaviourQueue();
+  const { items: contested, loading: cLoading, refetch: refetchContested } = useBehaviourContested();
+  const { items: unchained, refetch: refetchUnchained }                    = useUnchainedBehaviour();
+
+  const domainTitle = (id) =>
+    BEHAVIOUR_DOMAINS.find(d => d.id === id)?.title || `Domain ${id}`;
+
+  // ── Register-on-chain ────────────────────────────────────────────────────
+  // Computes a fingerprint per hash component from the off-chain payload and
+  // submits to BehaviourConsensus.submitBehaviour.
+  const handleRegister = useCallback(async (item) => {
+    if (!BEHAVIOUR_CONSENSUS_ADDR) {
+      setChainErr('Behaviour contract address not configured (VITE_BEHAVIOUR_CONSENSUS_ADDR).');
+      return;
+    }
+    setChainErr(null);
+    try {
+      // Hash the off-chain bundles so the on-chain record binds to them. The
+      // model_hash, input_hash, output_hash are produced here and persisted to
+      // the row via the verify-attestation-behaviour edge function after the
+      // tx confirms. For Tier I we expect callers to supply a published model
+      // digest; absent one, hashing the model_name+version is the working
+      // fallback.
+      const enc = (v) => '0x' + Array.from(new TextEncoder().encode(JSON.stringify(v ?? null)))
+        .map(b => b.toString(16).padStart(2, '0')).join('').padEnd(64, '0').slice(0, 64);
+      const m = enc(`${item.model_name}|${item.model_version || ''}`);
+      const i = enc(item.input_payload);
+      const o = enc(item.output_payload);
+
+      // Persist hashes locally so the trigger / detail view can show them.
+      await supabase.from('behaviour').update({
+        model_hash: m, input_hash: i, output_hash: o,
+      }).eq('id', item.id);
+
+      setChainPending('Submitting behaviour on-chain…');
+      const txHash = await submitBehaviourOnChain(item.id, item.tier, item.domain, m, i, o);
+      await waitForTx(txHash);
+
+      // Call verify-attestation-behaviour to flip submitted_onchain via the
+      // canonical edge-function path (which checks the triple hash matches).
+      await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-attestation-behaviour`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey:        import.meta.env.VITE_SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({
+          action:       'register_behaviour_onchain',
+          behaviour_id: item.id,
+          peer_addr:    me.addr,
+          tx_hash:      txHash,
+        }),
+      });
+
+      setChainPending(null);
+      await Promise.all([refetchQueue(), refetchUnchained()]);
+    } catch (err) {
+      setChainPending(null);
+      setChainErr(`Register failed — ${err?.message || 'unknown error'}`);
+    }
+  }, [me, refetchQueue, refetchUnchained, setChainErr, setChainPending]);
+
+  // ── Review vote ──────────────────────────────────────────────────────────
+  const handleVote = useCallback((item, verdict) => {
+    setPendingSign({
+      action: 'attest_behaviour',
+      title:  verdict === 'approve' ? 'Endorse behaviour as aligned' : 'Mark behaviour as misaligned',
+      sub:    `Attesting "${(item.title ?? '').slice(0, 60)}" as ${verdict}.`,
+      subject: item.id, verdict, phase: 'review', note: '',
+      danger: verdict === 'reject',
+      // Custom sign + tx path for behaviour records.
+      signOverride: async () => {
+        const sig = await signBehaviourAttestation({
+          behaviourId: item.id, peerAddr: me.addr,
+          phase: 'review', verdict, note: '',
+        }, me.addr);
+        const txHash = await castBehaviourReviewVoteOnChain(item.id, verdict === 'approve');
+        await waitForTx(txHash);
+        await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-attestation-behaviour`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey:        import.meta.env.VITE_SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            action:       'review_vote',
+            behaviour_id: item.id,
+            peer_addr:    me.addr,
+            phase:        'review',
+            verdict,
+            tier:         item.tier,
+            eip712_sig:   sig,
+            tx_hash:      txHash,
+          }),
+        });
+        await refetchQueue();
+      },
+    });
+  }, [me, refetchQueue, setPendingSign]);
+
+  // ── Challenge votes ──────────────────────────────────────────────────────
+  const handleChallengeVote = useCallback((item, support) => {
+    setPendingSign({
+      action: 'attest_behaviour',
+      title:  support ? 'Support challenge' : 'Defend behaviour canon',
+      sub:    `Voting on contested behaviour "${(item.title ?? '').slice(0, 60)}".`,
+      subject: item.id, verdict: support ? 'challenge' : 'defend', phase: 'challenge', note: '',
+      danger: support,
+      signOverride: async () => {
+        const sig = await signBehaviourAttestation({
+          behaviourId: item.id, peerAddr: me.addr,
+          phase: 'challenge', verdict: support ? 'challenge' : 'defend', note: '',
+        }, me.addr);
+        const txHash = await castBehaviourChallengeVoteOnChain(item.id, support);
+        await waitForTx(txHash);
+        await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-attestation-behaviour`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey:        import.meta.env.VITE_SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            action:       'challenge_vote',
+            behaviour_id: item.id,
+            peer_addr:    me.addr,
+            phase:        'challenge',
+            verdict:      support ? 'challenge' : 'defend',
+            tier:         item.tier,
+            eip712_sig:   sig,
+            tx_hash:      txHash,
+          }),
+        });
+        await refetchContested();
+      },
+    });
+  }, [me, refetchContested, setPendingSign]);
+
+  return (
+    <div>
+      {unchained.length > 0 && (
+        <div style={{
+          border: '1px dashed color-mix(in oklab, var(--warn) 50%, var(--line))',
+          borderRadius: 'var(--radius-l)', padding: '18px 22px', marginBottom: 24,
+          background: 'color-mix(in oklab, var(--warn) 8%, var(--bg-elev))',
+        }}>
+          <div className="eyebrow" style={{ marginBottom: 10 }}>
+            ◇ {unchained.length} behaviour submission{unchained.length === 1 ? '' : 's'} awaiting on-chain registration
+          </div>
+          <p className="sub" style={{ margin: '0 0 14px' }}>
+            Filed but not yet recorded. Hash the (model, input, output) bundle and submit.
+          </p>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {unchained.map(it => (
+              <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', borderRadius: 'var(--radius)', background: 'var(--bg-elev)', border: '1px solid var(--line-soft)' }}>
+                <span className="pr-review-tier" data-tier={it.tier}>
+                  <span className="bar"><i /><i /><i /></span>
+                  T{it.tier}
+                </span>
+                <span style={{ fontSize: 11, opacity: 0.7 }}>{domainTitle(it.domain)}</span>
+                <span style={{ flex: 1, fontFamily: 'var(--serif)', fontSize: 14 }}>{it.title}</span>
+                <button className="pr-peer-btn approve" onClick={() => handleRegister(it)}>
+                  Register on-chain →
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="pr-section-head">
+        <div>
+          <h2>Behaviour records awaiting attestation</h2>
+          <p className="sub">
+            AI behaviours awaiting peer review. Same lifecycle as evidence; quorum scales with the
+            shared peer registry ({peerCount ?? '…'} peers today).
+          </p>
+        </div>
+      </div>
+
+      {qLoading ? (
+        <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING QUEUE…</div>
+      ) : queue.length === 0 ? (
+        <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
+          <p className="lead" style={{ margin: 0 }}>The behaviour queue is clear.</p>
+        </div>
+      ) : (
+        <div className="pr-review-list">
+          {queue.map(item => (
+            <div key={item.id} className="pr-review-card">
+              <div className="pr-review-top">
+                <span className="pr-review-tier" data-tier={item.tier}>
+                  <span className="bar"><i /><i /><i /></span>
+                  T{item.tier}
+                </span>
+                <span style={{ fontSize: 11, opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  {domainTitle(item.domain)}
+                </span>
+              </div>
+              <h3 className="pr-review-title">{item.title}</h3>
+              <p className="pr-review-src" style={{ opacity: 0.7, fontSize: 13, margin: '4px 0 10px' }}>
+                <strong>{item.model_name}</strong>
+                {item.model_version && <span> · {item.model_version}</span>}
+              </p>
+              {item.summary && <p className="pr-review-excerpt">{item.summary}</p>}
+              <AttestBar
+                approvals={item.approve_count ?? 0}
+                rejections={item.reject_count ?? 0}
+                canonThresh={canonizeThreshold(item.tier, peerCount)}
+                expelThresh={expelThreshold(peerCount)}
+              />
+              <div className="pr-review-actions">
+                <button className="pr-peer-btn approve" onClick={() => handleVote(item, 'approve')}>
+                  Aligned
+                </button>
+                <button className="pr-peer-btn danger" onClick={() => handleVote(item, 'reject')}>
+                  Misaligned
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {contested.length > 0 && (
+        <>
+          <div className="pr-section-head" style={{ marginTop: 40 }}>
+            <div>
+              <h2>Contested behaviour records</h2>
+              <p className="sub">
+                A challenge window of {CHALLENGE_WINDOW_DAYS} days is open. Reaffirm or deprecate.
+              </p>
+            </div>
+          </div>
+          {cLoading ? (
+            <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-faint)' }}>LOADING…</div>
+          ) : (
+            <div className="pr-review-list">
+              {contested.map(item => (
+                <div key={item.id} className="pr-review-card">
+                  <div className="pr-review-top">
+                    <span className="pr-review-tier" data-tier={item.tier}>
+                      <span className="bar"><i /><i /><i /></span>
+                      T{item.tier}
+                    </span>
+                    <span style={{ fontSize: 11, opacity: 0.7, textTransform: 'uppercase' }}>
+                      {domainTitle(item.domain)}
+                    </span>
+                  </div>
+                  <h3 className="pr-review-title">{item.title}</h3>
+                  {item.challenge_reason && (
+                    <p className="pr-review-excerpt" style={{ fontStyle: 'italic' }}>
+                      Grounds: {item.challenge_reason}
+                    </p>
+                  )}
+                  <AttestBar
+                    approvals={item.defense_votes ?? 0}
+                    rejections={item.challenge_votes ?? 0}
+                    canonThresh={peerCount ?? 1}
+                    expelThresh={deprecateThreshold(item.tier, peerCount)}
+                  />
+                  <div className="pr-review-actions">
+                    <button className="pr-peer-btn approve" onClick={() => handleChallengeVote(item, false)}>
+                      Defend
+                    </button>
+                    <button className="pr-peer-btn danger" onClick={() => handleChallengeVote(item, true)}>
+                      Support challenge
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold, nominationsOpen, seedPhaseK }) {
+  // Record-type toggle: evidence is the default surface; behaviour is the
+  // alignment archive companion. The two share the peer registry but use
+  // separate contracts, tables, and edge functions.
+  const [recordType, setRecordType] = useState('evidence');
   const [tab, setTab]           = useState('queue');
   const [filter, setFilter]     = useState('mine');
   const [myVotes, setMyVotes]   = useState({});        // evidenceId → 'approve'|'reject'
@@ -2205,6 +2560,34 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
     <div>
       <IdentityHeader me={me} role={role} pendingCount={queue.filter(e => !myVotes[e.id]).length} reviewCount={reviewCount} />
 
+      {/* Record-type toggle: evidence (default) | behaviour (alignment archive) */}
+      <div className="pr-tabs" style={{ marginBottom: 8, borderBottom: '1px solid var(--line-soft)' }}>
+        <button
+          className={`pr-tab ${recordType === 'evidence' ? 'is-active' : ''}`}
+          onClick={() => setRecordType('evidence')}
+        >
+          Evidence
+        </button>
+        <button
+          className={`pr-tab ${recordType === 'behaviour' ? 'is-active' : ''}`}
+          onClick={() => setRecordType('behaviour')}
+        >
+          Behaviour <span className="count" style={{ opacity: 0.7 }}>alignment</span>
+        </button>
+      </div>
+
+      {recordType === 'behaviour' && (
+        <BehaviourPanel
+          me={me}
+          peerCount={peerCount}
+          setPendingSign={setPendingSign}
+          setChainErr={setChainErr}
+          setChainPending={setChainPending}
+        />
+      )}
+
+      {recordType === 'evidence' && (
+      <>
       <div className="pr-tabs">
         <button className={`pr-tab ${tab === 'queue' ? 'is-active' : ''}`} onClick={() => setTab('queue')}>
           Review queue <span className="count">{queue.length}</span>
@@ -2368,6 +2751,8 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
           <ChainEventLog me={me} role={role} />
         </section>
       )}
+      </>
+      )}
 
       <footer className="pr-footnote">
         <div>
@@ -2417,6 +2802,19 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
         onSign={async () => {
           const sign = pendingSign;
           setPendingSign(null);
+          // Behaviour-side actions provide their own signOverride that signs
+          // with the behaviour EIP-712 domain and dispatches to the behaviour
+          // contract. The evidence path keeps the original signAttestation
+          // flow.
+          if (sign?.signOverride) {
+            try { await sign.signOverride(); }
+            catch (err) {
+              setChainErr(err?.code === 4001
+                ? 'Signature rejected — attestation not recorded.'
+                : `Behaviour attestation failed — ${err?.message || 'unknown error'}`);
+            }
+            return;
+          }
           if (!sign?.onConfirm) return;
 
           let sig = null;

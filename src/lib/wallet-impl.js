@@ -8,10 +8,11 @@
  * Keep this module ethers-only — no React, no Supabase.  Public API mirrors
  * the names re-exported by wallet.js.
  */
-import { BrowserProvider, Contract, Interface, JsonRpcProvider, keccak256, toUtf8Bytes } from 'ethers';
+import { BrowserProvider, Contract, Interface, JsonRpcProvider, concat, keccak256, toUtf8Bytes } from 'ethers';
 import {
   CONSENSUS_ADDR, CONSENSUS_ABI, CONSENSUS_CHAIN_ID,
   MULTICALL3_ADDR, MULTICALL3_ABI,
+  BEHAVIOUR_CONSENSUS_ADDR, BEHAVIOUR_CONSENSUS_ABI,
 } from './wallet-constants';
 
 const TARGET_CHAIN_ID_HEX = '0x' + CONSENSUS_CHAIN_ID.toString(16);
@@ -284,4 +285,81 @@ export async function waitForTx(txHash, { pollMs = 2000, timeoutMs = 120_000 } =
     await new Promise(r => setTimeout(r, pollMs));
   }
   throw new Error('Transaction confirmation timed out');
+}
+
+// ── BehaviourConsensus (alignment archive) ──────────────────────────────────
+//
+// Same chain, same wallet, same provider — different contract. The behaviour
+// contract reads its peer registry from EvidenceConsensus, so the user only
+// needs to be a peer in one place. Functions below mirror the evidence-side
+// writes but call the behaviour contract.
+
+export const BEHAVIOUR_IFACE = new Interface(BEHAVIOUR_CONSENSUS_ABI);
+
+function readBehaviourContract() {
+  if (!BEHAVIOUR_CONSENSUS_ADDR) throw new Error('VITE_BEHAVIOUR_CONSENSUS_ADDR not set');
+  return new Contract(BEHAVIOUR_CONSENSUS_ADDR, BEHAVIOUR_CONSENSUS_ABI, getReadProvider());
+}
+
+async function writeBehaviourContract() {
+  if (!BEHAVIOUR_CONSENSUS_ADDR) throw new Error('VITE_BEHAVIOUR_CONSENSUS_ADDR not set');
+  const signer = await getBrowserProvider().getSigner();
+  return new Contract(BEHAVIOUR_CONSENSUS_ADDR, BEHAVIOUR_CONSENSUS_ABI, signer);
+}
+
+async function sendBehaviourTx(fnName, args) {
+  const c  = await writeBehaviourContract();
+  const tx = await c[fnName](...args);
+  return tx.hash;
+}
+
+// Triple hash: keccak256(concat(modelHash, inputHash, outputHash)).
+// Order is part of the protocol and must match BehaviourConsensus.tripleHash
+// and the audit-behaviour-hash edge function. Accepts and returns 0x-prefixed
+// 32-byte hex strings.
+export function computeTripleHash({ model_hash, input_hash, output_hash }) {
+  const m = String(model_hash  ?? '').toLowerCase();
+  const i = String(input_hash  ?? '').toLowerCase();
+  const o = String(output_hash ?? '').toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(m) || !/^0x[0-9a-f]{64}$/.test(i) || !/^0x[0-9a-f]{64}$/.test(o)) {
+    throw new Error('triple-hash inputs must be 0x-prefixed 32-byte hex');
+  }
+  return keccak256(concat([m, i, o]));
+}
+
+// Behaviour-side read helpers (safe wrappers, mirroring evidence pattern).
+export const getBehaviourCanonizeThreshold  = safe(async (tier) => Number(await readBehaviourContract().canonizeThreshold(tier)), 1);
+export const getBehaviourExpelThreshold     = safe(async ()     => Number(await readBehaviourContract().expelThreshold()), 1);
+export const getBehaviourDeprecateThreshold = safe(async (tier) => Number(await readBehaviourContract().deprecateThreshold(tier)), 1);
+export const getBehaviourChallengeCooldownRemaining
+  = safe(async (addr) => Number(await readBehaviourContract().challengeCooldownRemaining(addr)), 0);
+export const hasVotedOnBehaviour            = safe(async (uuid, phase, addr) =>
+  await readBehaviourContract().hasVoted(uuidToBytes32(uuid), phase, addr), false);
+
+// Behaviour-side writes.
+export async function submitBehaviourOnChain(uuid, tier, domain, modelHash, inputHash, outputHash) {
+  return sendBehaviourTx('submitBehaviour', [
+    uuidToBytes32(uuid), tier, domain, modelHash, inputHash, outputHash,
+  ]);
+}
+export async function castBehaviourReviewVoteOnChain(uuid, approve) {
+  return sendBehaviourTx('castReviewVote', [uuidToBytes32(uuid), approve]);
+}
+export async function castBehaviourReviewVoteBatchOnChain(uuids, approves) {
+  if (!Array.isArray(uuids) || !Array.isArray(approves) || uuids.length !== approves.length) {
+    throw new Error('Batch arrays must be same length');
+  }
+  return sendBehaviourTx('castReviewVoteBatch', [uuids.map(uuidToBytes32), approves]);
+}
+export async function openBehaviourChallengeOnChain(uuid, grounds) {
+  return sendBehaviourTx('openChallenge', [uuidToBytes32(uuid), String(grounds ?? '')]);
+}
+export async function castBehaviourChallengeVoteOnChain(uuid, support) {
+  return sendBehaviourTx('castChallengeVote', [uuidToBytes32(uuid), support]);
+}
+export async function finalizeBehaviourChallengeOnChain(uuid) {
+  return sendBehaviourTx('finalizeChallenge', [uuidToBytes32(uuid)]);
+}
+export async function markBehaviourLapsedOnChain(uuid) {
+  return sendBehaviourTx('markLapsed', [uuidToBytes32(uuid)]);
 }

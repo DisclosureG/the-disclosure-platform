@@ -14,6 +14,9 @@ import {
   MULTICALL3_ADDR,
   ATTESTATION_DOMAIN, ATTESTATION_TYPES, buildEIP712DomainType,
   signAttestation,
+  BEHAVIOUR_CONSENSUS_ADDR, BEHAVIOUR_CONSENSUS_ABI,
+  BEHAVIOUR_ATTESTATION_DOMAIN, BEHAVIOUR_ATTESTATION_TYPES,
+  buildBehaviourEIP712DomainType, signBehaviourAttestation,
 } from './wallet-constants';
 
 // Re-export the ethers-free surface verbatim.
@@ -22,6 +25,9 @@ export {
   MULTICALL3_ADDR,
   ATTESTATION_DOMAIN, ATTESTATION_TYPES, buildEIP712DomainType,
   signAttestation,
+  BEHAVIOUR_CONSENSUS_ADDR, BEHAVIOUR_CONSENSUS_ABI,
+  BEHAVIOUR_ATTESTATION_DOMAIN, BEHAVIOUR_ATTESTATION_TYPES,
+  buildBehaviourEIP712DomainType, signBehaviourAttestation,
 };
 
 // ── Lazy impl loader ────────────────────────────────────────────────────────
@@ -86,3 +92,20 @@ export const finalizeChallengeOnChain       = (...a) => impl().then(m => m.final
 export const markLapsedOnChain              = (...a) => impl().then(m => m.markLapsedOnChain(...a));
 
 export const waitForTx                      = (...a) => impl().then(m => m.waitForTx(...a));
+
+// ── BehaviourConsensus lazy wrappers ────────────────────────────────────────
+
+export const computeTripleHash                       = (...a) => impl().then(m => m.computeTripleHash(...a));
+export const getBehaviourCanonizeThreshold           = (...a) => impl().then(m => m.getBehaviourCanonizeThreshold(...a));
+export const getBehaviourExpelThreshold              = (...a) => impl().then(m => m.getBehaviourExpelThreshold(...a));
+export const getBehaviourDeprecateThreshold          = (...a) => impl().then(m => m.getBehaviourDeprecateThreshold(...a));
+export const getBehaviourChallengeCooldownRemaining  = (...a) => impl().then(m => m.getBehaviourChallengeCooldownRemaining(...a));
+export const hasVotedOnBehaviour                     = (...a) => impl().then(m => m.hasVotedOnBehaviour(...a));
+
+export const submitBehaviourOnChain                  = (...a) => impl().then(m => m.submitBehaviourOnChain(...a));
+export const castBehaviourReviewVoteOnChain          = (...a) => impl().then(m => m.castBehaviourReviewVoteOnChain(...a));
+export const castBehaviourReviewVoteBatchOnChain     = (...a) => impl().then(m => m.castBehaviourReviewVoteBatchOnChain(...a));
+export const openBehaviourChallengeOnChain           = (...a) => impl().then(m => m.openBehaviourChallengeOnChain(...a));
+export const castBehaviourChallengeVoteOnChain       = (...a) => impl().then(m => m.castBehaviourChallengeVoteOnChain(...a));
+export const finalizeBehaviourChallengeOnChain       = (...a) => impl().then(m => m.finalizeBehaviourChallengeOnChain(...a));
+export const markBehaviourLapsedOnChain              = (...a) => impl().then(m => m.markBehaviourLapsedOnChain(...a));
