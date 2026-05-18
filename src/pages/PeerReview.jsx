@@ -134,6 +134,7 @@ function Nav({ wallet, role, onDisconnect }) {
     { id: 'book',        label: 'Thesis',      href: '/#book' },
     { id: 'peace',       label: 'Peace',       href: '/#peace' },
     { id: 'evidence',    label: 'Evidence',    href: '/evidence/' },
+    { id: 'behaviour',   label: 'Alignment',   href: '/alignment/' },
     { id: 'peer-review', label: 'Peer Review', href: '/peer-review/' },
   ];
   return (
@@ -1906,7 +1907,245 @@ function useUnchainedBehaviour() {
   return { items, refetch };
 }
 
+// ── Behaviour attestation log ───────────────────────────────────────────────
+// Parallel to the evidence ActivityLog. Reads from behaviour_attestations,
+// joined with behaviour title for context. Each row is a signed peer verdict.
+
+function useBehaviourAttestationLog({ filter = 'all', limit = 50 } = {}) {
+  const [rows, setRows]       = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const refetch = useCallback(async () => {
+    setLoading(true);
+    let q = supabase
+      .from('behaviour_attestations')
+      .select('id, behaviour_id, peer_addr, peer_handle, phase, verdict, note, tx_hash, eip712_sig, created_at')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (filter === 'review' || filter === 'challenge') q = q.eq('phase', filter);
+    const { data } = await q;
+
+    // Fetch behaviour titles for context (one extra query, denormalised in JS).
+    const ids = Array.from(new Set((data ?? []).map(r => r.behaviour_id)));
+    let titles = {};
+    if (ids.length) {
+      const { data: bh } = await supabase
+        .from('behaviour')
+        .select('id, title, domain, tier')
+        .in('id', ids);
+      titles = Object.fromEntries((bh ?? []).map(b => [b.id, b]));
+    }
+    setRows((data ?? []).map(r => ({ ...r, behaviour: titles[r.behaviour_id] || null })));
+    setLoading(false);
+  }, [filter, limit]);
+
+  useEffect(() => { refetch(); }, [refetch]);
+  return { rows, loading, refetch };
+}
+
+function BehaviourAttestationLog() {
+  const [filter, setFilter] = useState('all');
+  const { rows, loading, refetch } = useBehaviourAttestationLog({ filter });
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    const minSpin = new Promise(r => setTimeout(r, 500));
+    try { await Promise.all([refetch(), minSpin]); }
+    finally { setRefreshing(false); }
+  };
+
+  return (
+    <section>
+      <div className="pr-section-head">
+        <div>
+          <h2>Alignment attestation log</h2>
+          <p className="sub">
+            Every wallet-signed verdict on a behaviour record. EIP-712 signatures
+            verifiable against the peer's address; tx hashes link to BscScan.
+          </p>
+        </div>
+        <div className="right">
+          {[['all', 'All'], ['review', 'Review'], ['challenge', 'Challenge']].map(([f, label]) => (
+            <button key={f} className={`pr-filter ${filter === f ? 'is-active' : ''}`} onClick={() => setFilter(f)}>
+              {label}
+            </button>
+          ))}
+          <RefreshButton onClick={handleRefresh} spinning={refreshing} title="Refresh log" />
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
+          <p className="lead" style={{ margin: 0 }}>No alignment attestations yet.</p>
+        </div>
+      ) : (
+        <div className="pr-attest-list">
+          {rows.map(r => {
+            const verdictCls = (r.verdict === 'approve' || r.verdict === 'defend') ? 'good'
+                             : (r.verdict === 'reject'  || r.verdict === 'challenge') ? 'bad'
+                             : '';
+            return (
+              <div key={r.id} className="pr-attest-row">
+                <div className="pr-attest-meta">
+                  <span className="pr-attest-when">{new Date(r.created_at).toLocaleString()}</span>
+                  <span className={`pr-attest-verdict ${verdictCls}`}>
+                    {r.phase === 'review' ? r.verdict : `${r.phase}:${r.verdict}`}
+                  </span>
+                </div>
+                <div className="pr-attest-body">
+                  <div style={{ fontFamily: 'var(--serif)', fontSize: 14 }}>
+                    {r.behaviour?.title || <span style={{ opacity: 0.5 }}>(unknown behaviour)</span>}
+                  </div>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.6, marginTop: 4 }}>
+                    {r.peer_handle || SHORT(r.peer_addr)}
+                    {r.tx_hash && (
+                      <>
+                        {' · '}
+                        <a href={`https://bscscan.com/tx/${r.tx_hash}`} target="_blank" rel="noopener noreferrer"
+                           style={{ color: 'var(--accent-2)', textDecoration: 'none' }}>
+                          tx ↗
+                        </a>
+                      </>
+                    )}
+                  </div>
+                  {r.note && <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>{r.note}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Behaviour chain event log ───────────────────────────────────────────────
+// Parallel to the evidence ChainEventLog. Reads from behaviour_chain_events
+// (filled by chain-indexer-behaviour). One row per emitted event.
+
+function useBehaviourChainEvents({ filter = 'all', limit = 100 } = {}) {
+  const [rows, setRows]       = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const refetch = useCallback(async () => {
+    setLoading(true);
+    let q = supabase
+      .from('behaviour_chain_events')
+      .select('id, block_number, tx_hash, log_index, event_name, behaviour_id, peer_addr, payload, occurred_at')
+      .order('block_number', { ascending: false })
+      .order('log_index',    { ascending: false })
+      .limit(limit);
+    if (filter !== 'all') q = q.eq('event_name', filter);
+    const { data } = await q;
+    setRows(data ?? []);
+    setLoading(false);
+  }, [filter, limit]);
+
+  useEffect(() => { refetch(); }, [refetch]);
+  return { rows, loading, refetch };
+}
+
+function BehaviourChainEventLog() {
+  const [filter, setFilter] = useState('all');
+  const { rows, loading, refetch } = useBehaviourChainEvents({ filter });
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    const minSpin = new Promise(r => setTimeout(r, 500));
+    try { await Promise.all([refetch(), minSpin]); }
+    finally { setRefreshing(false); }
+  };
+
+  const EVENT_FILTERS = [
+    ['all',                  'All'],
+    ['BehaviourSubmitted',   'Submitted'],
+    ['ReviewVoteCast',       'Review vote'],
+    ['BehaviourAligned',     'Aligned'],
+    ['BehaviourMisaligned',  'Misaligned'],
+    ['ChallengeOpened',      'Challenge'],
+    ['ChallengeVoteCast',    'Challenge vote'],
+    ['BehaviourDeprecated',  'Deprecated'],
+    ['BehaviourReaffirmed',  'Reaffirmed'],
+  ];
+
+  return (
+    <section>
+      <div className="pr-section-head">
+        <div>
+          <h2>Alignment chain log</h2>
+          <p className="sub">
+            Raw events emitted by the BehaviourConsensus contract, indexed every minute.
+            The chain is the receipt — every state transition appears here.
+          </p>
+        </div>
+        <div className="right">
+          <RefreshButton onClick={handleRefresh} spinning={refreshing} title="Refresh log" />
+        </div>
+      </div>
+
+      <div className="pr-chain-filters" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
+        {EVENT_FILTERS.map(([f, label]) => (
+          <button key={f} className={`pr-filter ${filter === f ? 'is-active' : ''}`} onClick={() => setFilter(f)}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
+          <p className="lead" style={{ margin: 0 }}>No chain events yet.</p>
+          <p className="sub" style={{ margin: '8px 0 0' }}>
+            Once a behaviour is registered on-chain, events stream in within ~60 seconds.
+          </p>
+        </div>
+      ) : (
+        <div className="pr-chain-list">
+          {rows.map(r => (
+            <div key={r.id} className="pr-chain-row" style={{
+              display: 'grid', gridTemplateColumns: '160px 1fr auto', gap: 12,
+              padding: '10px 14px', borderBottom: '1px solid var(--line-soft)',
+              alignItems: 'baseline',
+            }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.7 }}>
+                {r.occurred_at ? new Date(r.occurred_at).toLocaleString() : `block ${r.block_number}`}
+              </span>
+              <div>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600 }}>
+                  {r.event_name}
+                </span>
+                {r.peer_addr && (
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.6, marginLeft: 8 }}>
+                    by {SHORT(r.peer_addr)}
+                  </span>
+                )}
+                {r.payload?.grounds && (
+                  <div style={{ fontStyle: 'italic', fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+                    "{r.payload.grounds}"
+                  </div>
+                )}
+              </div>
+              <a href={`https://bscscan.com/tx/${r.tx_hash}`} target="_blank" rel="noopener noreferrer"
+                 style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--accent-2)', textDecoration: 'none' }}>
+                tx ↗
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPending }) {
+  const [bhTab, setBhTab] = useState('queue');
   const { items: queue,     loading: qLoading, refetch: refetchQueue     } = useBehaviourQueue();
   const { items: contested, loading: cLoading, refetch: refetchContested } = useBehaviourContested();
   const { items: unchained, refetch: refetchUnchained }                    = useUnchainedBehaviour();
@@ -1974,7 +2213,7 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
   const handleVote = useCallback((item, verdict) => {
     setPendingSign({
       action: 'attest_behaviour',
-      title:  verdict === 'approve' ? 'Endorse behaviour as aligned' : 'Mark behaviour as misaligned',
+      title:  verdict === 'approve' ? 'Endorse case as aligned' : 'Mark case as misaligned',
       sub:    `Attesting "${(item.title ?? '').slice(0, 60)}" as ${verdict}.`,
       subject: item.id, verdict, phase: 'review', note: '',
       danger: verdict === 'reject',
@@ -2013,8 +2252,8 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
   const handleChallengeVote = useCallback((item, support) => {
     setPendingSign({
       action: 'attest_behaviour',
-      title:  support ? 'Support challenge' : 'Defend behaviour canon',
-      sub:    `Voting on contested behaviour "${(item.title ?? '').slice(0, 60)}".`,
+      title:  support ? 'Support challenge' : 'Defend alignment canon',
+      sub:    `Voting on contested case "${(item.title ?? '').slice(0, 60)}".`,
       subject: item.id, verdict: support ? 'challenge' : 'defend', phase: 'challenge', note: '',
       danger: support,
       signOverride: async () => {
@@ -2049,6 +2288,23 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
 
   return (
     <div>
+      <div className="pr-tabs">
+        <button className={`pr-tab ${bhTab === 'queue' ? 'is-active' : ''}`} onClick={() => setBhTab('queue')}>
+          Review queue <span className="count">{queue.length + contested.length}</span>
+        </button>
+        <button className={`pr-tab ${bhTab === 'log' ? 'is-active' : ''}`} onClick={() => setBhTab('log')}>
+          Attestation log
+        </button>
+        <button className={`pr-tab ${bhTab === 'chain' ? 'is-active' : ''}`} onClick={() => setBhTab('chain')}>
+          Chain log
+        </button>
+      </div>
+
+      {bhTab === 'log'   && <BehaviourAttestationLog />}
+      {bhTab === 'chain' && <BehaviourChainEventLog />}
+
+      {bhTab === 'queue' && (
+      <>
       {unchained.length > 0 && (
         <div style={{
           border: '1px dashed color-mix(in oklab, var(--warn) 50%, var(--line))',
@@ -2056,7 +2312,7 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
           background: 'color-mix(in oklab, var(--warn) 8%, var(--bg-elev))',
         }}>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
-            ◇ {unchained.length} behaviour submission{unchained.length === 1 ? '' : 's'} awaiting on-chain registration
+            ◇ {unchained.length} alignment submission{unchained.length === 1 ? '' : 's'} awaiting on-chain registration
           </div>
           <p className="sub" style={{ margin: '0 0 14px' }}>
             Filed but not yet recorded. Hash the (model, input, output) bundle and submit.
@@ -2081,10 +2337,10 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
 
       <div className="pr-section-head">
         <div>
-          <h2>Behaviour records awaiting attestation</h2>
+          <h2>Alignment records awaiting attestation</h2>
           <p className="sub">
-            AI behaviours awaiting peer review. Same lifecycle as evidence; quorum scales with the
-            shared peer registry ({peerCount ?? '…'} peers today).
+            AI alignment cases awaiting peer review. Same lifecycle as evidence; quorum scales with
+            the shared peer registry ({peerCount ?? '…'} peers today).
           </p>
         </div>
       </div>
@@ -2093,7 +2349,7 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
         <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING QUEUE…</div>
       ) : queue.length === 0 ? (
         <div style={{ padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--line-soft)', borderRadius: 'var(--radius-l)' }}>
-          <p className="lead" style={{ margin: 0 }}>The behaviour queue is clear.</p>
+          <p className="lead" style={{ margin: 0 }}>The alignment queue is clear.</p>
         </div>
       ) : (
         <div className="pr-review-list">
@@ -2137,7 +2393,7 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
         <>
           <div className="pr-section-head" style={{ marginTop: 40 }}>
             <div>
-              <h2>Contested behaviour records</h2>
+              <h2>Contested alignment records</h2>
               <p className="sub">
                 A challenge window of {CHALLENGE_WINDOW_DAYS} days is open. Reaffirm or deprecate.
               </p>
@@ -2183,6 +2439,8 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
             </div>
           )}
         </>
+      )}
+      </>
       )}
     </div>
   );
@@ -2572,7 +2830,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
           className={`pr-tab ${recordType === 'behaviour' ? 'is-active' : ''}`}
           onClick={() => setRecordType('behaviour')}
         >
-          Behaviour <span className="count" style={{ opacity: 0.7 }}>alignment</span>
+          Alignment
         </button>
       </div>
 
@@ -2811,7 +3069,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
             catch (err) {
               setChainErr(err?.code === 4001
                 ? 'Signature rejected — attestation not recorded.'
-                : `Behaviour attestation failed — ${err?.message || 'unknown error'}`);
+                : `Alignment attestation failed — ${err?.message || 'unknown error'}`);
             }
             return;
           }
