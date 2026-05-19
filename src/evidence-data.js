@@ -660,19 +660,20 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
   const termsKey = terms.join(' ');
   const v = ['approve', 'reject', 'challenge', 'defend'].includes(verdict) ? verdict : '';
 
-  // We query the `attestation_log_view` (migration 20260517010000) which
-  // flattens evidence.search_text + evidence.title onto each attestation row.
-  // PostgREST `or=(...)` doesn't accept dotted paths to embedded resources,
-  // so the view lets a single per-term OR filter cover handle, address, and
-  // the full evidence searchable surface (title + source + excerpt + body +
-  // quote + tags).
+  // We query the `attestation_log_view` (migration 20260517010000, extended
+  // 20260519000000) which flattens evidence.search_text + evidence.title +
+  // evidence_id::text onto each attestation row. PostgREST `or=(...)` doesn't
+  // accept dotted paths to embedded resources, so the view lets a single
+  // per-term OR filter cover handle, address, the full evidence searchable
+  // surface (title + source + excerpt + body + quote + tags), and the UUID
+  // (full or prefix copied from an archive card).
   const FROM_VIEW = 'attestation_log_view';
 
   const applyFilters = (req) => {
     if (v) req = req.eq('verdict', v);
     for (const term of terms) {
       req = req.or(
-        `peer_handle.ilike.%${term}%,peer_addr.ilike.%${term}%,evidence_search_text.ilike.%${term}%`
+        `peer_handle.ilike.%${term}%,peer_addr.ilike.%${term}%,evidence_search_text.ilike.%${term}%,evidence_id_text.ilike.%${term}%`
       );
     }
     return req;

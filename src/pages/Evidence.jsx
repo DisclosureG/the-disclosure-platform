@@ -4,6 +4,7 @@ import { PILLARS, useEvidence, useTierCounts, useTypeCounts, STATUS_LABEL, openC
 import { supabase } from '../lib/supabase';
 import { isPeerActive, getPeerHandle, signAttestation, openChallengeOnChain, submitEvidenceOnChain, waitForTx, CONSENSUS_ADDR, getChallengeCooldownRemaining, computeContentHash } from '../lib/wallet';
 import { markEvidenceOnchain } from '../evidence-data';
+import CopyChip from '../components/CopyChip';
 import '../styles/interstellar.css';
 import '../styles/evidence.css';
 
@@ -177,11 +178,18 @@ function Controls({ q, setQ, type, setType, tier, setTier, sort, setSort, onSubm
 function EvCard({ e, onOpen }) {
   const tierLabel = e.tier === 1 ? 'TI' : e.tier === 2 ? 'TII' : 'TIII';
   const isDeprecated = e.status === 'deprecated';
+  const shortId = e.id ? `${String(e.id).slice(0, 8)}…` : '';
+  const handleActivate = () => onOpen(e);
   return (
-    <button
+    <div
       id={`ev-${e.id}`}
+      role="button"
+      tabIndex={0}
       className={`ev-card${isDeprecated ? ' is-deprecated' : e.status === 'contested' ? ' is-contested' : ''}`}
-      onClick={() => onOpen(e)}
+      onClick={handleActivate}
+      onKeyDown={(ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); handleActivate(); }
+      }}
     >
       <div className="ev-card-top">
         <span className="ev-type">{e.type}</span>
@@ -198,13 +206,18 @@ function EvCard({ e, onOpen }) {
         <span className="year">{e.year}</span>
       </p>
       <p className="ev-card-excerpt">{e.excerpt}</p>
+      <div className="ev-card-id-row" title={`Evidence id · ${e.id}`}>
+        <span className="ev-card-id-label">ID</span>
+        <span className="ev-card-id-value">{shortId}</span>
+        <CopyChip value={e.id} label="evidence id" />
+      </div>
       <div className="ev-card-foot">
         <div className="ev-card-tags">
           {(e.tags || []).slice(0, 3).map(t => <span key={t}>#{t}</span>)}
         </div>
         <span className="ev-card-arrow">Open →</span>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -393,7 +406,6 @@ function DetailModal({ e, onClose, walletPeer }) {
         <h3 className={`ev-detail-title${isDeprecated ? ' ev-detail-title-deprecated' : ''}`}>{e.title}</h3>
         <p className="ev-detail-src">
           <span>{e.source}</span> · <span className="year">{e.year}</span>
-          <span> · Pillar {e.pillarNum} {e.pillarTitle}</span>
         </p>
 
         {/* Deprecated notice */}
@@ -433,11 +445,14 @@ function DetailModal({ e, onClose, walletPeer }) {
           <dt>Status</dt><dd>{STATUS_LABEL[e.status] || 'Canon'}</dd>
         </dl>
 
-        <div className="ev-detail-tag-row">
-          {(e.tags || []).map(t => (
-            <a key={t} href="#" onClick={(ev) => ev.preventDefault()}>#{t}</a>
-          ))}
-        </div>
+        {e.tags && e.tags.length > 0 && (
+          <div className="ev-detail-tag-row">
+            <span className="ev-detail-tag-label">Tags</span>
+            {e.tags.map(t => (
+              <a key={t} href="#" onClick={(ev) => ev.preventDefault()}>{t}</a>
+            ))}
+          </div>
+        )}
 
         {e.link && e.link !== '#' && (
           <a href={e.link} target="_blank" rel="noopener noreferrer" className="ev-detail-cta">
@@ -505,6 +520,12 @@ function DetailModal({ e, onClose, walletPeer }) {
             )}
           </div>
         )}
+
+        <p className="ev-modal-id" title={`Evidence id · ${e.id}`}>
+          <span className="ev-modal-id-label">ID</span>
+          <span className="ev-modal-id-value">{e.id}</span>
+          <CopyChip value={e.id} label="evidence id" />
+        </p>
       </div>
     </div>
   );

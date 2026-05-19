@@ -525,6 +525,25 @@
 .ev-card-tags span { color: var(--ink-soft); }
 .ev-card-arrow { display: inline-flex; align-items: center; gap: 6px; color: oklch(0.72 0.19 145); transition: color .2s ease; }
 .ev-card:hover .ev-card-arrow { color: oklch(0.78 0.21 145); }
+.ev-card-id-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  opacity: 0.75;
+  margin-top: -4px;
+}
+.ev-card-id-label {
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 9px;
+  opacity: 0.7;
+}
+.ev-card-id-value { color: var(--ink-soft); }
 .ev-empty {
   grid-column: 1 / -1;
   padding: 80px 32px;
@@ -629,7 +648,15 @@
   color: var(--ink-faint);
 }
 .ev-detail-meta dd { margin: 0; color: var(--ink); }
-.ev-detail-tag-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+.ev-detail-tag-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+.ev-detail-tag-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-right: 4px;
+}
 .ev-detail-tag-row a {
   font-family: var(--mono);
   font-size: 10px;
@@ -656,6 +683,31 @@
   transition: all .2s ease;
 }
 .ev-detail-cta:hover { background: var(--accent); }
+
+/* ID footer inside the detail modal — full UUID + copy chip */
+.ev-modal-id {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  opacity: 0.6;
+  margin: 22px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+  word-break: break-all;
+  cursor: text;
+}
+.ev-modal-id-label {
+  display: inline-block;
+  min-width: 78px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+  opacity: 0.6;
+  margin-right: 6px;
+  user-select: none;
+}
+.ev-modal-id-value { user-select: all; margin-right: 8px; }
 
 /* ========== Submit form ========== */
 .ev-form-row { display: grid; gap: 6px; margin-bottom: 14px; }

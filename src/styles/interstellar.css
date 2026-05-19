@@ -1468,6 +1468,9 @@ section {
 .copy-chip:hover { border-color: var(--accent); color: var(--accent); }
 .copy-chip.is-copied { border-color: var(--accent); background: var(--accent); color: var(--bg); }
 .copy-chip code { font-family: var(--mono); }
+/* Icon-only modifier — used inline next to short identifiers (evidence id, case id) */
+.copy-chip-icon       { padding: 3px 6px; vertical-align: middle; opacity: 0.85; }
+.copy-chip-icon:hover { opacity: 1; }
 
 /* Account strip */
 .account-strip {

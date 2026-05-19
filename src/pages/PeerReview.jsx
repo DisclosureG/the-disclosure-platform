@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { BrandMark } from '../components/Sigil';
+import CopyChip from '../components/CopyChip';
 import {
   PILLARS,
   canonizeThreshold, expelThreshold, deprecateThreshold,
@@ -845,7 +846,10 @@ function EvidencePeekModal({ evidenceId, onClose }) {
           <>
             <div className="eyebrow" style={{ marginBottom: 10 }}>◇ Evidence</div>
             <p className="lead" style={{ margin: 0 }}>{error}</p>
-            <p className="sub" style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>{evidenceId}</p>
+            <p className="sub" style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <span>{evidenceId}</span>
+              <CopyChip value={evidenceId} label="evidence id" />
+            </p>
           </>
         ) : !data ? (
           <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING EVIDENCE…</div>
@@ -862,6 +866,7 @@ function EvidencePeekModal({ evidenceId, onClose }) {
             <p className="pr-ev-modal-id" title={`Evidence id · ${data.id}`}>
               <span className="pr-ev-modal-label">ID</span>
               <span className="pr-ev-modal-id-value">{data.id}</span>
+              <CopyChip value={data.id} label="evidence id" />
             </p>
             {data.excerpt && <p className="pr-ev-modal-body">{data.excerpt}</p>}
             {data.quote && <p className="pr-ev-modal-quote">&ldquo;{data.quote}&rdquo;</p>}
@@ -1125,7 +1130,7 @@ function ActivityLog() {
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by handle, 0x address, or evidence…"
+          placeholder="Search by handle, 0x address, evidence, or id…"
           aria-label="Search attestation log"
           spellCheck={false}
           autoCapitalize="off"
@@ -2102,7 +2107,8 @@ function BehaviourAttestationLog() {
   }, [refreshing, refetch]);
 
   // Client-side filter — the hook fetches the last 200 rows; query and verdict
-  // refine that locally so the UI feels instant.
+  // refine that locally so the UI feels instant. The hay includes behaviour_id
+  // so pasting a full or partial UUID from an alignment archive card matches.
   const filtered = useMemo(() => rows.filter(r => {
     if (verdict && r.verdict !== verdict) return false;
     if (!debounced) return true;
@@ -2140,7 +2146,7 @@ function BehaviourAttestationLog() {
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by handle, 0x address, or alignment case…"
+          placeholder="Search by handle, 0x address, alignment case, or id…"
           aria-label="Search alignment attestation log"
           spellCheck={false}
           autoCapitalize="off"
@@ -2507,7 +2513,10 @@ function BehaviourPeekModal({ behaviourId, onClose }) {
           <>
             <div className="eyebrow" style={{ marginBottom: 10 }}>◇ Alignment case</div>
             <p className="lead" style={{ margin: 0 }}>{error}</p>
-            <p className="sub" style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>{behaviourId}</p>
+            <p className="sub" style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <span>{behaviourId}</span>
+              <CopyChip value={behaviourId} label="alignment case id" />
+            </p>
           </>
         ) : !data ? (
           <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em' }}>LOADING CASE…</div>
@@ -2541,6 +2550,7 @@ function BehaviourPeekModal({ behaviourId, onClose }) {
             <p className="pr-ev-modal-id" title={`Behaviour id · ${data.id}`}>
               <span className="pr-ev-modal-label">ID</span>
               <span className="pr-ev-modal-id-value">{data.id}</span>
+              <CopyChip value={data.id} label="alignment case id" />
             </p>
           </>
         )}

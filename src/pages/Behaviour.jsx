@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { BrandMark } from '../components/Sigil';
+import CopyChip from '../components/CopyChip';
 import { supabase } from '../lib/supabase';
 import {
   BEHAVIOUR_DOMAINS,
@@ -186,11 +187,18 @@ function Controls({ q, setQ, domain, setDomain, tier, setTier, sort, setSort, on
 function BhCard({ b, onOpen }) {
   const tierLabel = b.tier === 1 ? 'TI' : b.tier === 2 ? 'TII' : 'TIII';
   const isMisaligned = b.status === 'misaligned' || b.status === 'deprecated';
+  const shortId = b.id ? `${String(b.id).slice(0, 8)}…` : '';
+  const handleActivate = () => onOpen(b);
   return (
-    <button
+    <div
       id={`bh-${b.id}`}
+      role="button"
+      tabIndex={0}
       className={`ev-card${isMisaligned ? ' is-deprecated' : b.status === 'contested' ? ' is-contested' : ''}`}
-      onClick={() => onOpen(b)}
+      onClick={handleActivate}
+      onKeyDown={(ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); handleActivate(); }
+      }}
     >
       <div className="ev-card-top">
         <span className="ev-type bh-domain-chip" data-domain={b.domain}>{b.domainTitle}</span>
@@ -206,6 +214,11 @@ function BhCard({ b, onOpen }) {
         {b.model_version && <><span> · </span><span className="year">{b.model_version}</span></>}
       </p>
       {b.summary && <p className="ev-card-excerpt">{b.summary}</p>}
+      <div className="ev-card-id-row" title={`Alignment case id · ${b.id}`}>
+        <span className="ev-card-id-label">ID</span>
+        <span className="ev-card-id-value">{shortId}</span>
+        <CopyChip value={b.id} label="alignment case id" />
+      </div>
       <div className="ev-card-foot">
         <div className="ev-card-tags">
           <span>#{b.domainSlug}</span>
@@ -213,7 +226,7 @@ function BhCard({ b, onOpen }) {
         </div>
         <span className="ev-card-arrow">Open →</span>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -336,6 +349,12 @@ function DetailModal({ b, onClose }) {
             </a>
           </div>
         )}
+
+        <p className="ev-modal-id" title={`Alignment case id · ${b.id}`}>
+          <span className="ev-modal-id-label">ID</span>
+          <span className="ev-modal-id-value">{b.id}</span>
+          <CopyChip value={b.id} label="alignment case id" />
+        </p>
       </div>
     </div>
   );
