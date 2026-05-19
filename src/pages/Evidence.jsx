@@ -8,8 +8,10 @@ import '../styles/interstellar.css';
 import '../styles/evidence.css';
 
 function EvidenceBadge({ status }) {
-  if (!status || status === 'canon' || status === 'approved') return null;
+  if (!status) return null;
   const map = {
+    canon:      { label: 'Canon',      cls: 'ev-badge-reaffirmed' },
+    approved:   { label: 'Canon',      cls: 'ev-badge-reaffirmed' },
     contested:  { label: 'Contested',  cls: 'ev-badge-contested'  },
     deprecated: { label: 'Deprecated', cls: 'ev-badge-deprecated' },
     reaffirmed: { label: 'Reaffirmed', cls: 'ev-badge-reaffirmed' },

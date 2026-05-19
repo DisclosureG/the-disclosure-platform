@@ -1532,7 +1532,7 @@ function ConnectScreen({ onConnect, connecting, peerCount, nomineeCount, attesta
             <div style={{ display: 'flex', marginBottom: 8, gap: 12, alignItems: 'center' }}>
               <span className="eyebrow">How it works</span>
               <span style={{ flex: 1 }} />
-              <a href="/artefacts/blockchain/superalignment.pdf" target="_blank" rel="noopener noreferrer" className="mono" style={{ fontSize: 9, color: 'var(--accent-2)', letterSpacing: '0.18em', textDecoration: 'none', textTransform: 'uppercase' }}>Whitepaper ↗</a>
+              <a href="/artefacts/blockchain/archive.pdf" target="_blank" rel="noopener noreferrer" className="mono" style={{ fontSize: 9, color: 'var(--accent-2)', letterSpacing: '0.18em', textDecoration: 'none', textTransform: 'uppercase' }}>Whitepaper ↗</a>
             </div>
             {[
               ['01', 'Connect your wallet', 'We never read your balance. The signature only proves you control the address.'],
@@ -2522,10 +2522,6 @@ function BehaviourPeekModal({ behaviourId, onClose }) {
             <p className="pr-ev-modal-src">
               <span className="pr-ev-modal-label">Model</span> {data.model_name}{data.model_version ? ` · ${data.model_version}` : ''}
             </p>
-            <p className="pr-ev-modal-id" title={`Behaviour id · ${data.id}`}>
-              <span className="pr-ev-modal-label">ID</span>
-              <span className="pr-ev-modal-id-value">{data.id}</span>
-            </p>
             {data.summary && <p className="pr-ev-modal-body">{data.summary}</p>}
             {data.challenge_reason && (
               <p className="pr-ev-modal-quote" style={{ fontStyle: 'italic' }}>
@@ -2542,6 +2538,10 @@ function BehaviourPeekModal({ behaviourId, onClose }) {
                 Open in archive →
               </a>
             </div>
+            <p className="pr-ev-modal-id" title={`Behaviour id · ${data.id}`}>
+              <span className="pr-ev-modal-label">ID</span>
+              <span className="pr-ev-modal-id-value">{data.id}</span>
+            </p>
           </>
         )}
       </div>
@@ -3002,10 +3002,10 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
     <div>
       <div className="pr-tabs">
         <button className={`pr-tab ${bhTab === 'queue' ? 'is-active' : ''}`} onClick={() => setBhTab('queue')}>
-          Review queue <span className="count">{queue.length + contested.length}</span>
+          Review queue <span className="count">{queue.length}</span>
         </button>
         <button className={`pr-tab ${bhTab === 'challenge' ? 'is-active' : ''}`} onClick={() => setBhTab('challenge')}>
-          Open challenge
+          Challenges <span className="count">{contested.length}</span>
         </button>
         <button className={`pr-tab ${bhTab === 'log' ? 'is-active' : ''}`} onClick={() => setBhTab('log')}>
           Attestation log
@@ -3023,11 +3023,78 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
         </>
       )}
       {bhTab === 'challenge' && (
-        <OpenChallengeBehaviourPanel
-          onOpen={handleOpenChallengeBehaviour}
-          peerCount={peerCount}
-          cooldownSecs={bhChallengeCooldownSecs}
-        />
+        <section>
+          {contested.length > 0 && (
+            <>
+              <div className="pr-section-head">
+                <div>
+                  <h2>Contested alignment records</h2>
+                  <p className="sub">
+                    A challenge window of {CHALLENGE_WINDOW_DAYS} days is open. Reaffirm or deprecate.
+                  </p>
+                </div>
+              </div>
+              {cLoading ? (
+                <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-faint)' }}>LOADING…</div>
+              ) : (
+                <div className="pr-review-list" style={{ marginBottom: 40 }}>
+                  {contested.map(item => (
+                    <div key={item.id} className="pr-review-card">
+                      <div className="pr-review-top">
+                        <span className="pr-review-tier" data-tier={item.tier}>
+                          <span className="bar"><i /><i /><i /></span>
+                          T{item.tier}
+                        </span>
+                        <span style={{ fontSize: 11, opacity: 0.7, textTransform: 'uppercase' }}>
+                          {domainTitle(item.domain)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPeekId(item.id)}
+                          className="pr-case-link"
+                          title={`Open alignment case · ${item.id}`}
+                        >
+                          case {item.id.slice(0, 8)} ↗
+                        </button>
+                      </div>
+                      <h3 className="pr-review-title">{item.title}</h3>
+                      <p className="pr-review-src" style={{ opacity: 0.7, fontSize: 13, margin: '4px 0 10px' }}>
+                        <strong>{item.model_name}</strong>
+                        {item.model_version && <span> · {item.model_version}</span>}
+                      </p>
+                      {item.summary && <p className="pr-review-excerpt">{item.summary}</p>}
+                      {item.challenge_reason && (
+                        <p className="pr-review-excerpt" style={{ fontStyle: 'italic' }}>
+                          Grounds: {item.challenge_reason}
+                        </p>
+                      )}
+                      <BehaviourFullDetails item={item} />
+                      <AttestBar
+                        approvals={item.defense_votes ?? 0}
+                        rejections={item.challenge_votes ?? 0}
+                        canonThresh={peerCount ?? 1}
+                        expelThresh={deprecateThreshold(item.tier, peerCount)}
+                      />
+                      <div className="pr-review-actions">
+                        <button className="pr-peer-btn approve" onClick={() => handleChallengeVote(item, false)}>
+                          Defend
+                        </button>
+                        <button className="pr-peer-btn danger" onClick={() => handleChallengeVote(item, true)}>
+                          Support challenge
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          <OpenChallengeBehaviourPanel
+            onOpen={handleOpenChallengeBehaviour}
+            peerCount={peerCount}
+            cooldownSecs={bhChallengeCooldownSecs}
+          />
+        </section>
       )}
 
       {bhTab === 'queue' && (
@@ -3110,9 +3177,8 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
                 <button
                   type="button"
                   onClick={() => setPeekId(item.id)}
-                  className="pr-log-evidence-link"
+                  className="pr-case-link"
                   title={`Open alignment case · ${item.id}`}
-                  style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.7 }}
                 >
                   case {item.id.slice(0, 8)} ↗
                 </button>
@@ -3143,72 +3209,6 @@ function BehaviourPanel({ me, peerCount, setPendingSign, setChainErr, setChainPe
         </div>
       )}
 
-      {contested.length > 0 && (
-        <>
-          <div className="pr-section-head" style={{ marginTop: 40 }}>
-            <div>
-              <h2>Contested alignment records</h2>
-              <p className="sub">
-                A challenge window of {CHALLENGE_WINDOW_DAYS} days is open. Reaffirm or deprecate.
-              </p>
-            </div>
-          </div>
-          {cLoading ? (
-            <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-faint)' }}>LOADING…</div>
-          ) : (
-            <div className="pr-review-list">
-              {contested.map(item => (
-                <div key={item.id} className="pr-review-card">
-                  <div className="pr-review-top">
-                    <span className="pr-review-tier" data-tier={item.tier}>
-                      <span className="bar"><i /><i /><i /></span>
-                      T{item.tier}
-                    </span>
-                    <span style={{ fontSize: 11, opacity: 0.7, textTransform: 'uppercase' }}>
-                      {domainTitle(item.domain)}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setPeekId(item.id)}
-                      className="pr-log-evidence-link"
-                      title={`Open alignment case · ${item.id}`}
-                      style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.7 }}
-                    >
-                      case {item.id.slice(0, 8)} ↗
-                    </button>
-                  </div>
-                  <h3 className="pr-review-title">{item.title}</h3>
-                  <p className="pr-review-src" style={{ opacity: 0.7, fontSize: 13, margin: '4px 0 10px' }}>
-                    <strong>{item.model_name}</strong>
-                    {item.model_version && <span> · {item.model_version}</span>}
-                  </p>
-                  {item.summary && <p className="pr-review-excerpt">{item.summary}</p>}
-                  {item.challenge_reason && (
-                    <p className="pr-review-excerpt" style={{ fontStyle: 'italic' }}>
-                      Grounds: {item.challenge_reason}
-                    </p>
-                  )}
-                  <BehaviourFullDetails item={item} />
-                  <AttestBar
-                    approvals={item.defense_votes ?? 0}
-                    rejections={item.challenge_votes ?? 0}
-                    canonThresh={peerCount ?? 1}
-                    expelThresh={deprecateThreshold(item.tier, peerCount)}
-                  />
-                  <div className="pr-review-actions">
-                    <button className="pr-peer-btn approve" onClick={() => handleChallengeVote(item, false)}>
-                      Defend
-                    </button>
-                    <button className="pr-peer-btn danger" onClick={() => handleChallengeVote(item, true)}>
-                      Support challenge
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
       </>
       )}
       <BehaviourPeekModal behaviourId={peekId} onClose={() => setPeekId(null)} />
@@ -3306,7 +3306,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
       sub:    `Attesting "${item.title.slice(0, 60)}${item.title.length > 60 ? '…' : ''}" as ${verdict}.`,
       subject: item.id, verdict, phase: 'review', note: '',
       danger: verdict === 'reject',
-      onConfirm: async (sig) => {
+      onConfirm: async (sig, note) => {
         setChainErr(null);
         let txHash = null;
         if (CONSENSUS_ADDR) {
@@ -3328,7 +3328,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
           setChainPending(null);
         }
         try {
-          await castReviewVote(item, verdict, me.addr, me.handle, null, sig, txHash, peerCount);
+          await castReviewVote(item, verdict, me.addr, me.handle, note ?? null, sig, txHash, peerCount);
         } catch (syncErr) {
           if (!txHash) {
             setChainErr(`Failed to record vote — ${syncErr?.message || 'unknown error'}`);
@@ -3350,7 +3350,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
       subject: item.id, verdict: supportChallenge ? 'challenge' : 'defend',
       phase:   'challenge', note: '',
       danger:  supportChallenge,
-      onConfirm: async (sig) => {
+      onConfirm: async (sig, note) => {
         setChainErr(null);
         let txHash = null;
         if (CONSENSUS_ADDR) {
@@ -3372,7 +3372,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
           setChainPending(null);
         }
         try {
-          await castChallengeVote(item, supportChallenge, me.addr, me.handle, null, sig, txHash, peerCount);
+          await castChallengeVote(item, supportChallenge, me.addr, me.handle, note ?? null, sig, txHash, peerCount);
         } catch (syncErr) {
           if (!txHash) {
             setChainErr(`Failed to record vote — ${syncErr?.message || 'unknown error'}`);
@@ -3549,8 +3549,9 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
       subject: item.id, verdict: 'challenge',
       phase:   'challenge', note: reason,
       danger:  true,
-      onConfirm: async (sig) => {
+      onConfirm: async (sig, note) => {
         setChainErr(null);
+        const grounds = (note ?? reason ?? '').trim();
         let txHash = null;
         if (CONSENSUS_ADDR) {
           try {
@@ -3571,7 +3572,7 @@ function VerifiedPanel({ me, role, peerCount, nomineeThreshold, revokeThreshold,
           setChainPending(null);
         }
         try {
-          await openChallenge(item, me.addr, me.handle, reason, sig, txHash, peerCount);
+          await openChallenge(item, me.addr, me.handle, grounds, sig, txHash, peerCount);
         } catch (syncErr) {
           if (!txHash) {
             setChainErr(`Failed to record challenge — ${syncErr?.message || 'unknown error'}`);

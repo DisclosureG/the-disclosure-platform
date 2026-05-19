@@ -16,9 +16,10 @@ import '../styles/behaviour.css';
 // ── Small bits ───────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }) {
-  if (!status || status === 'aligned') return null;
+  if (!status) return null;
   const map = {
     pending:    { label: 'Pending',    cls: 'ev-badge-contested'  },
+    aligned:    { label: 'Aligned',    cls: 'ev-badge-reaffirmed' },
     contested:  { label: 'Contested',  cls: 'ev-badge-contested'  },
     deprecated: { label: 'Deprecated', cls: 'ev-badge-deprecated' },
     reaffirmed: { label: 'Reaffirmed', cls: 'ev-badge-reaffirmed' },
@@ -561,14 +562,18 @@ export default function Behaviour() {
   }, [visible, sort]);
 
   const domainCounts = useDomainCounts(rows);
-  const tierCounts   = useTierCounts(rows);
+  const alignedRows  = useMemo(
+    () => rows.filter(r => r.status === 'aligned' || r.status === 'reaffirmed'),
+    [rows],
+  );
+  const tierCounts   = useTierCounts(alignedRows);
 
   return (
     <div className="ev-shell">
       <Nav />
       <main className="container">
         <Hero
-          count={rows.length}
+          count={alignedRows.length}
           tier1Count={tierCounts[1] ?? 0}
           tier2Count={tierCounts[2] ?? 0}
           tier3Count={tierCounts[3] ?? 0}

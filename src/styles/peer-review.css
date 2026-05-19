@@ -5,9 +5,6 @@
 /* Extra tokens not in interstellar.css */
 :root {
   --bg-soft: oklch(0.17 0.04 288);
-  --ok: oklch(0.80 0.14 145);
-  --warn: oklch(0.85 0.14 90);
-  --danger: oklch(0.72 0.18 25);
   --halo-ok: oklch(0.80 0.14 145 / 0.35);
   --halo-2: oklch(0.82 0.13 200 / 0.35);
   --pr-container: 1320px;
@@ -391,6 +388,22 @@
 @media (max-width: 900px) { .pr-review { grid-template-columns: 1fr; } }
 
 .pr-review-eyebrow { display: flex; gap: 10px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+.pr-review-top { display: flex; gap: 12px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
+.pr-case-link {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-bottom: 1px dashed color-mix(in oklab, var(--accent) 35%, transparent);
+  transition: color .2s ease, border-bottom-color .2s ease;
+}
+.pr-case-link:hover { color: var(--accent-2); border-bottom-color: var(--accent-2); }
 .pr-review-type {
   font-family: var(--mono); font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase;
   padding: 4px 10px;
@@ -685,7 +698,7 @@
 .pr-ev-modal-close:hover { color: var(--ink); background: var(--bg-elev); }
 .pr-ev-modal-title { font-family: var(--serif); font-size: 26px; line-height: 1.2; margin: 0 0 8px; color: var(--ink); font-weight: 400; letter-spacing: -0.01em; }
 .pr-ev-modal-src   { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--ink-faint); margin: 0 0 6px; }
-.pr-ev-modal-id       { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; color: var(--ink-faint); opacity: 0.7; margin: 0 0 18px; word-break: break-all; cursor: text; }
+.pr-ev-modal-id       { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; color: var(--ink-faint); opacity: 0.6; margin: 18px 0 0; padding-top: 14px; border-top: 1px solid var(--line-soft); word-break: break-all; cursor: text; }
 .pr-ev-modal-id-value { user-select: all; }
 .pr-ev-modal-label    { display: inline-block; min-width: 78px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-faint); opacity: 0.6; margin-right: 6px; user-select: none; }
 .pr-ev-modal-body  { font-family: var(--serif); font-size: 15px; line-height: 1.55; color: var(--ink-soft); margin: 0 0 14px; }
