@@ -9,7 +9,13 @@ const multiPageMiddleware = {
   configureServer(server) {
     server.middlewares.use(async (req, res, next) => {
       const url = req.url.split('?')[0]
-      if (url === '/artefacts' || url === '/artefacts/') {
+      if (url === '/' || url === '') {
+        const file = resolve(__dirname, 'src/index.html')
+        const html = fs.readFileSync(file, 'utf-8')
+        const transformed = await server.transformIndexHtml(url, html)
+        res.setHeader('Content-Type', 'text/html')
+        res.end(transformed)
+      } else if (url === '/artefacts' || url === '/artefacts/') {
         const file = resolve(__dirname, 'public/artefacts/index.html')
         res.setHeader('Content-Type', 'text/html')
         res.end(fs.readFileSync(file))
