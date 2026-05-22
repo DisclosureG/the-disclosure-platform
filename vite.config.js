@@ -13,6 +13,12 @@ const multiPageMiddleware = {
         const file = resolve(__dirname, 'public/artefacts/index.html')
         res.setHeader('Content-Type', 'text/html')
         res.end(fs.readFileSync(file))
+      } else if (url.startsWith('/evidence')) {
+        const file = resolve(__dirname, 'src/evidence/index.html')
+        const html = fs.readFileSync(file, 'utf-8')
+        const transformed = await server.transformIndexHtml(url, html)
+        res.setHeader('Content-Type', 'text/html')
+        res.end(transformed)
       } else if (url.startsWith('/peer-review')) {
         const file = resolve(__dirname, 'src/peer-review/index.html')
         const html = fs.readFileSync(file, 'utf-8')
