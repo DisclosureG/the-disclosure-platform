@@ -3,34 +3,14 @@
   publish   = "dist"
 
 [[redirects]]
-  from   = "/admin/*"
-  to     = "/admin/index.html"
-  status = 200
-
-[[redirects]]
-  from   = "/artefacts"
-  to     = "/artefacts/index.html"
-  status = 200
-
-[[redirects]]
-  from   = "/artefacts/"
-  to     = "/artefacts/index.html"
-  status = 200
-
-[[redirects]]
   from   = "/peer-review/*"
   to     = "/peer-review/index.html"
   status = 200
 
 [[redirects]]
-  from   = "/alignment/*"
-  to     = "/alignment/index.html"
+  from   = "/evidence/*"
+  to     = "/evidence/index.html"
   status = 200
-
-[[redirects]]
-  from   = "/behaviour/*"
-  to     = "/alignment/:splat"
-  status = 301
 
 [[redirects]]
   from   = "/*"
@@ -41,16 +21,6 @@
   for = "/assets/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
-
-[[headers]]
-  for = "/artefacts/index.html"
-  [headers.values]
-    Cache-Control = "no-cache"
-
-[[headers]]
-  for = "/artefacts/*"
-  [headers.values]
-    Cache-Control = "public, max-age=86400"
 
 [[headers]]
   for = "/*"

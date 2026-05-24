@@ -1,14 +1,21 @@
 {
-  "name": "blockchain",
+  "name": "the-disclosure-platform-contracts",
   "version": "1.0.0",
-  "description": "",
+  "description": "EvidenceConsensus — on-chain peer set, Pillar→Topic taxonomy, and evidence/binding lifecycle for The Disclosure Platform (BSC).",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "compile": "hardhat compile",
+    "test": "hardhat test"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "solidity",
+    "hardhat",
+    "bsc",
+    "smart-contracts",
+    "consensus"
+  ],
+  "author": "DisclosureG",
+  "license": "MIT",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^6.1.2",
     "dotenv": "^17.4.2",

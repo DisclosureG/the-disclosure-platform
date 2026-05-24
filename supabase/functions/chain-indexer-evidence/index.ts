@@ -27,14 +27,24 @@ const MAX_BLOCKS_PER_RUN = Number(Deno.env.get("INDEXER_MAX_BLOCKS_PER_RUN") ?? 
 
 const ABI = [
   "event EvidenceSubmitted(bytes32 indexed id, uint8 tier, address indexed submitter, bytes32 contentHash)",
-  "event ReviewVoteCast(bytes32 indexed id, address indexed voter, bool approve, uint32 approveCount, uint32 rejectCount)",
-  "event EvidenceCanonized(bytes32 indexed id, uint48 canonAt, uint32 approveCount)",
-  "event EvidenceExpelled(bytes32 indexed id, uint32 rejectCount)",
-  "event EvidenceLapsed(bytes32 indexed id)",
-  "event ChallengeOpened(bytes32 indexed id, address indexed challenger, uint48 challengedAt)",
-  "event ChallengeVoteCast(bytes32 indexed id, address indexed voter, bool supportChallenge, uint32 challengeVotes, uint32 defenseVotes)",
-  "event EvidenceDeprecated(bytes32 indexed id, uint32 challengeVotes)",
-  "event EvidenceReaffirmed(bytes32 indexed id, uint32 defenseVotes)",
+  "event BindingSubmitted(bytes32 indexed bindingId, bytes32 indexed id, bytes32 indexed topicId, uint8 tier, address submitter)",
+  "event BindingQueued(bytes32 indexed bindingId, bytes32 indexed id, bytes32 indexed topicId, uint8 tier, address submitter)",
+  "event QueueBoosted(bytes32 indexed bindingId, address indexed supporter, uint32 queuePriority)",
+  "event PillarProposed(bytes32 indexed id, bytes32 metaHash, address indexed proposedBy, uint256 threshold)",
+  "event TopicProposed(bytes32 indexed id, bytes32 indexed parent, bytes32 metaHash, address indexed proposedBy, uint256 threshold)",
+  "event NodeEndorsed(bytes32 indexed id, address indexed endorser, uint32 endorsements, uint256 threshold)",
+  "event ProposalLapsed(bytes32 indexed id)",
+  "event PillarRatified(bytes32 indexed id, bytes32 metaHash)",
+  "event TopicRatified(bytes32 indexed id, bytes32 indexed parent, bytes32 metaHash)",
+  "event NodeRetired(bytes32 indexed id, uint8 kind, bytes32 indexed parent)",
+  "event ReviewVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool approve, uint32 approveCount, uint32 rejectCount)",
+  "event BindingCanonized(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint48 canonAt, uint32 approveCount)",
+  "event BindingExpelled(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 rejectCount)",
+  "event BindingLapsed(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId)",
+  "event ChallengeOpened(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed challenger, uint48 challengedAt)",
+  "event ChallengeVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool supportChallenge, uint32 challengeVotes, uint32 defenseVotes)",
+  "event BindingDeprecated(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 challengeVotes)",
+  "event BindingReaffirmed(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 defenseVotes)",
   "event PeerAdded(address indexed peer, string handle, uint256 activePeerCount)",
   "event PeerRemoved(address indexed peer, uint256 activePeerCount)",
   "event PeerNominated(address indexed nominee, string handle, address indexed nominatedBy, uint256 threshold)",
@@ -42,6 +52,7 @@ const ABI = [
   "event NomineeVerified(address indexed peer, string handle, uint256 activePeerCount)",
   "event RevocationMotioned(address indexed peer, address indexed by, uint256 threshold)",
   "event RevocationVoteCast(address indexed peer, address indexed voter, uint32 votes, uint256 threshold)",
+  "event RevocationCancelled(address indexed peer)",
   "event PeerRevoked(address indexed peer, uint256 activePeerCount)",
   "event Paused(address indexed by)",
   "event Unpaused(address indexed by)",
@@ -67,6 +78,36 @@ function bytes32ToUuid(hex32: string): string {
   return [h.slice(0,8), h.slice(8,12), h.slice(12,16), h.slice(16,20), h.slice(20)].join("-");
 }
 
+// Resolve an off-chain binding row id + topic from a decoded vote event's
+// binding_hash (the on-chain bindingId). Returns null if the binding hasn't been
+// projected yet (BindingSubmitted not indexed) — the backfill is then skipped.
+async function resolveBindingId(
+  supabase: ReturnType<typeof createClient>,
+  decoded:  { payload: Record<string, unknown> },
+): Promise<{ id: string; topic_id: string } | null> {
+  const bHash = (decoded.payload as { binding_hash?: string }).binding_hash ?? null;
+  if (!bHash) return null;
+  const { data } = await supabase
+    .from("bindings").select("id, topic_id").eq("binding_hash", bHash).maybeSingle();
+  return (data as { id: string; topic_id: string } | null) ?? null;
+}
+
+// Garbage-collect the pending founding evidence + binding placeholders under a
+// set of topics whose proposal lapsed.  These were inserted off-chain when the
+// node was proposed but were never submitted on-chain (an un-ratified topic
+// can't accept on-chain evidence), so flipping the pending/not-on-chain rows to
+// 'lapsed' is safe and idempotent.
+async function lapseFoundingBundle(
+  supabase: ReturnType<typeof createClient>,
+  topicIds: string[],
+): Promise<void> {
+  if (!topicIds.length) return;
+  await supabase.from("bindings").update({ status: "lapsed" })
+    .in("topic_id", topicIds).eq("status", "pending").eq("submitted_onchain", false);
+  await supabase.from("evidence").update({ status: "lapsed" })
+    .in("topic_id", topicIds).eq("status", "pending").eq("submitted_onchain", false);
+}
+
 type Decoded = {
   evidence_id: string | null;
   peer_addr:   string | null;
@@ -79,49 +120,101 @@ function project(name: string, args: ethers.Result): Decoded {
     case "EvidenceSubmitted":
       out.evidence_id = bytes32ToUuid(args[0] as string);
       out.peer_addr   = (args[2] as string).toLowerCase();
-      out.payload     = { tier: Number(args[1]), content_hash: (args[3] as string).toLowerCase() };
+      out.payload     = {
+        tier:         Number(args[1]),
+        content_hash: (args[3] as string).toLowerCase(),
+      };
+      break;
+    case "BindingSubmitted":
+    case "BindingQueued":
+      out.evidence_id = bytes32ToUuid(args[1] as string);
+      out.peer_addr   = (args[4] as string).toLowerCase();
+      out.payload     = {
+        binding_hash: (args[0] as string).toLowerCase(),
+        topic_hash:   (args[2] as string).toLowerCase(),
+        tier:         Number(args[3]),
+      };
+      break;
+    case "QueueBoosted":
+      out.peer_addr = (args[1] as string).toLowerCase();
+      out.payload   = {
+        binding_hash:   (args[0] as string).toLowerCase(),
+        supporter:      (args[1] as string).toLowerCase(),
+        queue_priority: Number(args[2]),
+      };
+      break;
+    case "PillarProposed":
+      out.peer_addr = (args[2] as string).toLowerCase();
+      out.payload   = { kind: "pillar", node_hash: (args[0] as string).toLowerCase(), meta_hash: (args[1] as string).toLowerCase(), threshold: Number(args[3]) };
+      break;
+    case "TopicProposed":
+      out.peer_addr = (args[3] as string).toLowerCase();
+      out.payload   = { kind: "topic", node_hash: (args[0] as string).toLowerCase(), parent: (args[1] as string).toLowerCase(), meta_hash: (args[2] as string).toLowerCase(), threshold: Number(args[4]) };
+      break;
+    case "NodeEndorsed":
+      out.peer_addr = (args[1] as string).toLowerCase();
+      out.payload   = { node_hash: (args[0] as string).toLowerCase(), endorser: (args[1] as string).toLowerCase(), endorsements: Number(args[2]), threshold: Number(args[3]) };
+      break;
+    case "ProposalLapsed":
+      out.payload = { node_hash: (args[0] as string).toLowerCase() };
+      break;
+    case "RevocationCancelled":
+      out.peer_addr = (args[0] as string).toLowerCase();
+      break;
+    case "PillarRatified":
+      out.payload = { kind: "pillar", node_hash: (args[0] as string).toLowerCase(), meta_hash: (args[1] as string).toLowerCase() };
+      break;
+    case "TopicRatified":
+      out.payload = { kind: "topic", node_hash: (args[0] as string).toLowerCase(), parent: (args[1] as string).toLowerCase(), meta_hash: (args[2] as string).toLowerCase() };
+      break;
+    case "NodeRetired":
+      out.payload = { kind: Number(args[1]) === 0 ? "pillar" : "topic", node_hash: (args[0] as string).toLowerCase(), parent: (args[2] as string).toLowerCase() };
       break;
     case "ReviewVoteCast":
-      out.evidence_id = bytes32ToUuid(args[0] as string);
-      out.peer_addr   = (args[1] as string).toLowerCase();
+      out.evidence_id = bytes32ToUuid(args[1] as string);
+      out.peer_addr   = (args[3] as string).toLowerCase();
       out.payload     = {
-        approve:       args[2] as boolean,
-        approve_count: Number(args[3]),
-        reject_count:  Number(args[4]),
+        binding_hash:  (args[0] as string).toLowerCase(),
+        topic_hash:    (args[2] as string).toLowerCase(),
+        approve:       args[4] as boolean,
+        approve_count: Number(args[5]),
+        reject_count:  Number(args[6]),
       };
       break;
-    case "EvidenceCanonized":
-      out.evidence_id = bytes32ToUuid(args[0] as string);
-      out.payload     = { canon_at: Number(args[1]), approve_count: Number(args[2]) };
+    case "BindingCanonized":
+      out.evidence_id = bytes32ToUuid(args[1] as string);
+      out.payload     = { binding_hash: (args[0] as string).toLowerCase(), canon_at: Number(args[3]), approve_count: Number(args[4]) };
       break;
-    case "EvidenceExpelled":
-      out.evidence_id = bytes32ToUuid(args[0] as string);
-      out.payload     = { reject_count: Number(args[1]) };
+    case "BindingExpelled":
+      out.evidence_id = bytes32ToUuid(args[1] as string);
+      out.payload     = { binding_hash: (args[0] as string).toLowerCase(), reject_count: Number(args[3]) };
       break;
-    case "EvidenceLapsed":
-      out.evidence_id = bytes32ToUuid(args[0] as string);
+    case "BindingLapsed":
+      out.evidence_id = bytes32ToUuid(args[1] as string);
+      out.payload     = { binding_hash: (args[0] as string).toLowerCase() };
       break;
     case "ChallengeOpened":
-      out.evidence_id = bytes32ToUuid(args[0] as string);
-      out.peer_addr   = (args[1] as string).toLowerCase();
-      out.payload     = { challenged_at: Number(args[2]) };
+      out.evidence_id = bytes32ToUuid(args[1] as string);
+      out.peer_addr   = (args[3] as string).toLowerCase();
+      out.payload     = { binding_hash: (args[0] as string).toLowerCase(), challenged_at: Number(args[4]) };
       break;
     case "ChallengeVoteCast":
-      out.evidence_id = bytes32ToUuid(args[0] as string);
-      out.peer_addr   = (args[1] as string).toLowerCase();
+      out.evidence_id = bytes32ToUuid(args[1] as string);
+      out.peer_addr   = (args[3] as string).toLowerCase();
       out.payload     = {
-        support_challenge: args[2] as boolean,
-        challenge_votes:   Number(args[3]),
-        defense_votes:     Number(args[4]),
+        binding_hash:      (args[0] as string).toLowerCase(),
+        support_challenge: args[4] as boolean,
+        challenge_votes:   Number(args[5]),
+        defense_votes:     Number(args[6]),
       };
       break;
-    case "EvidenceDeprecated":
-      out.evidence_id = bytes32ToUuid(args[0] as string);
-      out.payload     = { challenge_votes: Number(args[1]) };
+    case "BindingDeprecated":
+      out.evidence_id = bytes32ToUuid(args[1] as string);
+      out.payload     = { binding_hash: (args[0] as string).toLowerCase(), challenge_votes: Number(args[3]) };
       break;
-    case "EvidenceReaffirmed":
-      out.evidence_id = bytes32ToUuid(args[0] as string);
-      out.payload     = { defense_votes: Number(args[1]) };
+    case "BindingReaffirmed":
+      out.evidence_id = bytes32ToUuid(args[1] as string);
+      out.payload     = { binding_hash: (args[0] as string).toLowerCase(), defense_votes: Number(args[3]) };
       break;
     case "PeerAdded":
     case "NomineeVerified":
@@ -299,22 +392,25 @@ Deno.serve(async (req: Request) => {
         const verdict = parsed.name === "ReviewVoteCast"
           ? ((decoded.payload as { approve?: boolean }).approve ? "approve" : "reject")
           : ((decoded.payload as { support_challenge?: boolean }).support_challenge ? "challenge" : "defend");
-        await supabase.from("attestations").upsert(
-          {
-            evidence_id: decoded.evidence_id,
-            peer_addr:   decoded.peer_addr,
-            phase,
-            verdict,
-            tx_hash:     log.transactionHash,
-            created_at:  occurred,
-          },
-          { onConflict: "evidence_id,peer_addr,phase", ignoreDuplicates: true },
-        );
+        const bid = await resolveBindingId(supabase, decoded);
+        if (bid) {
+          await supabase.from("attestations").upsert(
+            {
+              evidence_id: decoded.evidence_id,
+              binding_id:  bid.id,
+              topic_id:    bid.topic_id,
+              peer_addr:   decoded.peer_addr,
+              phase,
+              verdict,
+              tx_hash:     log.transactionHash,
+              created_at:  occurred,
+            },
+            { onConflict: "binding_id,peer_addr,phase", ignoreDuplicates: true },
+          );
+        }
       }
 
-      // Reconcile evidence.submitted_onchain when an EvidenceSubmitted lands.
-      // Also write the content_hash so the off-chain row is bound to the
-      // chain's view from indexer-side too.
+      // EvidenceSubmitted binds the canonical content (one hash per evidence).
       if (parsed.name === "EvidenceSubmitted" && decoded.evidence_id) {
         await supabase.from("evidence")
           .update({
@@ -325,6 +421,129 @@ Deno.serve(async (req: Request) => {
           })
           .eq("id", decoded.evidence_id)
           .eq("submitted_onchain", false);
+      }
+
+      // BindingSubmitted / BindingQueued reconcile the (evidence × topic) binding
+      // row: resolve the on-chain topic node_hash → slug + pillar, then bind the
+      // row to chain.  A submission enters review immediately when a slot is free
+      // (BindingSubmitted → status 'pending') or parks in the queue when the
+      // active review set is full (BindingQueued → status 'queued').  A promoted
+      // binding re-emits BindingSubmitted, so the same handler flips queued →
+      // pending; a re-filed lapsed binding likewise returns to review.
+      if ((parsed.name === "BindingSubmitted" || parsed.name === "BindingQueued") && decoded.evidence_id) {
+        const queued = parsed.name === "BindingQueued";
+        const p = decoded.payload as { binding_hash?: string; topic_hash?: string };
+        let topicId: string | null = null, pillarId: string | null = null;
+        if (p.topic_hash) {
+          const { data: topic } = await supabase
+            .from("topics").select("id, pillar_id").eq("node_hash", p.topic_hash).maybeSingle();
+          if (topic) { topicId = (topic as { id: string }).id; pillarId = (topic as { pillar_id: string }).pillar_id; }
+        }
+        if (topicId) {
+          const onchain: Record<string, unknown> = {
+            binding_hash: p.binding_hash ?? null,
+            submitted_onchain: true, submitted_onchain_at: occurred, submission_tx_hash: log.transactionHash,
+          };
+          if (queued) onchain.queued_at = occurred;
+          // Update an existing off-chain binding, or insert one (chain-first path).
+          const { data: existing } = await supabase
+            .from("bindings").select("id, status").eq("evidence_id", decoded.evidence_id).eq("topic_id", topicId).maybeSingle();
+          if (existing) {
+            const cur = (existing as { status: string }).status;
+            // Only (re)set the lifecycle status from a pre-review state, so a
+            // late-arriving open/promote event can't undo a real verdict.
+            if (queued) {
+              if (cur === "pending" || cur === "lapsed") onchain.status = "queued";
+            } else if (cur === "queued" || cur === "lapsed") {
+              onchain.status = "pending";
+            }
+            await supabase.from("bindings").update(onchain).eq("id", (existing as { id: string }).id);
+          } else {
+            await supabase.from("bindings").insert({
+              evidence_id: decoded.evidence_id, pillar_id: pillarId, topic_id: topicId,
+              status: queued ? "queued" : "pending", ...onchain,
+            });
+          }
+        }
+      }
+
+      // QueueBoosted raises a queued binding's public priority. The event carries
+      // the authoritative running tally, so set it directly (idempotent re-runs
+      // converge to the same value).
+      if (parsed.name === "QueueBoosted") {
+        const p = decoded.payload as { binding_hash?: string; queue_priority?: number };
+        if (p.binding_hash) {
+          await supabase.from("bindings")
+            .update({ queue_priority: p.queue_priority ?? 0 })
+            .eq("binding_hash", p.binding_hash);
+        }
+      }
+
+      // ── Taxonomy reconciliation ─────────────────────────────────────────
+      // The off-chain pillars/topics rows (with human metadata) are written by
+      // the proposer's client before the on-chain call.  Here we project chain
+      // state onto them keyed by node_hash: proposed → ratified, plus proposer /
+      // tx bookkeeping.  Endorsements are read live from the contract by the UI,
+      // so NodeEndorsed only lands in chain_events.
+      if (parsed.name === "PillarProposed" || parsed.name === "TopicProposed") {
+        const p = decoded.payload as { node_hash?: string; meta_hash?: string };
+        const table = parsed.name === "PillarProposed" ? "pillars" : "topics";
+        if (p.node_hash) {
+          await supabase.from(table)
+            .update({ proposed_by: decoded.peer_addr, propose_tx: log.transactionHash, meta_hash: p.meta_hash ?? null })
+            .eq("node_hash", p.node_hash)
+            .eq("status", "proposed");
+        }
+      } else if (parsed.name === "PillarRatified" || parsed.name === "TopicRatified") {
+        const p = decoded.payload as { node_hash?: string };
+        const table = parsed.name === "PillarRatified" ? "pillars" : "topics";
+        if (p.node_hash) {
+          const { error: e } = await supabase.from(table)
+            .update({ status: "ratified" })
+            .eq("node_hash", p.node_hash)
+            .eq("status", "proposed");
+          if (!e) reconciled++;
+        }
+      } else if (parsed.name === "NodeRetired") {
+        // A ratified pillar/topic was retired by peer supermajority on-chain.
+        const p = decoded.payload as { node_hash?: string; kind?: string };
+        const table = p.kind === "pillar" ? "pillars" : "topics";
+        if (p.node_hash) {
+          const { error: e } = await supabase.from(table)
+            .update({ status: "retired" })
+            .eq("node_hash", p.node_hash)
+            .eq("status", "ratified");
+          if (!e) reconciled++;
+        }
+      } else if (parsed.name === "ProposalLapsed") {
+        // A stalled proposal was garbage-collected on-chain.  The event carries
+        // only the node id, so resolve whether it's a pillar or a topic and flip
+        // the whole founding bundle to 'lapsed' (a pillar also carries a founding
+        // topic; both carry a pending founding evidence + binding that were never
+        // submitted on-chain).  Guards keep this idempotent.
+        const p = decoded.payload as { node_hash?: string };
+        if (p.node_hash) {
+          const { data: pillarRow } = await supabase
+            .from("pillars").select("id").eq("node_hash", p.node_hash).eq("status", "proposed").maybeSingle();
+          if (pillarRow) {
+            const pillarId = (pillarRow as { id: string }).id;
+            const { data: topicRows } = await supabase
+              .from("topics").select("id").eq("pillar_id", pillarId).eq("status", "proposed");
+            await lapseFoundingBundle(supabase, (topicRows ?? []).map((t) => (t as { id: string }).id));
+            await supabase.from("topics").update({ status: "lapsed" }).eq("pillar_id", pillarId).eq("status", "proposed");
+            await supabase.from("pillars").update({ status: "lapsed" }).eq("id", pillarId).eq("status", "proposed");
+            reconciled++;
+          } else {
+            const { data: topicRow } = await supabase
+              .from("topics").select("id").eq("node_hash", p.node_hash).eq("status", "proposed").maybeSingle();
+            if (topicRow) {
+              const topicId = (topicRow as { id: string }).id;
+              await lapseFoundingBundle(supabase, [topicId]);
+              await supabase.from("topics").update({ status: "lapsed" }).eq("id", topicId).eq("status", "proposed");
+              reconciled++;
+            }
+          }
+        }
       }
 
       // ── Status reconciliation ────────────────────────────────────────────
@@ -346,66 +565,39 @@ Deno.serve(async (req: Request) => {
       // chain snapshot (which is captured at threshold-crossing time, before
       // any later off-chain attestation) would lose every vote recorded
       // between canonization and reconciliation.  Status + timestamp only.
-      if (parsed.name === "EvidenceCanonized" && decoded.evidence_id) {
-        const { error: e } = await supabase.from("evidence")
-          .update({
-            status:      "canon",
-            canon_at:    occurred,
-            reviewed_at: occurred,
-          })
-          .eq("id", decoded.evidence_id)
-          .in("status", ["pending"]);
+      // Status transitions land on the BINDING, located by its on-chain
+      // binding_hash. The .in(status,[…]) guards keep this idempotent.
+      const bHash = (decoded.payload as { binding_hash?: string }).binding_hash ?? null;
+      if (parsed.name === "BindingCanonized" && bHash) {
+        const { error: e } = await supabase.from("bindings")
+          .update({ status: "canon", canon_at: occurred, reviewed_at: occurred })
+          .eq("binding_hash", bHash).in("status", ["pending"]);
         if (!e) reconciled++;
-      } else if (parsed.name === "EvidenceExpelled" && decoded.evidence_id) {
-        const { error: e } = await supabase.from("evidence")
-          .update({
-            status:      "expelled",
-            reviewed_at: occurred,
-          })
-          .eq("id", decoded.evidence_id)
-          .in("status", ["pending"]);
+      } else if (parsed.name === "BindingExpelled" && bHash) {
+        const { error: e } = await supabase.from("bindings")
+          .update({ status: "expelled", reviewed_at: occurred })
+          .eq("binding_hash", bHash).in("status", ["pending"]);
         if (!e) reconciled++;
-      } else if (parsed.name === "EvidenceLapsed" && decoded.evidence_id) {
-        const { error: e } = await supabase.from("evidence")
+      } else if (parsed.name === "BindingLapsed" && bHash) {
+        const { error: e } = await supabase.from("bindings")
           .update({ status: "lapsed" })
-          .eq("id", decoded.evidence_id)
-          .in("status", ["pending"]);
+          .eq("binding_hash", bHash).in("status", ["pending"]);
         if (!e) reconciled++;
-      } else if (parsed.name === "ChallengeOpened" && decoded.evidence_id) {
-        // Deliberate carve-out from the v4 "indexer never writes counts" rule:
-        // openChallenge() on the contract explicitly resets r.challengeVotes=1
-        // and r.defenseVotes=0 (see EvidenceConsensus.sol::openChallenge).  The
-        // attestation_count_sync trigger only INCREMENTS, so without this
-        // reset a re-contest (canon → contested → reaffirmed → contested)
-        // would inherit cycle-1's accumulated counters and the first cycle-2
-        // attestation could push challenge_votes over the deprecation
-        // threshold off-chain without any matching chain transition.  Reset
-        // to (1, 0) mirrors the chain's post-openChallenge state — the
-        // opener's vote counts immediately.
-        const { error: e } = await supabase.from("evidence")
-          .update({
-            status:          "contested",
-            challenged_at:   occurred,
-            challenge_votes: 1,
-            defense_votes:   0,
-          })
-          .eq("id", decoded.evidence_id)
-          .in("status", ["canon", "approved", "reaffirmed"]);
+      } else if (parsed.name === "ChallengeOpened" && bHash) {
+        // Mirror the contract's openChallenge reset (challengeVotes=1, defenseVotes=0).
+        const { error: e } = await supabase.from("bindings")
+          .update({ status: "contested", challenged_at: occurred, challenge_votes: 1, defense_votes: 0 })
+          .eq("binding_hash", bHash).in("status", ["canon", "approved", "reaffirmed"]);
         if (!e) reconciled++;
-      } else if (parsed.name === "EvidenceDeprecated" && decoded.evidence_id) {
-        const { error: e } = await supabase.from("evidence")
-          .update({
-            status:        "deprecated",
-            deprecated_at: occurred,
-          })
-          .eq("id", decoded.evidence_id)
-          .in("status", ["contested"]);
+      } else if (parsed.name === "BindingDeprecated" && bHash) {
+        const { error: e } = await supabase.from("bindings")
+          .update({ status: "deprecated", deprecated_at: occurred })
+          .eq("binding_hash", bHash).in("status", ["contested"]);
         if (!e) reconciled++;
-      } else if (parsed.name === "EvidenceReaffirmed" && decoded.evidence_id) {
-        const { error: e } = await supabase.from("evidence")
+      } else if (parsed.name === "BindingReaffirmed" && bHash) {
+        const { error: e } = await supabase.from("bindings")
           .update({ status: "reaffirmed" })
-          .eq("id", decoded.evidence_id)
-          .in("status", ["contested"]);
+          .eq("binding_hash", bHash).in("status", ["contested"]);
         if (!e) reconciled++;
       }
     }

@@ -1,359 +1,406 @@
-import { useState, useEffect, useRef } from 'react';
-import { Sigil, MandalaBg, BrandMark } from '../components/Sigil';
-import Pillars from '../components/Pillars';
-import PurchaseModal from '../components/PurchaseModal';
-import VideoModal from '../components/VideoModal';
-import AudioBg from '../components/AudioBg';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import Element115 from '../components/Element115';
+import WalletButton from '../components/WalletButton';
+import AttestationVerifier from '../components/AttestationVerifier';
+import { useTierCounts, useTaxonomy, useRecentVotes, usePeerHandleMap, fetchBindingPreview } from '../evidence-data';
+import metamaskFox from '../assets/metamask-fox.svg';
 
-function useScrollSpy(ids) {
-  const [active, setActive] = useState(ids[0]);
-  useEffect(() => {
-    const onScroll = () => {
-      const y = window.scrollY + 140;
-      let cur = ids[0];
-      for (const id of ids) {
-        const el = document.getElementById(id);
-        if (el && el.offsetTop <= y) cur = id;
-      }
-      setActive(cur);
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
-    return () => window.removeEventListener('scroll', onScroll);
-  }, [ids.join(',')]);
-  return active;
+// Lazy so the evidence-detail styles + body only download when a visitor
+// actually opens a record, keeping the landing page's initial payload light.
+const EvidencePreviewModal = lazy(() => import('../components/EvidencePreviewModal'));
+import '../styles/shared.css';
+import '../styles/home.css';
+
+function timeAgo(iso) {
+  if (!iso) return '';
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60); if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h} h ago`;
+  const d = Math.floor(h / 24); return `${d} d ago`;
 }
 
-function useFadeIn() {
+// On-chain signed verdicts. `endorse` (taxonomy) is the same act as `approve`.
+const VERDICT_LABEL = { approve: 'Approved', endorse: 'Approved', reject: 'Rejected', challenge: 'Challenged', defend: 'Defended' };
+const verdictClass = (v) => (v === 'endorse' ? 'approve' : v);
+const SHORT = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '');
+
+// Apple-style scroll reveal: fade + slide-up the first time a section enters the
+// viewport. Honors prefers-reduced-motion (shows instantly).
+function Reveal({ children }) {
+  const ref = useRef(null);
+  const [shown, setShown] = useState(false);
   useEffect(() => {
-    const io = new IntersectionObserver((entries) => {
-      entries.forEach((e) => {
-        if (e.isIntersecting) {
-          e.target.classList.add('visible');
-          io.unobserve(e.target);
+    const el = ref.current;
+    if (!el) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) { setShown(true); return; }
+    // Reveal only once the section has scrolled well into view — its top has
+    // risen past the viewport's vertical middle — for the modern "settle into
+    // place" feel. Only fallback: when the page can't scroll any further (the
+    // last section, now that there's no footer) so it never stays stuck hidden.
+    const THRESHOLDS = Array.from({ length: 21 }, (_, i) => i / 20);
+    const atPageBottom = () =>
+      window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        const vh = window.innerHeight || document.documentElement.clientHeight;
+        const topPastLine = entry.boundingClientRect.top <= vh * 0.7;
+        if (entry.isIntersecting && (topPastLine || atPageBottom())) {
+          setShown(true);
+          io.disconnect();
         }
-      });
-    }, { threshold: 0.12 });
-
-    const observe = () => {
-      document.querySelectorAll('.fade-in:not(.visible)').forEach((el) => io.observe(el));
-    };
-    observe();
-
-    const mo = new MutationObserver(observe);
-    mo.observe(document.body, { childList: true, subtree: true });
-    return () => { io.disconnect(); mo.disconnect(); };
+      },
+      { threshold: THRESHOLDS },
+    );
+    io.observe(el);
+    return () => io.disconnect();
   }, []);
+  return <div ref={ref} className={`reveal${shown ? ' is-visible' : ''}`}>{children}</div>;
 }
 
-function Nav({ active, onBuy }) {
-  const links = [
-    { id: 'manifesto', label: 'Manifesto' },
-    { id: 'pillars', label: 'Pillars' },
-    { id: 'book', label: 'Thesis' },
-    { id: 'peace', label: 'Peace' },
-  ];
+function WalletIcon() {
+  return <img className="wallet-icon" src={metamaskFox} alt="" width="14" height="14" aria-hidden="true" />;
+}
 
+function Nav() {
   return (
     <nav className="nav">
       <div className="nav-inner">
         <a href="#top" className="brand">
-          <BrandMark />
-          <span className="brand-text">
-            Interstellar Psychology
-            <small>A Multiverse of Love</small>
-          </span>
+          <span className="brand-text">The Disclosure Platform<small>The Web3 Social Network</small></span>
         </a>
         <div className="nav-links">
-          {links.map((l) => (
-            <a
-              key={l.id}
-              href={`#${l.id}`}
-              className={active === l.id ? 'is-active' : ''}
-            >
-              {l.label}
-            </a>
-          ))}
+          <a href="#top" className="is-active">Home</a>
           <a href="/evidence/">Evidence</a>
-          <a href="/alignment/">Alignment</a>
           <a href="/peer-review/">Peer Review</a>
         </div>
-        <button className="nav-cta" onClick={onBuy}>Acquire Book →</button>
+        <div className="nav-right">
+          <WalletButton />
+        </div>
       </div>
     </nav>
   );
 }
 
-function Hero({ onBuy }) {
+// Bohr-model atom of Element 115 (Moscovium) — rotating electron shells around a
+// proton/neutron nucleus, with the periodic-table cell.
+function HeroOrbit() {
   return (
-    <>
-      <section id="top" className="hero-sigil-section">
-        <Sigil />
-        <div className="scroll-cue">Descend</div>
-      </section>
-      <section className="hero-thesis container">
-        <div className="eyebrow hero-eyebrow fade-in">
-          ◇ A meta-scientific field ◇ Est. for the multiverse
+    <div className="h-orbit" aria-hidden="true">
+      <Element115 size="full" />
+    </div>
+  );
+}
+
+function Hero({ counts, pillarCount, peerCount }) {
+  const stats = [
+    { v: (counts?.total ?? 0).toLocaleString(), lab: 'Evidence' },
+    { v: pillarCount ?? '—', lab: 'Pillars' },
+    { v: peerCount ?? '—', lab: 'Verified peers' },
+  ];
+  return (
+    <section id="top" className="h-hero">
+      <div className="h-hero-inner">
+        <div className="h-hero-left">
+          <span className="eyebrow">Public · On-chain · Peer-reviewed</span>
+          <h1 className="display">Evidence,<br /><em>verified</em><br />by peers.</h1>
+          <p className="lead">
+            The truth the mainstream won't host — no data harvesting, no likes,
+            no ads, no status. Every claim is filed against the record that
+            supports it, judged in public by named peers, anchored on the
+            blockchain.
+          </p>
+          <p className="lead-link">
+            <a href="/artefacts/labour-of-love.pdf" target="_blank" rel="noopener noreferrer">
+              Read the philosophy — A Labour of Love <span aria-hidden="true">→</span>
+            </a>
+          </p>
+          <div className="h-hero-cta">
+            <a className="btn btn--primary" href="/evidence/">Explore evidence <span>→</span></a>
+            <a className="btn" href="#become-a-peer">Become a peer</a>
+          </div>
         </div>
-        <h1 className="display fade-in">
-          The science of <em>love</em>,<br />
-          from belief to <em>proof.</em>
-        </h1>
-        <p className="lead hero-sub fade-in">
-          Interstellar Psychology is a new meta-discipline that bridges science and spirituality —
-          building the evidence that we live in a multiverse of love,
-          and that world peace is its natural conclusion.
-        </p>
-        <div className="hero-cta-row fade-in">
-          <button className="btn btn-primary" onClick={onBuy}>
-            Read the book <span className="btn-arrow">→</span>
+        <div className="h-hero-right">
+          <div className="h-orbit-side">
+            <HeroOrbit />
+            <div className="h-orbit-stats">
+              {stats.map(s => (
+                <div className="h-orbit-stat" key={s.lab}>
+                  <div className="v">{s.v}</div>
+                  <div className="lab">{s.lab}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SimpleIdea() {
+  const rows = [
+    ['I', 'Every claim cites its source.', 'Every entry carries its citation — a paper, book, podcast, declassified file, deposition. The claim cannot float; it has a record.'],
+    ['II', 'Verified peers attest in public.', 'Named reviewers — wallet-signed, identifiable, accountable — vote to canonize, contest, defend, or deprecate. Every vote is on-chain and signed EIP-712.'],
+    ['III', 'The chain remembers.', 'One BSC contract holds the peer set, the Pillar → Topic taxonomy, and the lifecycle. The archive grows wider (new pillars) and deeper (new topics) by peer consensus alone.'],
+  ];
+  return (
+    <section className="h-idea">
+      <div className="h-idea-grid">
+        <div>
+          <span className="eyebrow">The simple idea</span>
+          <h2 className="h2" style={{ marginTop: 20 }}>Backed by the record. Judged in public. Anchored on-chain.</h2>
+        </div>
+        <div className="h-three">
+          {rows.map(([num, h, p]) => (
+            <div className="h-three-row" key={num}>
+              <span className="num">{num}</span>
+              <div>
+                <h3>{h}</h3>
+                <p>{p}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// One row of the home vote feed. Holds local state for the optional
+// deliberation note: a peer may attach a note when voting, so the reveal toggle
+// only renders when one exists, expanding a full-width panel beneath the row —
+// mirroring the Peer Review vote history's LogRow.
+function VoteRow({ v, isNew, onOpen, handleMap }) {
+  const [showNote, setShowNote] = useState(false);
+  const note = (v.note || '').trim();
+  const peerName = v.peer_handle || handleMap[v.peer_addr?.toLowerCase()] || SHORT(v.peer_addr);
+  return (
+    <div className={`h-vote-row${isNew ? ' is-new' : ''}${showNote ? ' is-noted' : ''}`} role="row">
+      <span className="t" role="cell">{timeAgo(v.created_at)}</span>
+      <span className="peer" role="cell" title={v.peer_addr}>{peerName}</span>
+      <span className={`verdict ${verdictClass(v.verdict)}`} role="cell">{VERDICT_LABEL[v.verdict] || v.verdict}</span>
+      <span className="on" role="cell">
+        {v.evidence_title
+          ? <button type="button" className="h-vote-evi" onClick={() => onOpen(v)} title="Open the full evidence record">{v.evidence_title}</button>
+          : <span className="evi">Evidence</span>}
+        {note && (
+          <button
+            type="button"
+            className={`h-vote-note-btn ${showNote ? 'is-open' : ''}`}
+            onClick={() => setShowNote(s => !s)}
+            aria-expanded={showNote}
+            title={showNote ? 'Hide deliberation note' : 'Show the peer’s deliberation note'}
+          >
+            <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            Note
           </button>
-          <a className="btn" href="#manifesto">
-            The philosophy
-          </a>
+        )}
+      </span>
+      <span className="proof" role="cell">
+        <AttestationVerifier a={v} handle={peerName} />
+      </span>
+      {note && showNote && (
+        <div className="h-vote-note">
+          <span className="h-vote-note-label">Deliberation note</span>
+          <p>{note}</p>
         </div>
-      </section>
-    </>
+      )}
+    </div>
+  );
+}
+
+function LiveArchive({ counts, pillarCount, topicCount, peerCount, votes, handleMap }) {
+  const prev = useRef(counts.total);
+  const [ticking, setTicking] = useState(false);
+  const [preview, setPreview] = useState(null);
+
+  const openPreview = async (v) => {
+    const p = await fetchBindingPreview({ bindingId: v.binding_id, evidenceId: v.evidence_id, pillarId: v.pillar_id, topicId: v.topic_id });
+    if (p) setPreview(p);
+  };
+  useEffect(() => {
+    if (counts.total > prev.current) {
+      setTicking(true);
+      const t = setTimeout(() => setTicking(false), 1600);
+      prev.current = counts.total;
+      return () => clearTimeout(t);
+    }
+    prev.current = counts.total;
+  }, [counts.total]);
+
+  return (
+    <section className="h-archive">
+      <header className="h-archive-head">
+        <div>
+          <span className="eyebrow">The archive — live</span>
+          <h2 className="h2" style={{ marginTop: 20 }}>A public record, ticking up.</h2>
+        </div>
+        <p className="lead">
+          Every count is live — the tally moves the instant a new attestation
+          lands. Each verdict below is a named peer's vote, signed EIP-712 and
+          settled on BNB Smart Chain. Click any signature to verify it yourself.
+          No trust required.
+        </p>
+      </header>
+
+      <div className="h-archive-stats">
+        <div className="h-stat is-hero">
+          <div className="lab">Live · global</div>
+          <div className={`v${ticking ? ' is-ticking' : ''}`}>
+            <span className="num">{counts.total.toLocaleString()}</span><span className="u">entries</span>
+          </div>
+        </div>
+        <div className="h-stat">
+          <div className="lab">Pillars</div>
+          <div className="v">{pillarCount}<span className="u">wide</span></div>
+        </div>
+        <div className="h-stat">
+          <div className="lab">Topics</div>
+          <div className="v">{topicCount}<span className="u">deep</span></div>
+        </div>
+        <div className="h-stat">
+          <div className="lab">Verified peers</div>
+          <div className="v">{peerCount ?? '—'}<span className="u">named</span></div>
+        </div>
+      </div>
+
+      <div className="h-votes">
+        <div className="h-votes-head">
+          <span className="h-votes-label"><span className="dot" /> Live consensus · every vote signed &amp; on-chain</span>
+          <a className="h-votes-link" href="/peer-review/">Open the full vote history <span aria-hidden="true">→</span></a>
+        </div>
+        <div className="h-votes-table" role="table" aria-label="Recent on-chain peer votes">
+          <div className="h-vote-row is-head" role="row">
+            <span role="columnheader">When</span>
+            <span role="columnheader">Peer</span>
+            <span role="columnheader">Verdict</span>
+            <span role="columnheader">On the record</span>
+            <span role="columnheader">Proof</span>
+          </div>
+          {votes.length === 0 ? (
+            <div className="h-votes-empty">No votes yet — the ledger opens with the first signed attestation.</div>
+          ) : votes.map((v, i) => (
+            <VoteRow key={v.id} v={v} isNew={i === 0} onOpen={openPreview} handleMap={handleMap} />
+          ))}
+        </div>
+      </div>
+      {preview && (
+        <Suspense fallback={null}>
+          <EvidencePreviewModal b={preview} onClose={() => setPreview(null)} />
+        </Suspense>
+      )}
+    </section>
+  );
+}
+
+function BecomePeer({ peerCount }) {
+  const steps = [
+    ['I', 'Connect your wallet', 'Bring a MetaMask wallet on BNB Smart Chain — no email, no profile. Your wallet is your identity. Reading the archive and submitting evidence stay open to everyone; verification is what unlocks reviewing, challenging, and proposing taxonomy.'],
+    ['II', 'Get nominated by a peer', 'An existing verified peer nominates your wallet with a handle. The named network vouches for who joins — there are no anonymous moderators and no application form.'],
+    ['III', 'Earn endorsements', 'Other verified peers endorse your nomination. The number needed scales with the network — one endorsement for every ten active peers, capped at 10 once the network passes 100. Reach that count and the contract verifies you automatically. No admin in the loop.'],
+    ['IV', 'Verify the record', 'As a verified peer you canonize evidence, file and defend challenges, and propose new pillars and topics. Every action is EIP-712 signed and anchored on a single BSC contract.'],
+  ];
+  return (
+    <section id="become-a-peer" className="h-peer">
+      <div className="h-peer-grid">
+        <div className="h-peer-intro">
+          <span className="eyebrow">Become a verified peer</span>
+          <h2 className="h2" style={{ marginTop: 20 }}>Join the named network that verifies the record.</h2>
+          <p className="lead">
+            Membership is governed entirely on-chain by the peers themselves —
+            nominated, endorsed, and ratified by consensus, never by an
+            administrator.{peerCount != null ? ` ${peerCount} verified peers today.` : ''}
+          </p>
+          <div className="h-peer-cta">
+            <a className="btn btn--primary" href="/peer-review/"><WalletIcon /> Open Peer Review <span>→</span></a>
+            <a className="btn" href="/artefacts/peer-review-engineering.pdf" target="_blank" rel="noopener noreferrer">Read the engineering paper <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+        <div className="h-three">
+          {steps.map(([num, h, p]) => (
+            <div className="h-three-row" key={num}>
+              <span className="num">{num}</span>
+              <div>
+                <h3>{h}</h3>
+                <p>{p}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
 function Manifesto() {
+  const nots = [
+    'No likes', 'No feed', 'No ranking', 'No AI algorithm', 'No notifications',
+    'No followers', 'No bots', 'No anonymous mods', 'No shadowbans',
+    'No ads', 'No paid reach', 'No revenue model',
+    'No data collection', 'No takedowns', 'No closed source',
+  ];
   return (
-    <section id="manifesto" className="container manifesto">
-      <div className="manifesto-grid">
-        <div className="fade-in">
-          <div className="col-label">Axiom</div>
-          <p className="manifesto-quote">
-            <span className="drop">G</span>od enters its own creation through the human soul —
-            to truly see and know itself from within.
-          </p>
-          <p className="manifesto-quote" style={{ marginTop: 24 }}>
-            The soul possesses genuine free will. It is through the active <em>choice of love</em> that
-            the Creator verifies and deepens its understanding of creation.
-          </p>
-        </div>
-        <div className="manifesto-body fade-in">
-          <div className="col-label">Unfolding</div>
+    <section className="h-manifesto">
+      <div className="h-manifesto-grid">
+        <p className="h-quote"><span className="drop">&ldquo;</span>A feed forgets. A record remembers.<span style={{ color: 'var(--accent)' }}>&rdquo;</span></p>
+        <div className="h-manifesto-side">
+          <span className="eyebrow">What this is not</span>
+          <ul className="h-no-list">
+            {nots.map(n => <li key={n}>{n}</li>)}
+          </ul>
           <p>
-            This unfolds as a <strong>multiverse of love</strong> — infinite realities, each an arena where
-            divine consciousness experiences itself through billions of free souls choosing love amid
-            separation, joy, and suffering.
+            <strong>The Disclosure Platform</strong> is infrastructure for evidence,
+            not a place to socialise. There is no follower count, no profile photo,
+            no engagement loop. Peers carry handles and signatures, not vanity.
           </p>
           <p>
-            <strong>Love is the fundamental relational field</strong> and the verification mechanism. It can be
-            refused. Yet when freely chosen, it confirms the reality and beauty of creation.
-          </p>
-          <p>
-            Interstellar Psychology is the discipline that gathers, names, and honours this evidence —
-            from telepathy in non-speakers to fractal geometry in the cosmos, from out-of-body testimony
-            to the aching joy of synchronicity.
+            Submissions are public the instant they land. The contract is the only
+            gatekeeper, and the contract is open. Anyone may read; named peers
+            verify; the public watches.
           </p>
         </div>
       </div>
     </section>
-  );
-}
-
-function BookSection({ onBuy, onPreview }) {
-  return (
-    <section id="book" className="container book">
-      <div className="book-grid">
-        <div className="book-cover-wrap fade-in">
-          <div className="book-halo" />
-          <img className="book-cover" src="/artefacts/book.png" alt="A Multiverse of Love — book cover" />
-        </div>
-        <div className="fade-in">
-          <div className="eyebrow">THE THESIS</div>
-          <h2 className="h2" style={{ marginTop: 12 }}>
-            A Multiverse <em style={{ fontStyle: 'italic' }}>of <a href="https://www.instagram.com/p/DX3rr4kCFw5/?utm_source=ig_web_copy_link&igsh=MzRlODBiNWFlZA%3D%3D" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Love</a></em>
-          </h2>
-          <p className="lead" style={{ marginTop: 18 }}>
-            The founding story of Interstellar Psychology. A testimony to the loving infrastructure of reality.
-          </p>
-
-          <dl className="book-meta">
-            <dt>Pages</dt><dd>99 · illustrated</dd>
-            <dt>Format</dt><dd>Hardcover</dd>
-            <dt></dt><dd></dd>
-            <dt>Currencies</dt><dd>Dogecoin · Pepe</dd>
-          </dl>
-
-          <p className="book-price">
-            $420.69 <small>USD equivalent · paid in <a href="https://www.linkedin.com/posts/gillesmoenaert_share-7461069519038525440-DKjc?utm_source=share&utm_medium=member_desktop&rcm=ACoAACDEKpcBQHKvKQ94VZChbxH1YxYOv-Qce8w" target="_blank" rel="noopener noreferrer" style={{ color: '#0A66C2', textDecoration: 'none' }}>memes</a></small>
-          </p>
-
-          <div className="coin-row" style={{ margin: '20px 0 28px' }}>
-            <span className="coin-pill"><span className="coin-dot doge" />Dogecoin accepted</span>
-            <span className="coin-pill"><span className="coin-dot pepe" />Pepe accepted</span>
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <button className="btn btn-primary" onClick={onBuy}>
-              Acquire copy <span className="btn-arrow">→</span>
-            </button>
-            <button className="btn" onClick={onPreview}>
-              Watch preview <span className="btn-arrow">▶</span>
-            </button>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function Peace() {
-  return (
-    <section id="peace" className="peace">
-      <MandalaBg />
-      <div className="container peace-content">
-        <div className="peace-intro">
-          <div className="eyebrow fade-in">◇ The destination ◇</div>
-          <h2 className="h2 fade-in" style={{ marginTop: 16 }}>
-            The verification is <em style={{ color: 'var(--accent)', fontStyle: 'italic' }}>peace</em>.
-          </h2>
-          <p className="lead fade-in" style={{ marginTop: 18 }}>
-            When enough souls remember that they are creation seeing itself, the field tunes to coherence.
-            Peace is not a treaty — it is a frequency we agree to inhabit.
-          </p>
-        </div>
-
-        <div className="peace-stats">
-          <div className="stat fade-in">
-            <div className="stat-num">∞ <em>×</em></div>
-            <div className="stat-label">Realities</div>
-            <p>Each one an arena for souls to rehearse the choice of love amid separation.</p>
-          </div>
-          <div className="stat fade-in">
-            <div className="stat-num">8 <em>bn</em></div>
-            <div className="stat-label">Free souls</div>
-            <p>One species, one shared substrate, one staggering experiment in remembrance.</p>
-          </div>
-          <div className="stat fade-in">
-            <div className="stat-num stat-num--phrase">Unified <em>Field</em></div>
-            <div className="stat-label">Love</div>
-            <p>The relational substrate. The verifier. The thing that cannot be faked.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-const CONTACT_EMAIL = 'neo@interstellar-psychology.com';
-
-function ContactInline() {
-  const [open, setOpen] = useState(false);
-  return (
-    <span className={`contact-inline ${open ? 'is-open' : ''}`}>
-      <button className="contact-trigger" onClick={() => setOpen(v => !v)}>
-        <span>REACH OUT</span>
-        <span className="glyph">{open ? '−' : '+'}</span>
-      </button>
-      <a className="email-inline" href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>
-    </span>
-  );
-}
-
-function Footer() {
-  return (
-    <footer className="foot">
-      <div className="container">
-        <div className="foot-grid">
-          <div className="foot-brand">
-            <div className="brand">
-              <BrandMark />
-              <span className="brand-text">
-                Interstellar Psychology
-                <small>A Multiverse of Love</small>
-              </span>
-            </div>
-            <p>A meta-scientific field bridging science and spirituality — for the verification of a loving Multiverse and the arrival of peace.</p>
-          </div>
-          <div>
-            <h4>Pillars</h4>
-            <ul>
-              <li><a href="#pillars">Music</a></li>
-              <li><a href="#pillars">Psychedelics</a></li>
-              <li><a href="#pillars">Telepathy</a></li>
-              <li><a href="#pillars">Mindsight</a></li>
-              <li><a href="#pillars">Remote Viewing</a></li>
-            </ul>
-          </div>
-          <div>
-            <h4>More</h4>
-            <ul>
-              <li><a href="#pillars">Out of Body</a></li>
-              <li><a href="#pillars">Non-Human Intelligence</a></li>
-              <li><a href="#pillars">Multiverse</a></li>
-              <li><a href="#pillars">Infinity</a></li>
-            </ul>
-          </div>
-          <div>
-            <h4>Field</h4>
-            <ul>
-              <li><a href="#manifesto">Manifesto</a></li>
-              <li><a href="#book">The Thesis</a></li>
-              <li><a href="/evidence/">Evidence</a></li>
-              <li><a href="/alignment/">Alignment</a></li>
-              <li><a href="/peer-review/">Peer Review</a></li>
-            </ul>
-          </div>
-        </div>
-        <div className="foot-bottom">
-          <span className="brandline">
-            <span>INTERSTELLAR</span>
-            <a
-              className="archive-mark"
-              href="/artefacts/"
-              aria-label="Artefacts archive"
-              data-label="Artefacts"
-            >
-              <svg viewBox="-10 -10 20 20" aria-hidden="true">
-                <circle className="ring-2" r="8" />
-                <circle className="ring" r="5" />
-                <path className="diamond" d="M 0 -2.4 L 2.4 0 L 0 2.4 L -2.4 0 Z" />
-              </svg>
-            </a>
-            <span>PSYCHOLOGY</span>
-          </span>
-          <ContactInline />
-        </div>
-      </div>
-    </footer>
   );
 }
 
 export default function Home() {
-  const [buyOpen, setBuyOpen] = useState(false);
-  const [videoOpen, setVideoOpen] = useState(false);
-  const audioBgRef = useRef(null);
-  const active = useScrollSpy(['top', 'manifesto', 'pillars', 'book', 'peace']);
-  useFadeIn();
+  const counts = useTierCounts();
+  const tax = useTaxonomy();
+  const votes = useRecentVotes(6);
+  const handleMap = usePeerHandleMap();
+  const [peerCount, setPeerCount] = useState(null);
 
-  const openVideo = () => { audioBgRef.current?.pauseForVideo(); setVideoOpen(true); };
-  const closeVideo = () => { setVideoOpen(false); audioBgRef.current?.resumeFromVideo(); };
-
+  // Peer count lives on-chain. Load it lazily so ethers stays out of the initial
+  // Home bundle; the read uses a public RPC fallback so it resolves even for
+  // wallet-less visitors.
   useEffect(() => {
-    document.body.style.overflow = buyOpen ? 'hidden' : '';
-    return () => { document.body.style.overflow = ''; };
-  }, [buyOpen]);
+    let cancelled = false;
+    import('../lib/wallet')
+      .then(m => m.getActivePeerCount?.())
+      .then(n => { if (!cancelled && typeof n === 'number') setPeerCount(n); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div className="shell">
-      <Nav active={active} onBuy={() => setBuyOpen(true)} />
-      <Hero onBuy={() => setBuyOpen(true)} />
-      <div className="divider" />
-      <Manifesto />
-      <div className="divider" />
-      <Pillars />
-      <div className="divider" />
-      <BookSection onBuy={() => setBuyOpen(true)} onPreview={openVideo} />
-      <Peace />
-      <Footer />
-
-      <PurchaseModal open={buyOpen} onClose={() => setBuyOpen(false)} />
-      <VideoModal open={videoOpen} onClose={closeVideo} />
-      <AudioBg ref={audioBgRef} />
+      <Nav />
+      <Hero counts={counts} pillarCount={tax.pillars.length} peerCount={peerCount} />
+      <Reveal><SimpleIdea /></Reveal>
+      <Reveal>
+        <LiveArchive
+          counts={counts}
+          pillarCount={tax.pillars.length}
+          topicCount={tax.topics.length}
+          peerCount={peerCount}
+          votes={votes}
+          handleMap={handleMap}
+        />
+      </Reveal>
+      <Reveal><BecomePeer peerCount={peerCount} /></Reveal>
+      <Reveal><Manifesto /></Reveal>
     </div>
   );
 }

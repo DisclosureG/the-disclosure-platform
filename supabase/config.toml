@@ -1,0 +1,51 @@
+# Supabase project config — The Disclosure Platform.
+#
+# Link this repo to the FRESH project once, then push schema + deploy functions:
+#   supabase link --project-ref <your-new-project-ref>
+#   supabase db push
+#   supabase functions deploy
+#
+# `project_id` is the project ref of the new project (the <ref> in
+# https://<ref>.supabase.co). Replace the placeholder below, or rely on
+# `supabase link` which writes the ref into .supabase/.
+project_id = "wrxkcubyexkbphrqueoc"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+# Wallet-gated app — Supabase Auth isn't used for peer identity (the wallet +
+# on-chain registry are the source of truth). Anon key + RLS gate the public
+# tables; the edge functions use the service role.
+
+# ── Edge functions ───────────────────────────────────────────────────────────
+# All three run with verify_jwt = false: gateway-level JWT auth is replaced by
+# each function's own application-level guarantees —
+#   chain-indexer-evidence : service-role DB writes only (no user input trusted)
+#   verify-attestation     : EIP-712 signature + on-chain tx-receipt verification
+#   audit-content-hash     : read-only recompute of stored content hashes
+[functions.chain-indexer-evidence]
+enabled = true
+verify_jwt = false
+
+[functions.verify-attestation]
+enabled = true
+verify_jwt = false
+
+[functions.audit-content-hash]
+enabled = true
+verify_jwt = false

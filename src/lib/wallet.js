@@ -14,9 +14,6 @@ import {
   MULTICALL3_ADDR,
   ATTESTATION_DOMAIN, ATTESTATION_TYPES, buildEIP712DomainType,
   signAttestation,
-  BEHAVIOUR_CONSENSUS_ADDR, BEHAVIOUR_CONSENSUS_ABI,
-  BEHAVIOUR_ATTESTATION_DOMAIN, BEHAVIOUR_ATTESTATION_TYPES,
-  buildBehaviourEIP712DomainType, signBehaviourAttestation,
 } from './wallet-constants';
 
 // Re-export the ethers-free surface verbatim.
@@ -25,9 +22,6 @@ export {
   MULTICALL3_ADDR,
   ATTESTATION_DOMAIN, ATTESTATION_TYPES, buildEIP712DomainType,
   signAttestation,
-  BEHAVIOUR_CONSENSUS_ADDR, BEHAVIOUR_CONSENSUS_ABI,
-  BEHAVIOUR_ATTESTATION_DOMAIN, BEHAVIOUR_ATTESTATION_TYPES,
-  buildBehaviourEIP712DomainType, signBehaviourAttestation,
 };
 
 // ── Lazy impl loader ────────────────────────────────────────────────────────
@@ -49,6 +43,10 @@ export function prefetchWallet() { return impl(); }
 export const uuidToBytes32                  = (...a) => impl().then(m => m.uuidToBytes32(...a));
 export const bytes32ToUuid                  = (...a) => impl().then(m => m.bytes32ToUuid(...a));
 export const computeContentHash             = (...a) => impl().then(m => m.computeContentHash(...a));
+export const recoverAttestationSigner       = (...a) => impl().then(m => m.recoverAttestationSigner(...a));
+export const bindingKey                     = (...a) => impl().then(m => m.bindingKey(...a));
+export const slugToBytes32                  = (...a) => impl().then(m => m.slugToBytes32(...a));
+export const computeMetaHash                = (...a) => impl().then(m => m.computeMetaHash(...a));
 
 export const connectWallet                  = (...a) => impl().then(m => m.connectWallet(...a));
 export const switchToTargetChain            = (...a) => impl().then(m => m.switchToTargetChain(...a));
@@ -56,6 +54,9 @@ export const switchToTargetChain            = (...a) => impl().then(m => m.switc
 export const getActivePeerCount             = (...a) => impl().then(m => m.getActivePeerCount(...a));
 export const isPeerActive                   = (...a) => impl().then(m => m.isPeerActive(...a));
 export const isGenesisPeer                  = (...a) => impl().then(m => m.isGenesisPeer(...a));
+export const getLastActive                  = (...a) => impl().then(m => m.getLastActive(...a));
+export const getReviewCapacity              = (...a) => impl().then(m => m.getReviewCapacity(...a));
+export const getActiveReviewCount           = (...a) => impl().then(m => m.getActiveReviewCount(...a));
 export const getPeerHandle                  = (...a) => impl().then(m => m.getPeerHandle(...a));
 export const getNomineeThreshold            = (...a) => impl().then(m => m.getNomineeThreshold(...a));
 export const getRevokeThreshold             = (...a) => impl().then(m => m.getRevokeThreshold(...a));
@@ -67,12 +68,31 @@ export const isRevocationActive             = (...a) => impl().then(m => m.isRev
 export const getRevokeVoteCount             = (...a) => impl().then(m => m.getRevokeVoteCount(...a));
 export const hasVotedForRevoke              = (...a) => impl().then(m => m.hasVotedForRevoke(...a));
 export const getChallengeCooldownRemaining  = (...a) => impl().then(m => m.getChallengeCooldownRemaining(...a));
+export const getBoostCooldownRemaining       = (...a) => impl().then(m => m.getBoostCooldownRemaining(...a));
 export const isNominationsOpen              = (...a) => impl().then(m => m.isNominationsOpen(...a));
 export const getSeedPhaseK                  = (...a) => impl().then(m => m.getSeedPhaseK(...a));
+
+export const getTaxonomyThreshold           = (...a) => impl().then(m => m.getTaxonomyThreshold(...a));
+export const getRetireThreshold             = (...a) => impl().then(m => m.getRetireThreshold(...a));
+export const hasEndorsedNode                = (...a) => impl().then(m => m.hasEndorsedNode(...a));
+export const isRetireActive                 = (...a) => impl().then(m => m.isRetireActive(...a));
+export const getRetireVoteCount             = (...a) => impl().then(m => m.getRetireVoteCount(...a));
+export const getRetireMotionAt              = (...a) => impl().then(m => m.getRetireMotionAt(...a));
+export const hasVotedForRetire              = (...a) => impl().then(m => m.hasVotedForRetire(...a));
+export const getPillarsAggregated           = (...a) => impl().then(m => m.getPillarsAggregated(...a));
+export const getTopicsAggregated            = (...a) => impl().then(m => m.getTopicsAggregated(...a));
+export const getProposedNodesAggregated     = (...a) => impl().then(m => m.getProposedNodesAggregated(...a));
+export const proposePillarOnChain           = (...a) => impl().then(m => m.proposePillarOnChain(...a));
+export const proposeTopicOnChain            = (...a) => impl().then(m => m.proposeTopicOnChain(...a));
+export const endorseNodeOnChain             = (...a) => impl().then(m => m.endorseNodeOnChain(...a));
+export const motionRetireNodeOnChain        = (...a) => impl().then(m => m.motionRetireNodeOnChain(...a));
+export const voteRetireNodeOnChain          = (...a) => impl().then(m => m.voteRetireNodeOnChain(...a));
+export const cancelStaleRetireOnChain       = (...a) => impl().then(m => m.cancelStaleRetireOnChain(...a));
 
 export const hasVotedOnChain                = (...a) => impl().then(m => m.hasVotedOnChain(...a));
 export const hasVotedManyOnChain            = (...a) => impl().then(m => m.hasVotedManyOnChain(...a));
 export const hasVotedForRevokeMany          = (...a) => impl().then(m => m.hasVotedForRevokeMany(...a));
+export const getBindingOnChain              = (...a) => impl().then(m => m.getBindingOnChain(...a));
 
 export const getActivePeersAggregated       = (...a) => impl().then(m => m.getActivePeersAggregated(...a));
 export const getNomineesAggregated          = (...a) => impl().then(m => m.getNomineesAggregated(...a));
@@ -81,33 +101,22 @@ export const getNomineeList                 = (...a) => impl().then(m => m.getNo
 
 export const nominatePeer                   = (...a) => impl().then(m => m.nominatePeer(...a));
 export const endorseNominee                 = (...a) => impl().then(m => m.endorseNominee(...a));
+export const lapseNominee                    = (...a) => impl().then(m => m.lapseNominee(...a));
 export const motionRevoke                   = (...a) => impl().then(m => m.motionRevoke(...a));
 export const voteRevoke                     = (...a) => impl().then(m => m.voteRevoke(...a));
+export const heartbeatOnChain               = (...a) => impl().then(m => m.heartbeatOnChain(...a));
+export const pruneInactivePeerOnChain       = (...a) => impl().then(m => m.pruneInactivePeerOnChain(...a));
+export const motionForceRenounce            = (...a) => impl().then(m => m.motionForceRenounce(...a));
+export const voteForceRenounce              = (...a) => impl().then(m => m.voteForceRenounce(...a));
 export const submitEvidenceOnChain          = (...a) => impl().then(m => m.submitEvidenceOnChain(...a));
+export const fileBindingOnChain             = (...a) => impl().then(m => m.fileBindingOnChain(...a));
 export const castReviewVoteOnChain          = (...a) => impl().then(m => m.castReviewVoteOnChain(...a));
 export const castReviewVoteBatchOnChain     = (...a) => impl().then(m => m.castReviewVoteBatchOnChain(...a));
 export const openChallengeOnChain           = (...a) => impl().then(m => m.openChallengeOnChain(...a));
 export const castChallengeVoteOnChain       = (...a) => impl().then(m => m.castChallengeVoteOnChain(...a));
 export const finalizeChallengeOnChain       = (...a) => impl().then(m => m.finalizeChallengeOnChain(...a));
 export const markLapsedOnChain              = (...a) => impl().then(m => m.markLapsedOnChain(...a));
+export const boostQueuedOnChain             = (...a) => impl().then(m => m.boostQueuedOnChain(...a));
+export const promoteOnChain                 = (...a) => impl().then(m => m.promoteOnChain(...a));
 
 export const waitForTx                      = (...a) => impl().then(m => m.waitForTx(...a));
-
-// ── BehaviourConsensus lazy wrappers ────────────────────────────────────────
-
-export const computeTripleHash                       = (...a) => impl().then(m => m.computeTripleHash(...a));
-export const computeBehaviourModelHash               = (...a) => impl().then(m => m.computeBehaviourModelHash(...a));
-export const computeBehaviourPayloadHash             = (...a) => impl().then(m => m.computeBehaviourPayloadHash(...a));
-export const getBehaviourCanonizeThreshold           = (...a) => impl().then(m => m.getBehaviourCanonizeThreshold(...a));
-export const getBehaviourExpelThreshold              = (...a) => impl().then(m => m.getBehaviourExpelThreshold(...a));
-export const getBehaviourDeprecateThreshold          = (...a) => impl().then(m => m.getBehaviourDeprecateThreshold(...a));
-export const getBehaviourChallengeCooldownRemaining  = (...a) => impl().then(m => m.getBehaviourChallengeCooldownRemaining(...a));
-export const hasVotedOnBehaviour                     = (...a) => impl().then(m => m.hasVotedOnBehaviour(...a));
-
-export const submitBehaviourOnChain                  = (...a) => impl().then(m => m.submitBehaviourOnChain(...a));
-export const castBehaviourReviewVoteOnChain          = (...a) => impl().then(m => m.castBehaviourReviewVoteOnChain(...a));
-export const castBehaviourReviewVoteBatchOnChain     = (...a) => impl().then(m => m.castBehaviourReviewVoteBatchOnChain(...a));
-export const openBehaviourChallengeOnChain           = (...a) => impl().then(m => m.openBehaviourChallengeOnChain(...a));
-export const castBehaviourChallengeVoteOnChain       = (...a) => impl().then(m => m.castBehaviourChallengeVoteOnChain(...a));
-export const finalizeBehaviourChallengeOnChain       = (...a) => impl().then(m => m.finalizeBehaviourChallengeOnChain(...a));
-export const markBehaviourLapsedOnChain              = (...a) => impl().then(m => m.markBehaviourLapsedOnChain(...a));

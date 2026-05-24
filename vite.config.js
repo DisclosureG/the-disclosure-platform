@@ -6,6 +6,7 @@ import { cp, rm } from 'fs/promises'
 
 const multiPageMiddleware = {
   name: 'serve-multi-page',
+  apply: 'serve',
   configureServer(server) {
     server.middlewares.use(async (req, res, next) => {
       const url = req.url.split('?')[0]
@@ -15,10 +16,6 @@ const multiPageMiddleware = {
         const transformed = await server.transformIndexHtml(url, html)
         res.setHeader('Content-Type', 'text/html')
         res.end(transformed)
-      } else if (url === '/artefacts' || url === '/artefacts/') {
-        const file = resolve(__dirname, 'public/artefacts/index.html')
-        res.setHeader('Content-Type', 'text/html')
-        res.end(fs.readFileSync(file))
       } else if (url.startsWith('/evidence')) {
         const file = resolve(__dirname, 'src/evidence/index.html')
         const html = fs.readFileSync(file, 'utf-8')
@@ -40,6 +37,7 @@ const multiPageMiddleware = {
 
 const cleanupBuildOutput = {
   name: 'cleanup-build-output',
+  apply: 'build',
   async closeBundle() {
     const distDir = resolve(__dirname, 'dist')
     const srcDir = resolve(distDir, 'src')
@@ -69,14 +67,12 @@ export default defineConfig({
         peerReview:  resolve(__dirname, 'src/peer-review/index.html'),
       },
       output: {
-        // Map entry point names to correct HTML locations
-        entryFileNames: (chunkInfo) => {
-          const name = chunkInfo.name;
-          if (name === 'main') return 'index.html';
-          if (name === 'evidence') return 'evidence/index.html';
-          if (name === 'peerReview') return 'peer-review/index.html';
-          return 'assets/[name]-[hash].js';
-        },
+        // Entry JS chunks are hashed assets. HTML output location is handled by
+        // Vite from the input paths and then relocated by the cleanupBuildOutput
+        // plugin above — do NOT map entry chunk names to .html paths here, or the
+        // injected <script src> ends up pointing at the HTML file itself and the
+        // page loads it as a module (MIME error) → blank #root.
+        entryFileNames: 'assets/[name]-[hash].js',
         // Force the ethers v6 runtime into its own chunk so it can be
         // downloaded lazily (via wallet-impl.js dynamic import) and cached
         // independently of the rest of the app. Without this, Rollup's

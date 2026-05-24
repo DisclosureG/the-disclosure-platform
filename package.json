@@ -1,7 +1,7 @@
 {
-  "name": "interstellar-psychology",
+  "name": "the-disclosure-platform",
   "version": "1.0.0",
-  "description": "![eye](https://github.com/user-attachments/assets/071c9290-3ce9-46af-a7c4-aa9b805df5f9)",
+  "description": "A public, on-chain archive of evidence — submitted, reviewed, and attested by a verified peer network.",
   "main": "index.js",
   "scripts": {
     "dev": "vite",
@@ -10,24 +10,32 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Moenaert/interstellar-psychology.git"
+    "url": "git+https://github.com/DisclosureG/the-disclosure-platform.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "web3",
+    "blockchain",
+    "bsc",
+    "ethereum",
+    "supabase",
+    "react",
+    "evidence",
+    "peer-review",
+    "consensus",
+    "transparency"
+  ],
+  "author": "DisclosureG",
+  "license": "MIT",
   "type": "module",
   "bugs": {
-    "url": "https://github.com/Moenaert/interstellar-psychology/issues"
+    "url": "https://github.com/DisclosureG/the-disclosure-platform/issues"
   },
-  "homepage": "https://github.com/Moenaert/interstellar-psychology#readme",
+  "homepage": "https://github.com/DisclosureG/the-disclosure-platform#readme",
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",
     "ethers": "^6.16.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.20.0",
-    "tweetnacl": "^1.0.3",
-    "tweetnacl-util": "^0.15.1"
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",

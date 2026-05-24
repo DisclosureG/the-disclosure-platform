@@ -1,0 +1,501 @@
+% =====================================================================
+%  Disclosure: A Labour of Love
+%  The philosophy of The Disclosure Platform. A stand-alone essay for a
+%  general reader. Argues why an open, peer-reviewed, on-chain archive
+%  democratizes the scientific method and builds an evidence-backed,
+%  evolving consensus reality --- and why evidence is not proof. Written
+%  to be read as an invitation: to read the archive, to file evidence, and
+%  to earn your way into the named network that keeps it.
+%  The engineering that operationalises this is described in a companion
+%  paper, "The Evidence Peer-Review System".
+%  Class : article
+% =====================================================================
+
+\documentclass[11pt,a4paper]{article}
+
+% ---------- Packages ----------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{textcomp}
+\usepackage[skins,breakable]{tcolorbox}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage[hidelinks,colorlinks=true,linkcolor=black,urlcolor=blue!55!black,citecolor=black]{hyperref}
+\usepackage{fancyhdr}
+
+% ---------- Colours ----------
+\definecolor{ink}{HTML}{0E1116}
+\definecolor{inkfaint}{HTML}{555B66}
+\definecolor{accent}{HTML}{6A4CFF}
+\definecolor{accent2}{HTML}{1F8F66}
+\definecolor{warn}{HTML}{B85C00}
+\definecolor{rule}{HTML}{C8CCD3}
+\definecolor{panelbg}{HTML}{F6F4EE}
+
+% ---------- Helper macros ----------
+\newcommand{\arr}{\ensuremath{\rightarrow}}
+
+% ---------- Page style ----------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize\textsc{The Disclosure Platform}}
+\fancyhead[R]{\footnotesize\textsc{Disclosure --- A Labour of Love}}
+\fancyfoot[C]{\footnotesize\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% ---------- Section style ----------
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{ink}}
+  {\thesection}{0.6em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{ink}}
+  {\thesubsection}{0.6em}{}
+
+% ---------- Helper boxes ----------
+\newtcolorbox{plainbox}[1][]{
+  enhanced, breakable, boxrule=0pt, frame hidden,
+  colback=panelbg, colupper=ink,
+  left=10pt, right=10pt, top=8pt, bottom=8pt,
+  arc=2pt, #1
+}
+
+\newtcolorbox{notebox}[1][]{
+  enhanced, breakable, boxrule=0pt, frame hidden,
+  colback=panelbg, colupper=ink,
+  left=12pt, right=12pt, top=8pt, bottom=8pt,
+  borderline west={2pt}{0pt}{accent},
+  arc=0pt, #1
+}
+
+% ---------- Title block ----------
+\title{
+  \vspace{-2em}
+  {\Huge\bfseries Disclosure: A Labour of Love}\\[0.6em]
+  {\Large The Web3 social network for contested truth --- an open\\
+   archive that hands the scientific method back to the\\
+   public and builds an evidence-backed, evolving reality}
+}
+\author{\textbf{The Disclosure Platform}}
+\date{May 2026}
+
+% =====================================================================
+\begin{document}
+% =====================================================================
+\maketitle
+\thispagestyle{empty}
+
+\vspace{-1em}
+\begin{plainbox}
+\textbf{In one breath.}
+The Disclosure Platform is a public record room for contested truth ---
+the social network reclaimed for the thing social networks were supposed
+to be \emph{for}. Anyone may read it. Anyone may file into it. But a claim
+never floats free: it is filed \emph{against} the record that supports it
+--- a paper, a book, a declassified file, a sworn testimony --- and a named
+network of verified peers then judges that record in the open, by majority
+vote, signing each verdict with their own cryptographic key, in a place no
+one can quietly edit. No likes. No feed. No ads. No owner who can sell it,
+seize it, or shut it down. This essay is the argument for why that matters
+--- and an invitation to help build it. It is the scientific method handed
+back to the public; it is honest about its own limits, because
+\emph{evidence is not proof}; and it is, in the end, a labour of love.
+\end{plainbox}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% =====================================================================
+\section{The truth needs a record room, not a feed}
+% =====================================================================
+
+We are not short of places to say things. We are drowning in them. What we
+have lost is a place where what is said is \emph{kept} --- sourced, judged,
+and answerable a year from now.
+
+The modern feed is built to move. It rewards what is new, loud, and
+agreeable; it forgets what is old, quiet, and inconvenient. A claim that
+travels well is mistaken for a claim that is true, and the citation --- if
+there ever was one --- falls away somewhere between the headline and the
+share. When the conversation moves on, nothing remains that a later reader
+could check. The feed is a river. You cannot step back into it, and it was
+never built to let you.
+
+A record room is the opposite of a feed. It is built to keep. Every entry
+has a place, a source, and a history of who stood behind it and who stood
+against it. Come back in a year and it is exactly where you left it, with
+the reasoning still attached. The Disclosure Platform is a record room for
+the kind of evidence the mainstream will not host --- not out of
+contrarianism, but because a river was never the right instrument for
+keeping a careful account.
+
+\begin{notebox}
+\textbf{The platform's one-line creed.} \emph{A feed forgets. A record
+remembers.} Everything that follows is a consequence of taking that
+sentence seriously.
+\end{notebox}
+
+This commitment shows up as a series of refusals, and they are not
+sacrifices --- they are the whole point. There are no likes, because
+popularity is not evidence. There is no ranking feed, because the order in
+which the truth arrives is not the order of its importance. There is no
+advertising and no data harvesting, because the moment a record room is
+monetised by attention, it begins --- gently, then completely --- to
+optimise for attention rather than for truth. There are no anonymous
+moderators working out of sight, because a judgement no one can be named
+for is a judgement no one can be answerable for. Strip all of that away and
+what is left is not less than a social platform. It is the part of a social
+platform that was always supposed to matter: a shared, durable, inspectable
+account of what we have reason to believe.
+
+% =====================================================================
+\section{The scientific method, democratized}
+% =====================================================================
+
+Science does not advance because scientists are unusually honest. It
+advances because of a \emph{procedure} that does not depend on anyone's
+honesty: make a claim, show your evidence, submit it to people who are free
+to disagree, and let the claim stand only as long as it survives their
+scrutiny. The genius of the method is not certainty. It is
+self-correction. A mistake that enters the record can always be found and
+removed by the same procedure that let it in.
+
+The Disclosure Platform implements that exact loop, step for step --- and
+throws every step open to anyone willing to do the work.
+
+\begin{description}[leftmargin=1.2em,style=nextline]
+  \item[\textnormal{\textbf{1. A claim, filed against a source.}}]
+  In science a hypothesis means nothing without the data behind it. Here,
+  every entry carries its citation. The claim cannot float; it has a record
+  --- a paper, a book, a podcast, a declassified file, a deposition. The
+  evidence is the entry. The assertion is just its label. And filing is
+  open to everyone: you do not need permission to put a record on the table.
+
+  \item[\textnormal{\textbf{2. Open peer review.}}]
+  In science, work is judged by peers --- people competent and free to say
+  no. Here, verified peers read the record and vote, in public, to canonize
+  it, contest it, defend it, or remove it. The difference from the journal
+  is that the room has no editor-in-chief and no closed door. The peers are
+  named, their votes are signed, and the deliberation is visible \emph{while
+  it happens}, not summarised after the fact.
+
+  \item[\textnormal{\textbf{3. Challenge and replication.}}]
+  In science, no result is ever truly closed; a finding can be re-examined
+  the moment new evidence appears. Here, even an accepted record can be
+  formally challenged, and the network must then decide again --- to keep it
+  or to retire it. Nothing is canon forever by default; it is canon only for
+  as long as it keeps surviving.
+
+  \item[\textnormal{\textbf{4. Revision.}}]
+  In science, the body of knowledge is whatever currently survives review.
+  Here it is the same: the archive at any moment is the set of records the
+  named network presently stands behind. When the evidence changes, the
+  record changes with it.
+\end{description}
+
+What the platform democratizes is not the \emph{conclusion} --- you do not
+get to vote a fact into being --- but the \emph{procedure}. The machinery of
+careful judgement, historically locked inside institutions and journals, is
+made into public infrastructure. The barrier to filing evidence is removed
+entirely: anyone may submit. The responsibility of judging it is given to a
+network that anyone may, over time, earn their way into. This is the
+method's promise finally kept in the open: not ``trust us, we checked,''
+but ``here is the evidence, here is who checked it, here is what they
+signed, and here is how you can check them.''
+
+\begin{notebox}
+\textbf{Gatekeeping, replaced not abolished.} The platform does not pretend
+that all judgement can be dispensed with --- a record room with no standards
+is just a louder feed. It replaces \emph{closed} gatekeeping, where the gate
+and the gatekeeper are hidden, with \emph{open} gatekeeping, where the gate
+is a published rule and every keeper is named and accountable.
+\end{notebox}
+
+% =====================================================================
+\section{Evidence is not proof}
+% =====================================================================
+
+Everything above could be misread as a machine for manufacturing
+certainty. It is the opposite, and the difference is the moral centre of
+the whole project. Get this part wrong and you have built another orthodoxy;
+get it right and you have built something rarer than certainty --- something
+honest.
+
+\emph{Evidence is not proof.} A record supports a claim; it does not settle
+it. A declassified memo is strong evidence that something was written down;
+it is not proof that what was written is true. A sworn testimony is real
+evidence that a person stated something under their name; it is not proof
+that the thing stated occurred. To treat evidence as proof is to end the
+inquiry exactly where it should continue.
+
+The platform builds this humility into its structure rather than leaving it
+to good intentions. Evidence is filed in tiers, and the tiers are honest
+about their own strength:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{Tier I --- Peer-reviewed papers and declassified record.}
+  The strongest footing. Documents that have already passed through some
+  external scrutiny or official release.
+  \item \textbf{Tier II --- Documented.} Books, institutional records, art
+  --- evidence with a clear provenance but a lower bar of prior review.
+  \item \textbf{Tier III --- Testimony.} First-person accounts, sworn or
+  named. Indispensable, and the weakest as proof: a real record of what
+  someone said, which is not the same as what is so.
+\end{itemize}
+
+A tier is not a verdict on truth. It is a statement about what \emph{kind}
+of evidence you are looking at, so a reader can weigh it for themselves. The
+platform never collapses that distinction. It does not display a green badge
+that means ``true.'' What it can show is something more careful and more
+honest: \emph{this record exists, here is its kind, and a majority of this
+named network currently stands behind its place in the archive.}
+
+\begin{notebox}
+\textbf{What ``canon'' means here.} When a record is canonized it has not
+been proven. It has been judged --- by a true majority of the named peers,
+under a published, tier-dependent bar --- to belong in the archive on the
+strength of its evidence, \emph{for now.} ``Canon'' means ``the network
+presently stands behind this,'' never ``true forever.'' That single,
+deliberate restraint is what separates a record of the truth from a monument
+to an opinion.
+\end{notebox}
+
+This is also why the right to challenge can never be switched off. If
+evidence were proof, a settled record could be sealed and forgotten. But
+because evidence only ever \emph{supports}, any record --- however long it
+has stood --- remains open to fresh evidence and renewed argument. The
+inquiry is never declared finished, because honestly, it never is.
+
+% =====================================================================
+\section{An evidence-backed, evolving consensus reality}
+% =====================================================================
+
+If no single record is ever final, what does the platform actually build?
+It builds a \emph{consensus reality}: not a list of certified facts, but a
+living, structured, public account of what a named community has the best
+current reason to believe --- with every reason attached, and every reason
+revisable.
+
+Two words in that phrase carry the weight.
+
+\textbf{Evidence-backed.} Nothing enters the account on authority or
+volume. Every node of it traces down to a citation a reader can follow. The
+consensus is not a vote about how people feel; it is a judgement about what
+the record will bear.
+
+\textbf{Evolving.} The account is never finished, and it is not handed down.
+It grows in two directions at once. It grows \emph{wider} as the community
+proposes new \emph{pillars} --- whole domains of inquiry the network agrees
+are worth keeping a record of. It grows \emph{deeper} as each pillar gains
+\emph{topics}, the finer subjects beneath it under which specific evidence is
+filed. And crucially, it can also \emph{shrink and correct}: a record that
+no longer survives scrutiny can be retired, and one that is challenged and
+re-defended is reaffirmed --- now stronger for having been tested.
+
+There is no seeded ``official'' version of reality handed to the community
+at the start. \textbf{The archive begins empty.} Every pillar, every topic,
+every entry is brought into being by the peers themselves, through proposal
+and consensus. The map is drawn by the people who walk the territory, and
+redrawn whenever the territory turns out to be different from the map. The
+blank page is not a flaw to apologise for --- it is the opportunity. What the
+archive becomes is, quite literally, whatever its community is willing to
+file and defend.
+
+\begin{notebox}
+\textbf{A map, not a monument.} A monument records what someone decided was
+true and freezes it. A map records what we currently understand and expects
+to be corrected. The Disclosure Platform is built to be a map: detailed
+where the evidence is strong, honest about where it is thin, and always open
+to redrawing. A consensus reality that cannot evolve is just an orthodoxy
+with better production values.
+\end{notebox}
+
+This is what makes the result trustworthy in the only way a human account
+of contested reality can be: not because it claims to be right, but because
+it shows its work, names its reviewers, and keeps the door open for the next
+correction. Trust is not asked for. It is made checkable.
+
+% =====================================================================
+\section{Named peers, and a record no one can capture}
+% =====================================================================
+
+A record room is only as honest as the people keeping it --- and only as
+durable as its resistance to being seized. So the platform refuses three
+conveniences that almost every other system accepts: anonymous authority, a
+boss, and a kill switch.
+
+\textbf{No anonymity for judges.} Anyone may read the archive, and anyone
+may file evidence into it --- those doors are open to the world. But the
+people who \emph{judge} the evidence are named. A peer carries a handle and
+signs every vote with their own cryptographic key. There are no anonymous
+moderators deleting records in the dark. If a record is canonized,
+contested, or retired, you can see who stood behind that decision and what
+they put their name to. Accountability here is not a policy that can be
+quietly suspended; it is the physical shape of the system.
+
+\textbf{No administrator in the loop.} Membership in the named network is
+not granted by an owner. A newcomer is nominated by an existing peer and
+must then earn the endorsements of others before the system itself --- by
+its own published rule --- recognises them. No one can appoint a loyalist; no
+one can expel a dissenter by decree. The community admits and, if it must,
+removes its own members by vote.
+
+\textbf{No one can capture it --- not even its author.} The platform launches
+from a small founding set of peers, and in that earliest phase a caretaker
+role exists only to seed the first members and to pause in a genuine
+emergency. It can never force a record in, force a peer out, or override a
+vote. And once the network can stand on its own, that role can be
+\emph{renounced} entirely, leaving no privileged account at all. Should a
+caretaker ever turn --- freeze the system and refuse to let go --- the peers
+themselves can strip the role by a two-thirds supermajority and carry on.
+The keys do not pass to a new owner; they pass to no one. This is what
+``owned by no one'' means when you build it instead of merely promising it.
+
+The effect is a community of people who carry handles and signatures, not
+followers and vanity metrics. There is no profile photo to curate, no
+follower count to chase, no engagement loop to feed. A peer's standing comes
+from the records they have helped verify and the judgements they have been
+willing to sign --- the only reputation a record room has any business
+keeping.
+
+% =====================================================================
+\section{What this is not}
+% =====================================================================
+
+It is worth being plain about the things the platform deliberately does not
+do, because each absence is a design decision in service of the record ---
+and, taken together, a quiet manifesto.
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Not present} & \textbf{Because} \\
+\midrule
+No likes            & Popularity is not evidence. \\
+No feed             & A river forgets; a record keeps. \\
+No ranking          & Importance is not a function of recency. \\
+No algorithm        & Nothing decides for you what is true. \\
+No followers        & Standing comes from signed judgement, not reach. \\
+No ads              & Attention must not become the product. \\
+No data collection  & Readers are not the inventory. \\
+No anonymous mods   & Judgement must be answerable. \\
+No revenue model    & The record is not for sale. \\
+No owner            & The keys belong to no one. \\
+No closed source    & The gate must be inspectable by all. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\vspace{0.5em}
+
+The Disclosure Platform is infrastructure for evidence, not a place to
+socialise in the old, hollow sense. Submissions are public the instant they
+land. The contract that holds the rules is the only gatekeeper, and that
+contract is open. Anyone may read; named peers verify; the public watches.
+That is the whole arrangement, and its plainness is the point.
+
+% =====================================================================
+\section{Your part in this}
+% =====================================================================
+
+A record room is not a spectator sport. It is built --- and kept honest ---
+by the people who show up. There is a place in it for you whatever you bring,
+and the door is genuinely open at every level.
+
+\begin{description}[leftmargin=1.2em,style=nextline]
+  \item[\textnormal{\textbf{Read it.}}]
+  The archive is public, free, and owned by no one. Follow any claim down to
+  its source. Re-check any peer's signature in your own browser and confirm
+  that the named person --- not the platform --- authored that vote. Trust
+  nothing on our say-so; verify it yourself. That option, always available,
+  is the product.
+
+  \item[\textnormal{\textbf{File evidence.}}]
+  Filing is open to everyone --- no application, no gatekeeper. Found a paper,
+  a document, a testimony the mainstream won't keep? Put it on the table,
+  filed against its source and its tier, and let the named network judge it
+  in the open. The archive only grows because people bring it something to
+  weigh.
+
+  \item[\textnormal{\textbf{Become a peer.}}]
+  The network of judges is not a closed guild --- it is something you earn
+  your way into. Get nominated by an existing peer, win the endorsements of
+  others, and the system itself recognises you. No résumé, no owner's
+  blessing. From there you canonize evidence, propose new pillars and topics,
+  and defend or challenge the record under your own name.
+
+  \item[\textnormal{\textbf{Keep it honest.}}]
+  Canon is never sealed. If a standing record no longer deserves to stand,
+  challenge it. If a good record is unfairly attacked, defend it. The
+  archive's integrity is not maintained by an institution; it is maintained
+  by peers willing to keep doing the work.
+\end{description}
+
+\begin{notebox}
+\textbf{Why now.} The archive is at its blank-page moment --- the rarest and
+most consequential time to arrive. The first pillars, the first topics, the
+first canonized records, the founding shape of the named network: all of it
+is still unwritten. Early hands do not just add to the record; they set its
+standards. There has rarely been a better time to help decide what a public
+record of contested truth should look like.
+\end{notebox}
+
+% =====================================================================
+\section{A labour of love}
+% =====================================================================
+
+Strip away the things the platform refuses --- the advertising, the data
+harvesting, the engagement metrics, the paywall, the owner --- and an obvious
+question remains: why would anyone build this, and why would anyone keep it?
+
+There is no financial answer. No one is enriched by a canonized record. The
+peers are not paid to read evidence or to sign their judgements; they give
+their attention and their names to keep the account honest. The archive
+sells nothing and harvests no one. By every metric the modern internet is
+built to maximise, the platform is a failure on purpose --- and that failure
+is exactly the freedom that lets it serve the truth instead of the market.
+
+What is left, once profit is removed as a motive, is the oldest reason to
+keep a careful record at all: because the truth deserves a room of its own,
+and because building that room for other people --- most of whom you will
+never meet --- is an act of care.
+
+That is what we mean by a labour of love. Not sentiment, but the specific
+kind of love that shows up as patient, unpaid, accountable work: the
+willingness to write things down properly, to source them, to argue about
+them in the open under your own name, and to let your own conclusions be
+overturned when the evidence turns. It is the love of getting it right over
+the comfort of being right. It is the conviction that an honest, open,
+evolving record of what we have reason to believe is worth making for its
+own sake --- and worth giving away.
+
+\begin{notebox}
+\textbf{The whole thing, finally.} A public record room for contested truth,
+where evidence is filed against its source, judged in the open by a majority
+of named peers, kept where no one can quietly edit it, owned by no one and
+seizable by no one, and revised forever as the evidence changes. The
+scientific method, handed back to the public. The social network, reclaimed
+for the truth. A labour of love --- and an open invitation to help build it.
+\end{notebox}
+
+The companion paper, \emph{The Evidence Peer-Review System}, describes the
+engineering that makes every promise in this essay enforceable rather than
+merely stated --- how ``filed against a source'' becomes a tamper-evident
+hash, how ``judged by named peers'' becomes a signed and counted vote, how
+``owned by no one'' becomes a contract a rogue hand cannot hold, and how
+``revised forever'' becomes a lifecycle no single actor can override. The
+mechanism is the proof that the philosophy is meant.
+
+\end{document}

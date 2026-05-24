@@ -36,9 +36,12 @@ function buildDomain(): Record<string, unknown> {
   return d;
 }
 
+// A vote attests to a specific (evidence × topic) binding, so topicId is part
+// of the signed message. Must match src/lib/wallet-constants.js exactly.
 const TYPES = {
   Attestation: [
     { name: "evidenceId", type: "string"  },
+    { name: "topicId",    type: "string"  },
     { name: "peerAddr",   type: "address" },
     { name: "phase",      type: "string"  },
     { name: "verdict",    type: "string"  },
@@ -48,19 +51,20 @@ const TYPES = {
 
 // ── Contract ABI + Interface ──────────────────────────────────────────────────
 //
-// The new EvidenceSubmitted event carries a 4th non-indexed bytes32 — the
-// content hash.  Indexer + edge function both need the updated signature.
-
+// Binding events carry (bindingId, evidenceId, topicId, …) so the off-chain
+// row can be located by either the binding hash or (evidence, topic).
 const CONTRACT_ABI = [
   "function isActivePeer(address) view returns (bool)",
   "function activePeerCount() view returns (uint256)",
   "event EvidenceSubmitted(bytes32 indexed id, uint8 tier, address indexed submitter, bytes32 contentHash)",
-  "event ReviewVoteCast(bytes32 indexed id, address indexed voter, bool approve, uint32 approveCount, uint32 rejectCount)",
-  "event ChallengeOpened(bytes32 indexed id, address indexed challenger, uint48 challengedAt)",
-  "event ChallengeVoteCast(bytes32 indexed id, address indexed voter, bool supportChallenge, uint32 challengeVotes, uint32 defenseVotes)",
-  "event EvidenceLapsed(bytes32 indexed id)",
-  "event EvidenceDeprecated(bytes32 indexed id, uint32 challengeVotes)",
-  "event EvidenceReaffirmed(bytes32 indexed id, uint32 defenseVotes)",
+  "event BindingSubmitted(bytes32 indexed bindingId, bytes32 indexed id, bytes32 indexed topicId, uint8 tier, address submitter)",
+  "event ReviewVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool approve, uint32 approveCount, uint32 rejectCount)",
+  "event ChallengeOpened(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed challenger, uint48 challengedAt)",
+  "event ChallengeVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool supportChallenge, uint32 challengeVotes, uint32 defenseVotes)",
+  "event BindingLapsed(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId)",
+  "event BindingDeprecated(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 challengeVotes)",
+  "event BindingReaffirmed(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 defenseVotes)",
+  "event NodeEndorsed(bytes32 indexed id, address indexed endorser, uint32 endorsements, uint256 threshold)",
 ];
 
 // EIP-1271 — smart-contract wallet (Safe, Argent, etc.) signature scheme.
@@ -117,36 +121,49 @@ function uuidToBytes32(uuid: string): string {
   return "0x" + hex.padStart(64, "0");
 }
 
-// Canonical content hash — must match the frontend hashing rule exactly.
+// On-chain topic id = keccak256(utf8(slug)), matching slugToBytes32.
+function slugToBytes32(slug: string): string {
+  return ethers.keccak256(ethers.toUtf8Bytes(String(slug)));
+}
+
+// Canonical content hash — CONTENT only (no topic_id); a cross-listed record
+// keeps one stable hash. Must match the frontend rule exactly.
 function computeContentHash(payload: {
-  title:     string;
-  source:    string | null;
-  year:      string | null;
-  excerpt:   string | null;
-  link:      string | null;
-  tier:      number;
-  pillar_id: string;
+  title:    string;
+  source:   string | null;
+  year:     string | null;
+  excerpt:  string | null;
+  link:     string | null;
+  tier:     number;
 }): string {
   const canon = JSON.stringify({
-    title:     String(payload.title ?? "").trim(),
-    source:    String(payload.source ?? "").trim(),
-    year:      String(payload.year ?? "").trim(),
-    excerpt:   String(payload.excerpt ?? "").trim(),
-    link:      String(payload.link ?? "").trim(),
-    tier:      Number(payload.tier),
-    pillar_id: String(payload.pillar_id ?? "").trim(),
+    title:   String(payload.title ?? "").trim(),
+    source:  String(payload.source ?? "").trim(),
+    year:    String(payload.year ?? "").trim(),
+    excerpt: String(payload.excerpt ?? "").trim(),
+    link:    String(payload.link ?? "").trim(),
+    tier:    Number(payload.tier),
   });
   return ethers.keccak256(ethers.toUtf8Bytes(canon));
 }
 
+// Event arg layout, by event name:
+//   EvidenceSubmitted(id, tier, submitter, contentHash)        — submitter@2
+//   BindingSubmitted (bindingId, id, topicId, tier, submitter) — id@1 topic@2 submitter@4
+//   ReviewVoteCast   (bindingId, id, topicId, voter, approve, …) — id@1 topic@2 voter@3 bool@4
+//   ChallengeOpened  (bindingId, id, topicId, challenger, …)     — id@1 topic@2 peer@3
+//   ChallengeVoteCast(bindingId, id, topicId, voter, support, …) — id@1 topic@2 voter@3 bool@4
+//   Binding{Lapsed,Deprecated,Reaffirmed}(bindingId, id, topicId,…) — id@1 topic@2
+const ID_IDX  = (n: string) => (n === "EvidenceSubmitted" ? 0 : 1);
+const PEER_IDX = (n: string) => (n === "EvidenceSubmitted" ? 2 : n === "BindingSubmitted" ? 4 : 3);
+const BOOL_IDX = 4;
+
 async function verifyTxEvent(
   txHash:        string,
   evidenceUuid:  string | null,
+  topicOnchain:  string | null,   // bytes32 keccak(slug), or null to skip
   peerAddr:      string | null,
   expectedNames: string[],
-  // Optional 3rd-arg bool to assert (e.g. approve / supportChallenge).  When
-  // set, the matched event must carry this bool as its 3rd argument — closes
-  // the "vote one way on-chain, record opposite verdict off-chain" hole.
   expectedBool?: boolean,
 ): Promise<ethers.LogDescription> {
   if (!CONTRACT_ADDR) {
@@ -159,8 +176,9 @@ async function verifyTxEvent(
   if (receipt.to?.toLowerCase() !== CONTRACT_ADDR.toLowerCase()) {
     throw new Error("Transaction not addressed to consensus contract");
   }
-  const wantId   = evidenceUuid ? uuidToBytes32(evidenceUuid).toLowerCase() : null;
-  const wantPeer = peerAddr ? peerAddr.toLowerCase() : null;
+  const wantId    = evidenceUuid ? uuidToBytes32(evidenceUuid).toLowerCase() : null;
+  const wantTopic = topicOnchain ? topicOnchain.toLowerCase() : null;
+  const wantPeer  = peerAddr ? peerAddr.toLowerCase() : null;
 
   for (const log of receipt.logs) {
     if (log.address.toLowerCase() !== CONTRACT_ADDR.toLowerCase()) continue;
@@ -170,18 +188,19 @@ async function verifyTxEvent(
     if (!parsed || !expectedNames.includes(parsed.name)) continue;
 
     if (wantId) {
-      const idArg = parsed.args[0];
+      const idArg = parsed.args[ID_IDX(parsed.name)];
       if (typeof idArg !== "string" || idArg.toLowerCase() !== wantId) continue;
     }
+    if (wantTopic && parsed.name !== "EvidenceSubmitted") {
+      const tArg = parsed.args[2];
+      if (typeof tArg !== "string" || tArg.toLowerCase() !== wantTopic) continue;
+    }
     if (wantPeer) {
-      // EvidenceSubmitted puts `submitter` at args[2] (args[1] is `tier`);
-      // every other event puts the peer address at args[1].
-      const peerIdx = parsed.name === "EvidenceSubmitted" ? 2 : 1;
-      const addrArg = parsed.args[peerIdx];
+      const addrArg = parsed.args[PEER_IDX(parsed.name)];
       if (typeof addrArg !== "string" || addrArg.toLowerCase() !== wantPeer) continue;
     }
     if (expectedBool !== undefined) {
-      const boolArg = parsed.args[2];
+      const boolArg = parsed.args[BOOL_IDX];
       if (typeof boolArg !== "boolean" || boolArg !== expectedBool) {
         throw new Error(
           `Event ${parsed.name} bool arg mismatch: tx says ${boolArg}, attestation says ${expectedBool}`,
@@ -195,10 +214,47 @@ async function verifyTxEvent(
   );
 }
 
+// A taxonomy endorsement is the NodeEndorsed(id, endorser, …) event — a layout
+// distinct from the (evidence, topic) binding events verifyTxEvent handles
+// (id@0 is the node hash, endorser@1).  Verify the tx genuinely contains this
+// peer's endorsement of this node before recording the signed attestation.
+async function verifyNodeEndorsed(
+  txHash:   string,
+  nodeHash: string | null,
+  peerAddr: string,
+): Promise<ethers.LogDescription> {
+  if (!CONTRACT_ADDR) throw new Error("CONSENSUS_ADDR not set; cannot verify tx_hash");
+  const receipt = await getProvider().getTransactionReceipt(txHash);
+  if (!receipt) throw new Error("Transaction not found");
+  if (Number(receipt.status) !== 1) throw new Error("Transaction reverted");
+  if (receipt.to?.toLowerCase() !== CONTRACT_ADDR.toLowerCase()) {
+    throw new Error("Transaction not addressed to consensus contract");
+  }
+  const wantNode = nodeHash ? nodeHash.toLowerCase() : null;
+  const wantPeer = peerAddr.toLowerCase();
+
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== CONTRACT_ADDR.toLowerCase()) continue;
+    let parsed: ethers.LogDescription | null = null;
+    try { parsed = IFACE.parseLog({ topics: [...log.topics], data: log.data }); }
+    catch { continue; }
+    if (!parsed || parsed.name !== "NodeEndorsed") continue;
+
+    const idArg       = parsed.args[0];
+    const endorserArg = parsed.args[1];
+    if (wantNode && (typeof idArg !== "string" || idArg.toLowerCase() !== wantNode)) continue;
+    if (typeof endorserArg !== "string" || endorserArg.toLowerCase() !== wantPeer) continue;
+    return parsed;
+  }
+  throw new Error(
+    `Receipt for ${txHash.slice(0, 10)}… does not contain a matching NodeEndorsed event`,
+  );
+}
+
 // ── Threshold helpers (mirror EvidenceConsensus.sol exactly) ─────────────────
 
 function canonizeThreshold(tier: number, n: number): number {
-  const pct = tier === 1 ? 45 : tier === 2 ? 35 : 30;
+  const pct = tier === 1 ? 60 : tier === 2 ? 55 : 51;
   return Math.max(1, Math.ceil(n * pct / 100));
 }
 function expelThreshold(n: number): number {
@@ -268,6 +324,8 @@ Deno.serve(async (req: Request) => {
 
   const {
     evidence_id,
+    binding_id       = null,
+    topic_id         = null,
     peer_addr,
     peer_handle      = null,
     phase            = null,
@@ -278,8 +336,11 @@ Deno.serve(async (req: Request) => {
     action           = null,
     challenge_reason = null,
     tier             = null,
+    node_hash        = null,
   } = body as {
     evidence_id:       string;
+    binding_id?:       string | null;
+    topic_id?:         string | null;
     peer_addr:         string;
     peer_handle?:      string | null;
     phase?:            string | null;
@@ -290,25 +351,42 @@ Deno.serve(async (req: Request) => {
     action?:           string | null;
     challenge_reason?: string | null;
     tier?:             number | null;
+    node_hash?:        string | null;
   };
 
   if (!evidence_id || !peer_addr) {
     return json({ error: "Missing required fields: evidence_id, peer_addr" }, 400, origin);
   }
   const peerNorm = (peer_addr as string).toLowerCase();
+  const topicOnchain = topic_id ? slugToBytes32(topic_id as string) : null;
 
   const isFinalizeAction = action === "finalize_challenge";
-  const isRegisterAction = action === "register_evidence_onchain";
+  const isRegisterAction = action === "register_binding_onchain" || action === "register_evidence_onchain";
+  const isEndorseAction  = action === "endorse_node";
+  // A taxonomy rejection is a signed dissent with no on-chain counterpart (the
+  // contract has no reject-node call), so it skips tx-hash verification.
+  const isRejectNodeAction = action === "reject_node";
+  const isTaxonomyAction   = isEndorseAction || isRejectNodeAction;
 
   if (!isFinalizeAction && !isRegisterAction) {
     if (!phase || !verdict) {
       return json({ error: "Missing required fields: phase, verdict" }, 400, origin);
     }
-    if (!["review", "challenge"].includes(phase)) {
-      return json({ error: `Invalid phase: ${phase}` }, 400, origin);
-    }
-    if (!["approve", "reject", "challenge", "defend"].includes(verdict)) {
-      return json({ error: `Invalid verdict: ${verdict}` }, 400, origin);
+    if (isTaxonomyAction) {
+      if (phase !== "taxonomy") {
+        return json({ error: `${action} requires phase 'taxonomy', got: ${phase}` }, 400, origin);
+      }
+      const wantVerdict = isEndorseAction ? "endorse" : "reject";
+      if (verdict !== wantVerdict) {
+        return json({ error: `${action} requires verdict '${wantVerdict}', got: ${verdict}` }, 400, origin);
+      }
+    } else {
+      if (!["review", "challenge"].includes(phase)) {
+        return json({ error: `Invalid phase: ${phase}` }, 400, origin);
+      }
+      if (!["approve", "reject", "challenge", "defend"].includes(verdict)) {
+        return json({ error: `Invalid verdict: ${verdict}` }, 400, origin);
+      }
     }
   }
 
@@ -346,6 +424,7 @@ Deno.serve(async (req: Request) => {
     if (!eip712_sig) return json({ error: "Missing required field: eip712_sig" }, 400, origin);
     const message = {
       evidenceId: evidence_id,
+      topicId:    (topic_id as string) ?? "",
       peerAddr:   peerNorm,
       phase,
       verdict,
@@ -393,49 +472,58 @@ Deno.serve(async (req: Request) => {
 
   // ── tx_hash verification ───────────────────────────────────────────────────
   let registerEventContentHash: string | null = null;
-  if (CONTRACT_ADDR && tx_hash) {
+  if (CONTRACT_ADDR && tx_hash && isEndorseAction) {
+    try {
+      await verifyNodeEndorsed(tx_hash as string, node_hash as string | null, peerNorm);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return json({ error: `tx_hash verification failed: ${msg}` }, 401, origin);
+    }
+  } else if (CONTRACT_ADDR && tx_hash) {
     try {
       const expectedNames: Record<string, string[]> = {
-        review_vote:               ["ReviewVoteCast"],
-        open_challenge:            ["ChallengeOpened"],
-        challenge_vote:            ["ChallengeVoteCast"],
-        finalize_challenge:        ["EvidenceDeprecated", "EvidenceReaffirmed", "EvidenceLapsed"],
-        register_evidence_onchain: ["EvidenceSubmitted"],
-        mark_lapsed:               ["EvidenceLapsed"],
+        review_vote:              ["ReviewVoteCast"],
+        open_challenge:           ["ChallengeOpened"],
+        challenge_vote:           ["ChallengeVoteCast"],
+        finalize_challenge:       ["BindingDeprecated", "BindingReaffirmed", "BindingLapsed"],
+        register_binding_onchain: ["BindingSubmitted"],
+        register_evidence_onchain:["BindingSubmitted"],
+        mark_lapsed:              ["BindingLapsed"],
       };
       const names = expectedNames[String(action)] ?? [];
       if (names.length > 0) {
         const includePeer = !["finalize_challenge", "mark_lapsed"].includes(String(action));
-        // For review_vote and challenge_vote we also pin the 3rd event
-        // argument (approve / supportChallenge) so the off-chain attestation
-        // cannot disagree with the on-chain tx.
         let expectedBool: boolean | undefined;
         if (action === "review_vote") {
           expectedBool = verdict === "approve";
         } else if (action === "challenge_vote") {
           expectedBool = verdict === "challenge";
         }
-        const parsed = await verifyTxEvent(
+        await verifyTxEvent(
           tx_hash as string,
           evidence_id,
+          topicOnchain,
           includePeer ? peerNorm : null,
           names,
           expectedBool,
         );
-        // Capture contentHash from EvidenceSubmitted so we can compare against
-        // the canonical hash of the off-chain row before flipping the gate.
-        if (parsed.name === "EvidenceSubmitted") {
-          registerEventContentHash = String(parsed.args[3]).toLowerCase();
+        // For registration, also locate the EvidenceSubmitted event (present
+        // only for the evidence's first binding) to cross-check the content hash.
+        if (isRegisterAction) {
+          try {
+            const ev = await verifyTxEvent(tx_hash as string, evidence_id, null, peerNorm, ["EvidenceSubmitted"]);
+            registerEventContentHash = String(ev.args[3]).toLowerCase();
+          } catch { /* fileBinding tx — no EvidenceSubmitted, content already bound */ }
         }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return json({ error: `tx_hash verification failed: ${msg}` }, 401, origin);
     }
-  } else if (CONTRACT_ADDR && !isFinalizeAction && !isRegisterAction) {
+  } else if (CONTRACT_ADDR && !isFinalizeAction && !isRegisterAction && !isRejectNodeAction) {
     return json({ error: "Missing required field: tx_hash" }, 400, origin);
   } else if (CONTRACT_ADDR && isRegisterAction && !tx_hash) {
-    return json({ error: "register_evidence_onchain requires tx_hash" }, 400, origin);
+    return json({ error: "binding registration requires tx_hash" }, 400, origin);
   } else if (CONTRACT_ADDR && isFinalizeAction && !tx_hash) {
     // Defence in depth: never resolve a challenge off-chain unless the chain
     // has already emitted the matching terminal event. Without this check the
@@ -448,21 +536,33 @@ Deno.serve(async (req: Request) => {
   }
 
   // ── Submission gate ────────────────────────────────────────────────────────
-  let evRow: { submitted_onchain: boolean; tier: number; pillar_id: string; title: string;
-               source: string | null; year: string | null; excerpt: string | null; link: string | null;
-               content_hash: string | null; status: string } | null = null;
-  if (!isFinalizeAction) {
-    const { data } = await supabase
-      .from("evidence")
-      .select("submitted_onchain, tier, pillar_id, title, source, year, excerpt, link, content_hash, status")
-      .eq("id", evidence_id)
-      .maybeSingle();
-    evRow = (data as typeof evRow) ?? null;
-    if (!evRow) return json({ error: "Unknown evidence" }, 404, origin);
-    if (!isRegisterAction && CONTRACT_ADDR && !evRow.submitted_onchain) {
-      return json({ error: "Evidence not yet registered on-chain" }, 409, origin);
+  // The voting unit is the BINDING. Resolve it by binding_id (or evidence+topic)
+  // and join the parent evidence content for hashing + tier.
+  type BindingRow = {
+    id: string; submitted_onchain: boolean; status: string;
+    challenged_at: string | null; challenge_reason: string | null;
+    evidence: { tier: number; title: string; source: string | null; year: string | null;
+                excerpt: string | null; link: string | null; content_hash: string | null } | null;
+  };
+  let bRow: BindingRow | null = null;
+  if (!isFinalizeAction || binding_id || topic_id) {
+    let q = supabase
+      .from("bindings")
+      .select("id, submitted_onchain, status, challenged_at, challenge_reason, evidence:evidence_id(tier, title, source, year, excerpt, link, content_hash)");
+    if (binding_id) q = q.eq("id", binding_id);
+    else q = q.eq("evidence_id", evidence_id).eq("topic_id", topic_id);
+    const { data } = await q.maybeSingle();
+    bRow = (data as BindingRow | null) ?? null;
+    if (!bRow && !isFinalizeAction) return json({ error: "Unknown binding" }, 404, origin);
+    // A taxonomy vote (endorse / reject) targets a proposal's FOUNDING binding,
+    // which is intentionally still pending (it canonizes only when the node
+    // ratifies), so the on-chain-registration gate does not apply to it.
+    if (bRow && !isRegisterAction && !isFinalizeAction && !isTaxonomyAction && CONTRACT_ADDR && !bRow.submitted_onchain) {
+      return json({ error: "Binding not yet registered on-chain" }, 409, origin);
     }
   }
+  const evContent = bRow?.evidence ?? null;
+  const evTier = evContent?.tier ?? (tier as number | null) ?? 2;
 
   // ── Active peer count ──────────────────────────────────────────────────────
   let peerCount: number;
@@ -471,36 +571,41 @@ Deno.serve(async (req: Request) => {
     return json({ error: `Peer count unavailable: ${err instanceof Error ? err.message : String(err)}` }, 503, origin);
   }
 
-  // ── Register-evidence-onchain ──────────────────────────────────────────────
+  // ── Register-binding-onchain ───────────────────────────────────────────────
   if (isRegisterAction) {
-    if (!evRow) return json({ error: "Unknown evidence" }, 404, origin);
-
-    // Cross-check: the contentHash in the EvidenceSubmitted event must match
-    // the canonical hash of the off-chain row.  This is the binding that
-    // prevents a service-role compromise from silently rewriting content.
-    const canonical = computeContentHash(evRow);
-    if (CONTRACT_ADDR && registerEventContentHash &&
+    if (!bRow) return json({ error: "Unknown binding" }, 404, origin);
+    const canonical = evContent ? computeContentHash(evContent) : null;
+    // If the tx carried EvidenceSubmitted (first binding), cross-check + bind
+    // the evidence content hash. fileBinding txs have no content hash to check.
+    if (CONTRACT_ADDR && registerEventContentHash && canonical &&
         canonical.toLowerCase() !== registerEventContentHash) {
       return json({
         error: "Content hash mismatch between on-chain event and stored row",
         expected: canonical, found: registerEventContentHash,
       }, 409, origin);
     }
-
-    await supabase.from("evidence").update({
+    await supabase.from("bindings").update({
       submitted_onchain:    true,
       submitted_onchain_at: new Date().toISOString(),
       submission_tx_hash:   tx_hash,
-      content_hash:         canonical,
-    }).eq("id", evidence_id);
+    }).eq("id", bRow.id);
+    if (registerEventContentHash && canonical) {
+      await supabase.from("evidence").update({
+        submitted_onchain: true, submitted_onchain_at: new Date().toISOString(),
+        submission_tx_hash: tx_hash, content_hash: canonical,
+      }).eq("id", evidence_id);
+    }
     return json({ ok: true, submitted_onchain: true, content_hash: canonical }, 200, origin);
   }
 
   // ── Write attestation ──────────────────────────────────────────────────────
   if (!isFinalizeAction) {
+    if (!bRow) return json({ error: "Unknown binding" }, 404, origin);
     const { error: attErr } = await supabase.from("attestations").upsert(
       {
         evidence_id,
+        binding_id:  bRow.id,
+        topic_id:    topic_id ?? null,
         peer_addr:   peerNorm,
         peer_handle: peer_handle ?? null,
         phase,
@@ -509,20 +614,17 @@ Deno.serve(async (req: Request) => {
         eip712_sig:  eip712_sig ?? null,
         tx_hash:     tx_hash ?? null,
       },
-      { onConflict: "evidence_id,peer_addr,phase" },
+      { onConflict: "binding_id,peer_addr,phase" },
     );
     if (attErr) return json({ error: attErr.message }, 500, origin);
   }
 
-  // ── Status update (atomic, via SECURITY DEFINER RPCs) ─────────────────────
+  // ── Status update (atomic, per binding, via SECURITY DEFINER RPCs) ─────────
   const extra: Record<string, unknown> = {};
 
   if (action === "review_vote") {
-    const evTier = evRow?.tier ?? (tier as number | null) ?? 2;
-    // Counts are recomputed inside the RPC, *after* it acquires FOR UPDATE on
-    // the evidence row.  No race window between read and write.
     const { data: applied, error: applyErr } = await supabase.rpc("apply_review_counts", {
-      p_evidence_id:  evidence_id,
+      p_binding_id:   bRow!.id,
       p_canon_thresh: canonizeThreshold(evTier, peerCount),
       p_expel_thresh: expelThreshold(peerCount),
     });
@@ -535,49 +637,35 @@ Deno.serve(async (req: Request) => {
     });
 
   } else if (action === "open_challenge") {
-    const curStatus = evRow?.status;
-    const evTier    = evRow?.tier ?? 2;
-
-    // Symmetric with the indexer's ChallengeOpened cycle reset: regardless
-    // of whether the indexer already flipped status='contested' (chain
-    // raced ahead of this fast-path call) or the row is still
-    // canon/approved/reaffirmed (we got here first), reset the cycle
-    // counters to (1, 0) so the opener's vote is the only count and the
-    // trigger's increment on the just-upserted attestation does not stack
-    // on top of cycle-1's totals.  Without this carve-out the
-    // attestation-side trigger would push cv to 2 (opener + cycle-1
-    // remainder) before any other peer voted.
+    const curStatus = bRow!.status;
+    // Reset cycle counters to (1, 0) so the opener's just-upserted attestation
+    // is the only counted vote (symmetric with the indexer's ChallengeOpened
+    // reset). Don't overwrite challenged_at if the indexer already set it.
     if (curStatus === "canon" || curStatus === "approved" || curStatus === "reaffirmed") {
-      await supabase.from("evidence").update({
+      await supabase.from("bindings").update({
         status:              "contested",
         challenged_at:       new Date().toISOString(),
         challenge_reason:    challenge_reason ?? null,
         challenge_votes:     1,
         defense_votes:       0,
         challenge_threshold: deprecateThreshold(evTier, peerCount),
-      }).eq("id", evidence_id);
+      }).eq("id", bRow!.id);
       Object.assign(extra, { status: "contested" });
     } else if (curStatus === "contested") {
-      // Indexer beat us to the status flip; we still need to reset cycle
-      // counts and (optionally) record the challenge_reason that only the
-      // edge fn knows about.  Do not overwrite challenged_at — the
-      // indexer's value comes from the chain event's block timestamp and
-      // is the authoritative cycle start.
-      await supabase.from("evidence").update({
+      await supabase.from("bindings").update({
         challenge_reason:    challenge_reason ?? null,
         challenge_votes:     1,
         defense_votes:       0,
         challenge_threshold: deprecateThreshold(evTier, peerCount),
-      }).eq("id", evidence_id);
+      }).eq("id", bRow!.id);
       Object.assign(extra, { status: "contested" });
     } else {
       Object.assign(extra, { status: curStatus });
     }
 
   } else if (action === "challenge_vote") {
-    const evTier = evRow?.tier ?? 2;
     const { data: applied, error: applyErr } = await supabase.rpc("apply_challenge_counts", {
-      p_evidence_id:   evidence_id,
+      p_binding_id:    bRow!.id,
       p_deprec_thresh: deprecateThreshold(evTier, peerCount),
     });
     if (applyErr) return json({ error: applyErr.message }, 500, origin);
@@ -589,39 +677,29 @@ Deno.serve(async (req: Request) => {
     });
 
   } else if (isFinalizeAction) {
-    const { data: ev } = await supabase
-      .from("evidence")
-      .select("tier, status, challenged_at, challenge_reason")
-      .eq("id", evidence_id).single();
-
-    type EvRow = { tier?: number; status?: string; challenged_at?: string; challenge_reason?: string };
-    const evData = (ev as EvRow | null) ?? {};
-
-    if (evData.status !== "contested") return json({ error: "Evidence is not contested" }, 400, origin);
-    const elapsed = evData.challenged_at
-      ? Date.now() - new Date(evData.challenged_at).getTime()
+    if (!bRow) return json({ error: "Unknown binding" }, 404, origin);
+    if (bRow.status !== "contested") return json({ error: "Binding is not contested" }, 400, origin);
+    const elapsed = bRow.challenged_at
+      ? Date.now() - new Date(bRow.challenged_at).getTime()
       : Infinity;
     if (elapsed < CHALLENGE_WINDOW_MS) return json({ error: "Challenge window is still open" }, 400, origin);
 
     const { data: atts } = await supabase
       .from("attestations").select("verdict")
-      .eq("evidence_id", evidence_id).eq("phase", "challenge");
+      .eq("binding_id", bRow.id).eq("phase", "challenge");
 
     const challengeVotes = (atts ?? []).filter((a: { verdict: string }) => a.verdict === "challenge").length;
     const defenseVotes   = (atts ?? []).filter((a: { verdict: string }) => a.verdict === "defend").length;
-    const evTier         = evData.tier ?? 2;
 
     if (challengeVotes >= deprecateThreshold(evTier, peerCount)) {
-      await supabase.from("evidence").update({
+      await supabase.from("bindings").update({
         status:            "deprecated",
         deprecated_at:     new Date().toISOString(),
-        deprecated_reason: evData.challenge_reason ?? null,
-      }).eq("id", evidence_id);
+        deprecated_reason: bRow.challenge_reason ?? null,
+      }).eq("id", bRow.id);
       Object.assign(extra, { status: "deprecated" });
     } else {
-      // Matches updated Solidity: window-expiry without deprecation quorum →
-      // reaffirmed (silence is not deprecation).
-      await supabase.from("evidence").update({ status: "reaffirmed" }).eq("id", evidence_id);
+      await supabase.from("bindings").update({ status: "reaffirmed" }).eq("id", bRow.id);
       Object.assign(extra, { status: "reaffirmed", challenge_votes: challengeVotes, defense_votes: defenseVotes });
     }
   }

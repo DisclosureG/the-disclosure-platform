@@ -15,12 +15,36 @@ async function main() {
   console.log("Seed-phase K:", seedPhaseK);
 
   const Factory = await hre.ethers.getContractFactory("EvidenceConsensus");
+
+  // Guard against shipping an oversized contract: EIP-170 caps deployed bytecode
+  // at 24576 bytes. The full-strings build is ~27.5 KB; STRIP_REVERTS=1 brings it
+  // under. Fail fast with a clear instruction rather than a cryptic on-chain revert.
+  const runtimeBytes = (hre.artifacts.readArtifactSync("EvidenceConsensus").deployedBytecode.length - 2) / 2;
+  console.log("Runtime bytecode size:", runtimeBytes, "bytes (limit 24576)");
+  if (runtimeBytes > 24576) {
+    throw new Error(
+      `Deployed bytecode is ${runtimeBytes} bytes (> 24576). Re-run with STRIP_REVERTS=1, ` +
+      `e.g. STRIP_REVERTS=1 npx hardhat run scripts/deploy-consensus.js --network ${hre.network.name}`,
+    );
+  }
+
   const contract = await Factory.deploy(genesisPeers, genesisHandles, seedPhaseK);
   await contract.waitForDeployment();
 
   const addr = await contract.getAddress();
   console.log("EvidenceConsensus deployed to:", addr);
+
+  // Read-only Lens sidecar: holds the peer/nominee/proposal aggregation views
+  // moved off the core to stay under EIP-170. No storage, no privileges — it
+  // only reads the core's public state. Deployed after the core.
+  const LensFactory = await hre.ethers.getContractFactory("EvidenceConsensusLens");
+  const lens = await LensFactory.deploy(addr);
+  await lens.waitForDeployment();
+  const lensAddr = await lens.getAddress();
+  console.log("EvidenceConsensusLens deployed to:", lensAddr);
+
   console.log("Add to .env:  VITE_CONSENSUS_ADDR=" + addr);
+  console.log("Add to .env:  VITE_CONSENSUS_LENS_ADDR=" + lensAddr);
   console.log("Add to .env:  VITE_DEPLOY_BLOCK=" + (await hre.ethers.provider.getBlockNumber()));
 }
 

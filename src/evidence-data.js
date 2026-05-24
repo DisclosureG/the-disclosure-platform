@@ -1,20 +1,76 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from './lib/supabase';
 
-// ── Pillars ──────────────────────────────────────────────────────────────────
-export const PILLARS = [
-  { n: "01", id: "music",                  title: "Music",                  tag: "Frequency · Soul",    blurb: "Sound as the first language of the multiverse. The harmonic substrate that lets souls recognise each other." },
-  { n: "02", id: "psychedelics",           title: "Psychedelics",           tag: "Healing · Truth",     blurb: "Compounds that lift the veil. Can Reproduce mystical experiences in a safe setting." },
-  { n: "03", id: "telepathy",              title: "Telepathy",              tag: "Mind-to-mind",        blurb: "The hardest case to ignore — non-speaking autistics doing the impossible, on camera, repeatedly." },
-  { n: "04", id: "mindsight",              title: "Mindsight",              tag: "Inner perception",    blurb: "Seeing without eyes. Children trained to read text and identify colours while fully blindfolded." },
-  { n: "05", id: "remote-viewing",         title: "Remote Viewing",         tag: "Non-local sight",     blurb: "Twenty-three years of CIA research. Declassified. The documents are not in dispute." },
-  { n: "06", id: "out-of-body",            title: "Out of Body",            tag: "Soul travel",         blurb: "Cardiac arrest survivors describing the operating room from the ceiling. The data is now boring." },
-  { n: "07", id: "non-human-intelligence", title: "Non-Human Intelligence", tag: "Disclosure",          blurb: "From AAWSAP to congressional testimony — the question is no longer whether, but how we relate." },
-  { n: "08", id: "multiverse",             title: "Multiverse",             tag: "Infinite arenas",     blurb: "Synchronicity as evidence. The universe signalling that it sees you." },
-  { n: "09", id: "infinity",               title: "Infinity",               tag: "Fractal · Eternal",   blurb: "Self-similar, scale-invariant, endless. The fractal thumbprint of God." },
-];
+// ── Taxonomy: Pillar → Topic ──────────────────────────────────────────────────
+//
+// Pillars (wider) and topics (deeper) are governed on-chain and projected into
+// the `pillars` / `topics` Supabase tables.  We cache the ratified set at module
+// scope so every hook — and the synchronous normalize() below — shares one copy
+// instead of refetching.  ensureTaxonomy() is idempotent; useTaxonomy() exposes
+// the live, reshaped tree to React.
 
-const PILLAR_MAP = Object.fromEntries(PILLARS.map(p => [p.id, p]));
+let _taxonomy = { pillars: [], topics: [], pillarMap: {}, topicMap: {}, loaded: false };
+let _taxonomyPromise = null;
+
+async function loadTaxonomy() {
+  const [{ data: pillars }, { data: topics }] = await Promise.all([
+    supabase.from('pillars').select('*').eq('status', 'ratified').order('ord', { ascending: true }),
+    supabase.from('topics').select('*').eq('status', 'ratified').order('ord', { ascending: true }),
+  ]);
+  const pillarRows = pillars || [];
+  const topicRows  = topics  || [];
+  // Display number is positional (01, 02, …) so it stays stable as pillars grow.
+  const shaped = pillarRows.map((p, i) => ({
+    ...p,
+    n: String(i + 1).padStart(2, '0'),
+    topics: topicRows.filter(t => t.pillar_id === p.id),
+  }));
+  _taxonomy = {
+    pillars:   shaped,
+    topics:    topicRows,
+    pillarMap: Object.fromEntries(shaped.map(p => [p.id, p])),
+    topicMap:  Object.fromEntries(topicRows.map(t => [t.id, t])),
+    loaded:    true,
+  };
+  return _taxonomy;
+}
+
+function ensureTaxonomy() {
+  if (!_taxonomyPromise) _taxonomyPromise = loadTaxonomy();
+  return _taxonomyPromise;
+}
+// Warm the cache as soon as the module loads so normalize() has data fast.
+ensureTaxonomy();
+
+// Per-instance suffix so multiple useTaxonomy() consumers on one page don't
+// collide on a shared realtime topic (Supabase throws "cannot add
+// postgres_changes callbacks ... after subscribe()" when two channels share a
+// name). The PeerReview page mounts this hook several times.
+let _taxonomyChannelSeq = 0;
+
+// React hook exposing the ratified taxonomy tree.  `pillars` is ordered with a
+// positional `n` and a nested `topics` array; `pillarMap`/`topicMap` index by id.
+export function useTaxonomy() {
+  const [tax, setTax] = useState(_taxonomy);
+  useEffect(() => {
+    let cancelled = false;
+    ensureTaxonomy().then(t => { if (!cancelled) setTax({ ...t }); });
+
+    const ch = supabase
+      .channel(`taxonomy-${++_taxonomyChannelSeq}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pillars' }, () => {
+        _taxonomyPromise = null;
+        ensureTaxonomy().then(t => { if (!cancelled) setTax({ ...t }); });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'topics' }, () => {
+        _taxonomyPromise = null;
+        ensureTaxonomy().then(t => { if (!cancelled) setTax({ ...t }); });
+      })
+      .subscribe();
+    return () => { cancelled = true; supabase.removeChannel(ch); };
+  }, []);
+  return tax;
+}
 
 // ── Consensus rules ───────────────────────────────────────────────────────────
 //
@@ -30,8 +86,8 @@ const PILLAR_MAP = Object.fromEntries(PILLARS.map(p => [p.id, p]));
 export const ACTIVE_PEER_COUNT = 1;
 
 export function canonizeThreshold(tier, peers = ACTIVE_PEER_COUNT) {
-  const pct = { 1: 0.45, 2: 0.35, 3: 0.30 };
-  return Math.max(1, Math.ceil(peers * (pct[tier] ?? 0.35)));
+  const pct = { 1: 0.60, 2: 0.55, 3: 0.51 };
+  return Math.max(1, Math.ceil(peers * (pct[tier] ?? 0.55)));
 }
 
 export function expelThreshold(peers = ACTIVE_PEER_COUNT) {
@@ -56,7 +112,8 @@ export function daysRemaining(isoTimestamp, windowDays) {
 
 // Human-readable label for each status
 export const STATUS_LABEL = {
-  pending:    'Pending review',
+  queued:     'In peer review',
+  pending:    'In peer review',
   canon:      'Canon',
   approved:   'Canon',   // legacy
   expelled:   'Expelled',
@@ -69,30 +126,85 @@ export const STATUS_LABEL = {
 
 // ── Row normalization ────────────────────────────────────────────────────────
 function normalize(row) {
-  const pillar = PILLAR_MAP[row.pillar_id] || {};
+  const pillar = _taxonomy.pillarMap[row.pillar_id] || {};
+  const topic  = _taxonomy.topicMap[row.topic_id]   || {};
   return {
     ...row,
     pillarId:    row.pillar_id,
     pillarTitle: pillar.title || row.pillar_id,
     pillarNum:   pillar.n || '??',
+    topicId:     row.topic_id,
+    topicTitle:  topic.title || row.topic_id,
   };
 }
+
+// Normalize a `bindings` row joined to its parent `evidence`.  The result is a
+// flat "binding view": `id` is the EVIDENCE uuid (so on-chain submit + copy-id
+// keep working), `bindingId`/`bindingHash` identify the (evidence × topic)
+// voting unit, and the per-binding lifecycle/tallies sit at the top level. The
+// evidence content (title/source/tier/…) is flattened from the join.
+function normalizeBinding(row) {
+  const ev     = row.evidence || {};
+  const pillar = _taxonomy.pillarMap[row.pillar_id] || {};
+  const topic  = _taxonomy.topicMap[row.topic_id]   || {};
+  return {
+    // binding identity + lifecycle
+    bindingId:    row.id,
+    bindingHash:  row.binding_hash,
+    status:       row.status,
+    approve_count:   row.approve_count,
+    reject_count:    row.reject_count,
+    challenge_votes: row.challenge_votes,
+    defense_votes:   row.defense_votes,
+    challenge_threshold: row.challenge_threshold,
+    challenge_reason:    row.challenge_reason,
+    deprecated_reason:   row.deprecated_reason,
+    submitted_at:        row.submitted_at,
+    reviewed_at:         row.reviewed_at,
+    canon_at:            row.canon_at,
+    challenged_at:       row.challenged_at,
+    deprecated_at:       row.deprecated_at,
+    submitted_onchain:    row.submitted_onchain,
+    submitted_onchain_at: row.submitted_onchain_at,
+    submission_tx_hash:   row.submission_tx_hash,
+    queued_at:            row.queued_at,
+    queue_priority:       row.queue_priority ?? 0,
+    attestations:         row.attestations,
+    // taxonomy
+    pillarId:    row.pillar_id,
+    pillarTitle: pillar.title || row.pillar_id,
+    pillarNum:   pillar.n || '??',
+    topicId:     row.topic_id,
+    topicTitle:  topic.title || row.topic_id,
+    // evidence content (id = evidence uuid)
+    id:        row.evidence_id,
+    evidenceId: row.evidence_id,
+    tier:      ev.tier,
+    type:      ev.type,
+    title:     ev.title,
+    source:    ev.source,
+    year:      ev.year,
+    excerpt:   ev.excerpt,
+    body:      ev.body,
+    quote:     ev.quote,
+    link:      ev.link,
+    tags:      ev.tags || [],
+    content_hash: ev.content_hash,
+  };
+}
+
+// Columns selected from the `bindings` table, with the parent evidence joined.
+const BINDING_SELECT =
+  '*, evidence:evidence_id(id, tier, type, title, source, year, excerpt, body, quote, link, tags, content_hash)';
 
 const PAGE_SIZE = 24;
 
 const VISIBLE_STATUSES = ['canon', 'approved', 'reaffirmed', 'contested', 'deprecated'];
+const CANON_STATUSES   = ['canon', 'approved', 'reaffirmed'];
 
 // Statuses included in numeric tallies — VISIBLE_STATUSES minus 'deprecated',
 // so no count ever reflects evidence the network has retired.
 const COUNTED_STATUSES = VISIBLE_STATUSES.filter(s => s !== 'deprecated');
-
-const ORDER_MAP = {
-  'pillar':    { col: 'pillar_id', asc: true  },
-  'tier':      { col: 'tier',      asc: true  },
-  'year-desc': { col: 'year',      asc: false },
-  'year-asc':  { col: 'year',      asc: true  },
-  'title':     { col: 'title',     asc: true  },
-};
 
 // Substring search against the generated `search_text` column, which
 // concatenates title, source, excerpt, body, quote, and tags (see migration
@@ -100,7 +212,7 @@ const ORDER_MAP = {
 // must appear somewhere in that surface — so "tao physics" only matches rows
 // containing both. We avoid textSearch('fts', …) because it requires exact
 // stemmed-token matches and silently drops partial words like "psych".
-function applyTextSearch(q, raw) {
+function applyTextSearch(q, raw, col = 'search_text') {
   const trimmed = (raw || '').trim();
   if (!trimmed) return q;
   const terms = trimmed
@@ -108,153 +220,346 @@ function applyTextSearch(q, raw) {
     .map(t => t.replace(/[,()*"%\\]/g, ''))
     .filter(Boolean);
   for (const term of terms) {
-    q = q.ilike('search_text', `%${term}%`);
+    q = q.ilike(col, `%${term}%`);
   }
   return q;
 }
 
 // ── Archive hook  (canon, reaffirmed, contested, deprecated) ─────────────────
 //
-// Default pillar view (no search, no type/tier filter) fetches all items so
-// pillar grouping is unbroken.  All other combinations paginate at PAGE_SIZE.
+// Views without a text search (default, or a tier-only filter) fetch all
+// matching rows so the Pillar → Topic grouping stays unbroken — a tier filter
+// narrows the tree, it does not flatten it.  A text search (or an explicit
+// topic filter) paginates at PAGE_SIZE for the flat results list.  Rows are
+// always ordered pillar → topic → id so nested grouping stays stable.
 //
-export function useEvidence(searchQuery = '', type = 'All', tier = 'all', sortBy = 'pillar') {
+export function useEvidence(searchQuery = '', tier = 'all', topic = 'all') {
   const [items, setItems]     = useState([]);
   const [total, setTotal]     = useState(null);
   const [page, setPage]       = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const isPaged = sortBy !== 'pillar' || !!searchQuery.trim() || type !== 'All' || tier !== 'all';
+  const isPaged = !!searchQuery.trim() || topic !== 'all';
+
+  // The archive is now a list of canon (evidence × topic) BINDINGS — the same
+  // evidence appears once per topic it has been canonized under. Text + tier
+  // filter the joined evidence (inner join); topic filters the binding.
+  const buildQuery = (counted) => {
+    const trimmed = searchQuery.trim();
+    let q = supabase
+      .from('bindings')
+      .select(BINDING_SELECT.replace('evidence:evidence_id(', 'evidence:evidence_id!inner('),
+              counted ? { count: 'exact' } : undefined)
+      .in('status', VISIBLE_STATUSES);
+    q = applyTextSearch(q, trimmed, 'evidence.search_text');
+    if (tier !== 'all')  q = q.eq('evidence.tier', parseInt(tier, 10));
+    if (topic !== 'all') q = q.eq('topic_id', topic);
+    return q
+      .order('pillar_id', { ascending: true })
+      .order('topic_id', { ascending: true })
+      .order('evidence_id', { ascending: true });
+  };
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+
+    const load = (showLoading) => {
+      if (showLoading) setLoading(true);
+      return ensureTaxonomy().then(() => {
+        let q = buildQuery(isPaged);
+        if (isPaged) q = q.range(0, PAGE_SIZE - 1);
+        return q;
+      }).then(({ data, count }) => {
+        if (cancelled) return;
+        setItems((data || []).map(normalizeBinding));
+        if (isPaged) setTotal(count ?? 0);
+        setLoading(false);
+      });
+    };
+
     setPage(0);
     setTotal(null);
+    load(true);
 
-    const trimmed = searchQuery.trim();
-    const order   = ORDER_MAP[sortBy] || ORDER_MAP.pillar;
+    let ch = null;
+    if (!isPaged) {
+      const debouncedRefetch = debounce(() => load(false), 350);
+      ch = supabase
+        .channel('evidence-archive-live')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'bindings' }, debouncedRefetch)
+        .subscribe();
+    }
 
-    let q = supabase
-      .from('evidence')
-      .select('*', isPaged ? { count: 'exact' } : undefined)
-      .in('status', VISIBLE_STATUSES);
-
-    q = applyTextSearch(q, trimmed);
-    if (type !== 'All') q = q.eq('type', type);
-    if (tier !== 'all') q = q.eq('tier', parseInt(tier, 10));
-
-    q = q.order(order.col, { ascending: order.asc }).order('id', { ascending: true });
-    if (isPaged) q = q.range(0, PAGE_SIZE - 1);
-
-    q.then(({ data, count }) => {
-      if (cancelled) return;
-      setItems((data || []).map(normalize));
-      if (isPaged) setTotal(count ?? 0);
-      setLoading(false);
-    });
-
-    return () => { cancelled = true; };
-  }, [searchQuery, type, tier, sortBy]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+      if (ch) supabase.removeChannel(ch);
+    };
+  }, [searchQuery, tier, topic]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = () => {
-    const next   = page + 1;
-    const trimmed = searchQuery.trim();
-    const order   = ORDER_MAP[sortBy] || ORDER_MAP.pillar;
+    const next = page + 1;
     setPage(next);
     setLoading(true);
 
-    let q = supabase
-      .from('evidence')
-      .select('*')
-      .in('status', VISIBLE_STATUSES);
-
-    q = applyTextSearch(q, trimmed);
-    if (type !== 'All') q = q.eq('type', type);
-    if (tier !== 'all') q = q.eq('tier', parseInt(tier, 10));
-
-    q.order(order.col, { ascending: order.asc })
-     .order('id', { ascending: true })
+    buildQuery(false)
      .range(next * PAGE_SIZE, next * PAGE_SIZE + PAGE_SIZE - 1)
      .then(({ data }) => {
-       setItems(prev => [...prev, ...(data || []).map(normalize)]);
+       setItems(prev => [...prev, ...(data || []).map(normalizeBinding)]);
        setLoading(false);
      });
   };
 
   const hasMore = isPaged && total !== null && items.length < total;
 
-  const addOptimistic = (item) =>
-    setItems(prev => [...prev, normalize({ ...item, status: 'pending' })]);
-
-  return { evidence: items, loading, total, hasMore, loadMore, addOptimistic };
+  return { evidence: items, loading, total, hasMore, loadMore };
 }
 
-// ── Per-pillar counts hook — unfiltered totals for the Pillars grid ──────────
-export function usePillarCounts() {
-  const [counts, setCounts] = useState({});
+// ── Pending taxonomy hook — proposed (not yet ratified) pillars + topics ─────
+//
+// The Peer Review Taxonomy surface reads these off-chain proposal rows; live
+// endorsement counts are read separately from the contract.  Realtime keeps the
+// list fresh as proposals land and the indexer flips them to ratified.
+export function usePendingTaxonomy() {
+  const [pillars, setPillars] = useState([]);
+  const [topics, setTopics]   = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const base = (id) => supabase
-      .from('evidence')
-      .select('*', { count: 'exact', head: true })
-      .in('status', COUNTED_STATUSES)
-      .eq('pillar_id', id);
-
-    Promise.all(PILLARS.map(p => base(p.id))).then(results => {
-      const next = {};
-      PILLARS.forEach((p, i) => { next[p.id] = results[i].count ?? 0; });
-      setCounts(next);
+  const refetch = useCallback(() => {
+    return Promise.all([
+      supabase.from('pillars').select('*').eq('status', 'proposed').order('created_at', { ascending: true }),
+      supabase.from('topics').select('*').eq('status', 'proposed').order('created_at', { ascending: true }),
+    ]).then(([p, t]) => {
+      setPillars(p.data || []);
+      setTopics(t.data || []);
+      setLoading(false);
     });
   }, []);
 
-  return counts;
+  useEffect(() => {
+    refetch();
+    const ch = supabase
+      .channel('pending-taxonomy')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pillars' }, () => refetch())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'topics'  }, () => refetch())
+      .subscribe();
+    return () => supabase.removeChannel(ch);
+  }, [refetch]);
+
+  return { pillars, topics, loading, refetch };
 }
 
-// ── Per-type counts hook — unfiltered totals for the type-chip row ───────────
-export function useTypeCounts() {
-  const [counts, setCounts] = useState({});
+// Propose a taxonomy node bundled with its founding evidence (off-chain rows).
+//
+// Called AFTER the on-chain proposePillar / proposeTopic tx has confirmed, so
+// nothing is written off-chain for a rejected or reverted proposal (no orphaned
+// 'proposed' rows). The caller mints the evidence id client-side BEFORE the tx
+// (it is an input to the on-chain call) and passes it back here so the inserted
+// rows carry the exact same id the chain committed to. The indexer's reorg
+// buffer (head − CONFIRMATIONS blocks) guarantees these rows exist before it
+// reconciles the ratification block, so it still flips them proposed → ratified
+// / pending → canon by matching node_hash / binding_hash.
+//
+// A taxonomy node is never empty: a pillar carries a founding topic + evidence,
+// a topic carries a founding evidence. Hashing (node_hash, meta_hash,
+// binding_hash, evidenceId) is computed by the caller and passed in, so this
+// module stays ethers-free.
+//
+// `bundle`:
+//   kind:        'pillar' | 'topic'
+//   pillar:      { id, node_hash, title, tag, blurb, meta_hash }   (kind === 'pillar')
+//   topic:       { id, pillar_id, node_hash, title, blurb, meta_hash }
+//   evidence:    { type, tier, title, source, year, excerpt, link, tags }
+//   evidenceId:  client-minted evidence uuid (the same id passed on-chain)
+//   bindingHash: the on-chain bindingId hash for (evidenceId, foundingTopic)
+//   proposed_by: wallet address (or null)
+//
+// Returns { evidenceId, bindingId } on success, or { error }. Rows are inserted
+// in FK order (pillar → topic → evidence → binding).
+export async function proposeTaxonomyBundle(bundle) {
+  const { kind, pillar, topic, evidence, proposed_by, evidenceId, bindingHash } = bundle;
 
-  useEffect(() => {
-    supabase
-      .from('evidence')
-      .select('type')
-      .in('status', COUNTED_STATUSES)
-      .then(({ data }) => {
-        const tally = {};
-        (data || []).forEach(r => {
-          if (!r.type) return;
-          tally[r.type] = (tally[r.type] ?? 0) + 1;
-        });
-        setCounts(tally);
-      });
-  }, []);
+  if (kind === 'pillar') {
+    const { error: pErr } = await supabase.from('pillars').insert({
+      id: pillar.id, node_hash: pillar.node_hash, title: pillar.title.trim(),
+      tag: pillar.tag?.trim() || null, blurb: pillar.blurb?.trim() || null,
+      status: 'proposed', meta_hash: pillar.meta_hash, proposed_by: proposed_by || null,
+    });
+    if (pErr) return { error: pErr };
+  }
 
-  return counts;
+  const { error: tErr } = await supabase.from('topics').insert({
+    id: topic.id, pillar_id: topic.pillar_id, node_hash: topic.node_hash, title: topic.title.trim(),
+    blurb: topic.blurb?.trim() || null,
+    status: 'proposed', meta_hash: topic.meta_hash, proposed_by: proposed_by || null,
+  });
+  if (tErr) return { error: tErr };
+
+  const { error: eErr } = await supabase.from('evidence').insert({
+    id: evidenceId,
+    type: evidence.type, tier: Number(evidence.tier),
+    pillar_id: topic.pillar_id, topic_id: topic.id,
+    title: evidence.title.trim(),
+    source: evidence.source?.trim() || null,
+    year: evidence.year?.trim() || null,
+    excerpt: evidence.excerpt?.trim() || null,
+    link: evidence.link?.trim() || null,
+    tags: evidence.tags || [],
+    status: 'pending',
+  });
+  if (eErr) return { error: eErr };
+
+  const { data: b, error: bErr } = await supabase.from('bindings').insert({
+    evidence_id: evidenceId, pillar_id: topic.pillar_id, topic_id: topic.id,
+    binding_hash: bindingHash, status: 'pending', submitted_onchain: false,
+  }).select('id').single();
+  if (bErr) return { error: bErr };
+
+  return { evidenceId, bindingId: b?.id || null };
 }
 
 // ── Tier counts hook — unfiltered totals for Hero stats ───────────────────────
+//
+// Realtime-subscribed: the global + per-tier totals are the page's heartbeat, so
+// any evidence insert/status change refetches (debounced) and the hero count
+// ticks live. Deprecated rows are excluded (COUNTED_STATUSES).
 export function useTierCounts() {
   const [counts, setCounts] = useState({ total: 0, tier1: 0, tier2: 0, tier3: 0 });
 
   useEffect(() => {
-    const base = () => supabase.from('evidence').select('*', { count: 'exact', head: true }).in('status', COUNTED_STATUSES);
-    Promise.all([
-      base(),
-      base().eq('tier', 1),
-      base().eq('tier', 2),
-      base().eq('tier', 3),
-    ]).then(([all, t1, t2, t3]) => {
-      setCounts({
-        total: all.count ?? 0,
-        tier1: t1.count  ?? 0,
-        tier2: t2.count  ?? 0,
-        tier3: t3.count  ?? 0,
+    let cancelled = false;
+    // Counts are over canon BINDINGS (one evidence can count under several
+    // topics); deprecated bindings are excluded (COUNTED_STATUSES). Tier lives
+    // on the joined evidence, so we inner-join and filter on evidence.tier.
+    const fetchCounts = () => {
+      const base = () => supabase
+        .from('bindings')
+        .select('evidence:evidence_id!inner(tier)', { count: 'exact', head: true })
+        .in('status', COUNTED_STATUSES);
+      Promise.all([
+        base(),
+        base().eq('evidence.tier', 1),
+        base().eq('evidence.tier', 2),
+        base().eq('evidence.tier', 3),
+      ]).then(([all, t1, t2, t3]) => {
+        if (cancelled) return;
+        setCounts({
+          total: all.count ?? 0,
+          tier1: t1.count  ?? 0,
+          tier2: t2.count  ?? 0,
+          tier3: t3.count  ?? 0,
+        });
       });
-    });
+    };
+    fetchCounts();
+    const debouncedRefetch = debounce(fetchCounts, 300);
+    const ch = supabase
+      .channel('tier-counts')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bindings' }, debouncedRefetch)
+      .subscribe();
+    return () => { cancelled = true; supabase.removeChannel(ch); };
   }, []);
 
   return counts;
+}
+
+// ── Binding stats hook — public peer-network counters (no wallet needed) ──────
+//
+// Powers the Peer Review connect-screen hero stats: how many bindings are in
+// review, contested, and filed in the archive. Realtime-subscribed.
+export function useBindingCounts() {
+  const [counts, setCounts] = useState({ pending: 0, contested: 0, archived: 0 });
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchCounts = () => {
+      const base = () => supabase.from('bindings').select('*', { count: 'exact', head: true });
+      Promise.all([
+        base().eq('status', 'pending'),
+        base().eq('status', 'contested'),
+        base().in('status', CANON_STATUSES),
+      ]).then(([p, c, a]) => {
+        if (cancelled) return;
+        setCounts({ pending: p.count ?? 0, contested: c.count ?? 0, archived: a.count ?? 0 });
+      });
+    };
+    fetchCounts();
+    const debouncedRefetch = debounce(fetchCounts, 300);
+    const ch = supabase
+      .channel('binding-counts')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bindings' }, debouncedRefetch)
+      .subscribe();
+    return () => { cancelled = true; supabase.removeChannel(ch); };
+  }, []);
+
+  return counts;
+}
+
+// ── Recent-evidence hook — newest visible entries for the floating live feed ──
+//
+// Powers the bottom-right "Live" feed: the most recent non-deprecated entries,
+// realtime-subscribed so a new submission appears at the top without a refresh.
+// ── Peer handle map — addr → handle for display fallback ─────────────────────
+//
+// A peer's handle is canonical on-chain; it is snapshotted into
+// attestations.peer_handle only on the signed write path. When the indexer
+// backfills a gap row (vote mined on-chain but the off-chain signed write was
+// lost), the row carries no handle and the feed would show a bare address. This
+// builds an addr→handle map from every attestation that DID capture a handle, so
+// the same peer's known handle can stand in. Pure off-chain, no wallet/RPC, so it
+// works for logged-out visitors on the home feed.
+export function usePeerHandleMap() {
+  const [map, setMap] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    supabase
+      .from('attestation_log_view')
+      .select('peer_addr, peer_handle')
+      .not('peer_handle', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(2000)
+      .then(({ data }) => {
+        if (cancelled || !data) return;
+        const m = {};
+        for (const r of data) {
+          const a = r.peer_addr?.toLowerCase();
+          if (a && r.peer_handle && !m[a]) m[a] = r.peer_handle;
+        }
+        setMap(m);
+      });
+    return () => { cancelled = true; };
+  }, []);
+  return map;
+}
+
+// ── Recent-votes hook — newest signed peer attestations for the home page ─────
+//
+// Each row is one peer's on-chain, EIP-712-signed verdict (approve / reject /
+// challenge / defend / endorse) on a specific evidence under a topic, with the
+// settling tx_hash. This is the public proof that consensus is live — it powers
+// the "A public record" vote feed. Realtime-subscribed to attestation inserts.
+export function useRecentVotes(limit = 6) {
+  const [votes, setVotes] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refetch = () =>
+      supabase
+        .from('attestation_log_view')
+        .select('id, created_at, peer_handle, peer_addr, phase, verdict, evidence_title, evidence_id, binding_id, pillar_id, topic_id, tx_hash, note, eip712_sig')
+        .order('created_at', { ascending: false })
+        .limit(limit)
+        .then(({ data }) => { if (!cancelled) setVotes(data || []); });
+
+    refetch();
+    const debouncedRefetch = debounce(refetch, 300);
+    const ch = supabase
+      .channel('recent-votes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'attestations' }, debouncedRefetch)
+      .subscribe();
+    return () => { cancelled = true; supabase.removeChannel(ch); };
+  }, [limit]);
+
+  return votes;
 }
 
 // Trailing-edge debounce. Used to coalesce realtime bursts (e.g. 30
@@ -267,33 +572,39 @@ function debounce(fn, ms = 200) {
   };
 }
 
-// ── Pending queue hook  (evidence waiting for peer attestations) ─────────────
-export function usePendingEvidence() {
+// ── Pending review queue  (bindings awaiting peer attestations) ──────────────
+//
+// One row per (evidence × topic) binding in `pending` review, on-chain.
+// Returned in the SHARED review order every peer agrees on — public boost
+// priority first, then FIFO by submission, then binding id as a deterministic
+// tiebreak. Both queue_priority and submitted_at are frozen once a binding is
+// `pending` (boosting only happens while `queued`), so the order is stable and
+// only changes when an item leaves on network resolution. The per-peer batch
+// view is derived from this in PeerReview.
+export function usePendingBindings() {
   const [queue, setQueue]   = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refetch = () =>
-    supabase
-      .from('evidence')
-      .select('*, attestations(*)')
+    ensureTaxonomy().then(() => supabase
+      .from('bindings')
+      .select(BINDING_SELECT + ', attestations(*)')
       .eq('status', 'pending')
-      .eq('submitted_onchain', true)  // hide rows not yet on-chain
+      .eq('submitted_onchain', true)  // hide bindings not yet on-chain
+      .order('queue_priority', { ascending: false })
       .order('submitted_at', { ascending: true })
+      .order('id', { ascending: true }))
       .then(({ data }) => {
-        setQueue((data || []).map(normalize));
+        setQueue((data || []).map(normalizeBinding));
         setLoading(false);
       });
 
   useEffect(() => {
     refetch();
-    // Server-side filter on the `evidence` channel scopes events to pending
-    // rows only — every other status change is dropped on the server, not the
-    // client.  `attestations` has no `status` column so we filter to the
-    // hot path verdicts in JS via the debounced refetch.
     const debouncedRefetch = debounce(refetch, 200);
     const ch = supabase
       .channel('pending-queue')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'evidence', filter: 'status=eq.pending' }, debouncedRefetch)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bindings', filter: 'status=eq.pending' }, debouncedRefetch)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'attestations',
                                 filter: 'phase=eq.review' }, debouncedRefetch)
       .subscribe();
@@ -303,61 +614,74 @@ export function usePendingEvidence() {
   return { queue, loading, refetch };
 }
 
-// Submissions awaiting on-chain registration.  Anyone with a wallet may
-// register; non-peers can flag a peer who can do it.
+// ── Submission queue (bindings parked behind a full active-review set) ────────
 //
-// We pull the full content payload so the registering peer can recompute
-// content_hash locally and bind it on-chain in the same submitEvidence call.
-export function useUnchainedPending() {
-  const [items, setItems]   = useState([]);
+// One row per (evidence × topic) binding in the `queued` state, on-chain but not
+// yet promoted into review. Ordered the way the keeper promotes and the public
+// archive lists: highest public boost first, then oldest-queued (FIFO). Public
+// boosts and keeper promotions both flow through realtime.
+export function useQueuedBindings() {
+  const [queue, setQueue]     = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refetch = () =>
-    supabase
-      .from('evidence')
-      .select('id, title, tier, pillar_id, source, year, excerpt, link, submitted_at, status')
-      .eq('status', 'pending')
-      .eq('submitted_onchain', false)
-      .order('submitted_at', { ascending: true })
+    ensureTaxonomy().then(() => supabase
+      .from('bindings')
+      .select(BINDING_SELECT)
+      .eq('status', 'queued')
+      .eq('submitted_onchain', true)
+      .order('queue_priority', { ascending: false })
+      .order('queued_at', { ascending: true }))
       .then(({ data }) => {
-        setItems((data || []).map(normalize));
+        setQueue((data || []).map(normalizeBinding));
         setLoading(false);
       });
 
   useEffect(() => {
     refetch();
     const debouncedRefetch = debounce(refetch, 200);
-    // Pending rows fan in here; once submitted_onchain flips we drop them.
-    // Realtime filter narrows to pending status only.
     const ch = supabase
-      .channel('unchained-pending')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'evidence', filter: 'status=eq.pending' }, debouncedRefetch)
+      .channel('submission-queue')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bindings', filter: 'status=eq.queued' }, debouncedRefetch)
       .subscribe();
     return () => supabase.removeChannel(ch);
   }, []);
 
-  return { items, loading, refetch };
+  return { queue, loading, refetch };
+}
+
+// Fetch a single binding (joined to its evidence) as a normalized preview
+// object — lets places that only hold ids (e.g. the Vote history) pop the full
+// evidence card. Falls back to the parent evidence + the given pillar/topic for
+// legacy attestation rows that predate binding_id.
+export async function fetchBindingPreview({ bindingId = null, evidenceId = null, pillarId = null, topicId = null }) {
+  await ensureTaxonomy();
+  if (bindingId) {
+    const { data } = await supabase.from('bindings').select(BINDING_SELECT).eq('id', bindingId).maybeSingle();
+    if (data) return normalizeBinding(data);
+  }
+  if (!evidenceId) return null;
+  const { data: ev } = await supabase.from('evidence').select('*').eq('id', evidenceId).maybeSingle();
+  if (!ev) return null;
+  return normalizeBinding({
+    id: bindingId, binding_hash: null, status: ev.status,
+    pillar_id: pillarId, topic_id: topicId, evidence_id: ev.id, evidence: ev,
+  });
 }
 
 // Tamper alerts — rows the audit-content-hash edge function writes when an
 // evidence row's stored content_hash no longer matches its canonical hash.
 // Live-updated via realtime so a fresh alert appears without needing the
-// operator to refresh the page.
-// scope: 'evidence' (tamper_alerts joined with evidence) or
-//        'alignment' (behaviour_tamper_alerts joined with behaviour).
-// Both tables are normalised the same way; the joined title field lets the
-// dashboard render the affected record's name inline.
-export function useTamperAlerts(limit = 20, scope = 'evidence') {
+// operator to refresh the page. The joined title field lets the dashboard
+// render the affected record's name inline.
+export function useTamperAlerts(limit = 20) {
   const [alerts, setAlerts]   = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const table = scope === 'alignment' ? 'behaviour_tamper_alerts' : 'tamper_alerts';
-  const join  = scope === 'alignment' ? 'behaviour(title)'        : 'evidence(title)';
-
   const refetch = () => {
     supabase
-      .from(table)
-      .select(`*, ${join}`)
+      .from('tamper_alerts')
+      .select('*, evidence(title)')
       .order('detected_at', { ascending: false })
       .limit(limit)
       .then(({ data }) => {
@@ -370,12 +694,12 @@ export function useTamperAlerts(limit = 20, scope = 'evidence') {
     refetch();
     const debouncedRefetch = debounce(refetch, 200);
     const ch = supabase
-      .channel(`tamper-alerts-${scope}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table }, debouncedRefetch)
+      .channel('tamper-alerts-evidence')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tamper_alerts' }, debouncedRefetch)
       .subscribe();
     return () => supabase.removeChannel(ch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [limit, scope]);
+  }, [limit]);
 
   return { alerts, loading };
 }
@@ -400,14 +724,97 @@ export function useHeartbeats() {
 
   useEffect(() => {
     refetch();
+    // Unique channel name per mount so multiple consumers on one page don't
+    // collide on a shared topic (e.g. the indexer pill + the system strip).
     const ch = supabase
-      .channel('heartbeats')
+      .channel(`heartbeats-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'edge_function_heartbeat' }, () => refetch())
       .subscribe();
     return () => supabase.removeChannel(ch);
   }, []);
 
   return { rows, loading };
+}
+
+// Derive an edge function's live health from its heartbeat row. States:
+// ok | error | stale | unknown. `staleMs` is the tolerance before a silent
+// failure (cron not firing / never completing) is surfaced — tune it per job's
+// cadence (indexer 1 min, keeper 5 min, audit daily).
+export function deriveHeartbeatHealth(row, staleMs, label, now = Date.now()) {
+  if (!row) return { state: 'unknown', label: `${label} status unknown`, short: '—' };
+  const attempt = row.last_attempt ? Date.parse(row.last_attempt) : 0;
+  const success = row.last_success ? Date.parse(row.last_success) : 0;
+  // Cron/edge isn't even attempting — the worst, silent failure.
+  if (now - attempt > staleMs) return { state: 'stale', label: `${label} stalled`, short: 'stalled' };
+  // It's attempting, but the last completed run errored.
+  if (row.last_status === 'error') return { state: 'error', label: `${label} error`, short: 'error' };
+  // Attempting but never completing a successful run.
+  if (now - success > staleMs) return { state: 'stale', label: `${label} stalled`, short: 'stalled' };
+  return { state: 'ok', label: `${label} ok`, short: 'live' };
+}
+
+// Per-job staleness tolerances, derived from each cron cadence (~3–4 missed
+// ticks before alarming). See supabase/migrations cron.schedule calls.
+const HEALTH_SPECS = [
+  { name: 'chain-indexer-evidence', label: 'Indexer', staleMs: 4 * 60 * 1000 },        // every 1 min
+  { name: 'audit-content-hash',     label: 'Audit',   staleMs: 30 * 60 * 60 * 1000 },  // daily 03:17 UTC
+];
+
+// Shared ticking clock so health hooks recompute staleness even when no new
+// heartbeat row arrives (the whole point — catch a silently dead cron).
+function useNowTick(ms = 30000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(t);
+  }, [ms]);
+  return now;
+}
+
+// Live indexer health for the public-facing badges (Evidence hero + log tab).
+export function useIndexerHealth() {
+  const { rows, loading } = useHeartbeats();
+  const now = useNowTick();
+  const spec = HEALTH_SPECS[0];
+  const row = rows.find(r => r.function_name === spec.name);
+  return { ...deriveHeartbeatHealth(row, spec.staleMs, spec.label, now), lastSuccess: row?.last_success || null, loading };
+}
+
+// All three cron-driven edge functions' health in one subscription, for the
+// operator health strip on the peer-review surface.
+export function useSystemHealth() {
+  const { rows, loading } = useHeartbeats();
+  const now = useNowTick();
+  const services = HEALTH_SPECS.map(spec => {
+    const row = rows.find(r => r.function_name === spec.name);
+    return {
+      name: spec.name,
+      service: spec.label,  // bare name ("Audit") — the strip pairs it with `short`
+      ...deriveHeartbeatHealth(row, spec.staleMs, spec.label, now),  // adds state, label ("Audit ok"), short ("live")
+      lastSuccess: row?.last_success || null,
+    };
+  });
+  return { services, loading };
+}
+
+// Count of unresolved tamper alerts (content/hash drift caught by the daily
+// audit). Realtime-subscribed so a freshly opened alert lights up immediately.
+export function useTamperAlertCount() {
+  const [count, setCount] = useState(null);
+  useEffect(() => {
+    const refetch = () => supabase
+      .from('tamper_alerts')
+      .select('id', { count: 'exact', head: true })
+      .is('resolved_at', null)
+      .then(({ count }) => setCount(count ?? 0));
+    refetch();
+    const ch = supabase
+      .channel(`tamper-alerts-${Math.random().toString(36).slice(2)}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tamper_alerts' }, () => refetch())
+      .subscribe();
+    return () => supabase.removeChannel(ch);
+  }, []);
+  return count;
 }
 
 // Chain events from the indexer, for the public activity feed.
@@ -447,8 +854,7 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNa
   };
 
   // Attach evidence titles by evidence_id so the chain log renders the human
-  // identifier instead of a bare UUID. One extra query per page; same idiom
-  // the behaviour chain events hook uses.
+  // identifier instead of a bare UUID. One extra query per page.
   const enrichWithTitles = async (rows) => {
     const ids = Array.from(new Set((rows || []).map(r => r.evidence_id).filter(Boolean)));
     if (!ids.length) return (rows || []).map(r => ({ ...r, evidence: null }));
@@ -533,29 +939,35 @@ export function useChainEvents(pageSize = CHAIN_EVENTS_PAGE, query = '', eventNa
   return { events, loading, hasMore, loadMore, total, refetch };
 }
 
-// ── Contested evidence hook  (canon items under active challenge) ────────────
-export function useContestedEvidence() {
+// ── Contested bindings hook  (canon bindings under active challenge) ─────────
+//
+// Returned in the SHARED challenge order every peer agrees on — oldest challenge
+// first (FIFO by `challenged_at`), then binding id as a deterministic tiebreak.
+// This mirrors the pending review queue: a stable shared order the per-peer
+// batch view in PeerReview slices ≤3 from, so peers work the contest front-first
+// and consensus on the oldest challenges is reached before newer ones pile in.
+export function useContestedBindings() {
   const [contested, setContested] = useState([]);
   const [loading, setLoading]     = useState(true);
 
-  const refetch = () => {
-    supabase
-      .from('evidence')
-      .select('*, attestations(*)')
+  const refetch = () =>
+    ensureTaxonomy().then(() => supabase
+      .from('bindings')
+      .select(BINDING_SELECT + ', attestations(*)')
       .eq('status', 'contested')
-      .order('challenged_at', { ascending: false })
+      .order('challenged_at', { ascending: true })
+      .order('id', { ascending: true }))
       .then(({ data }) => {
-        setContested((data || []).map(normalize));
+        setContested((data || []).map(normalizeBinding));
         setLoading(false);
       });
-  };
 
   useEffect(() => {
     refetch();
     const debouncedRefetch = debounce(refetch, 200);
     const ch = supabase
       .channel('contested-queue')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'evidence',
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bindings',
                                 filter: 'status=eq.contested' }, debouncedRefetch)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'attestations',
                                 filter: 'phase=eq.challenge' }, debouncedRefetch)
@@ -574,7 +986,7 @@ export function useContestedEvidence() {
 // drive `query` from a search input and `loadMore` from a "Load more" button.
 const CANON_PAGE = 50;
 
-export function useCanonEvidence(query = '') {
+export function useCanonBindings(query = '') {
   const [canon, setCanon]     = useState([]);
   const [page, setPage]       = useState(0);
   const [total, setTotal]     = useState(null);
@@ -582,29 +994,29 @@ export function useCanonEvidence(query = '') {
 
   const trimmed = (query ?? '').trim();
 
+  const build = (counted) => {
+    let q = supabase
+      .from('bindings')
+      .select(BINDING_SELECT.replace('evidence:evidence_id(', 'evidence:evidence_id!inner('),
+              counted ? { count: 'estimated' } : undefined)
+      .in('status', CANON_STATUSES);
+    q = applyTextSearch(q, trimmed, 'evidence.search_text');
+    return q.order('pillar_id', { ascending: true }).order('evidence_id', { ascending: true });
+  };
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setPage(0);
     setTotal(null);
-
-    let q = supabase
-      .from('evidence')
-      .select('id, title, tier, pillar_id, source, year, status', { count: 'estimated' })
-      .in('status', ['canon', 'approved', 'reaffirmed']);
-
-    if (trimmed) q = q.textSearch('fts', trimmed);
-
-    q.order('pillar_id', { ascending: true })
-     .order('id',        { ascending: true })
-     .range(0, CANON_PAGE - 1)
-     .then(({ data, count }) => {
-       if (cancelled) return;
-       setCanon((data || []).map(normalize));
-       setTotal(count ?? null);
-       setLoading(false);
-     });
-
+    ensureTaxonomy()
+      .then(() => build(true).range(0, CANON_PAGE - 1))
+      .then(({ data, count }) => {
+        if (cancelled) return;
+        setCanon((data || []).map(normalizeBinding));
+        setTotal(count ?? null);
+        setLoading(false);
+      });
     return () => { cancelled = true; };
   }, [trimmed]);
 
@@ -612,19 +1024,10 @@ export function useCanonEvidence(query = '') {
     const next = page + 1;
     setPage(next);
     setLoading(true);
-
-    let q = supabase
-      .from('evidence')
-      .select('id, title, tier, pillar_id, source, year, status')
-      .in('status', ['canon', 'approved', 'reaffirmed']);
-
-    if (trimmed) q = q.textSearch('fts', trimmed);
-
-    q.order('pillar_id', { ascending: true })
-     .order('id',        { ascending: true })
+    build(false)
      .range(next * CANON_PAGE, next * CANON_PAGE + CANON_PAGE - 1)
      .then(({ data }) => {
-       setCanon(prev => [...prev, ...(data || []).map(normalize)]);
+       setCanon(prev => [...prev, ...(data || []).map(normalizeBinding)]);
        setLoading(false);
      });
   };
@@ -670,7 +1073,10 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
   const FROM_VIEW = 'attestation_log_view';
 
   const applyFilters = (req) => {
-    if (v) req = req.eq('verdict', v);
+    // 'endorse' (taxonomy) is the same act as 'approve' (review) — surface them
+    // together under the Approve filter.
+    if (v === 'approve') req = req.in('verdict', ['approve', 'endorse']);
+    else if (v) req = req.eq('verdict', v);
     for (const term of terms) {
       req = req.or(
         `peer_handle.ilike.%${term}%,peer_addr.ilike.%${term}%,evidence_search_text.ilike.%${term}%,evidence_id_text.ilike.%${term}%`
@@ -746,6 +1152,36 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
   return { log, loading, hasMore, loadMore, total, refetch };
 }
 
+// ── Per-evidence vote history hook ───────────────────────────────────────────
+//
+// Every signed peer vote on one piece of evidence (across all its topic
+// bindings), newest first. Reads the public `attestation_log_view` so the
+// archive can show "who voted" to anyone, no wallet required. Keyed by evidence
+// id and refetched whenever it changes.
+export function useEvidenceVotes(evidenceId) {
+  const [votes, setVotes]     = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!evidenceId) { setVotes([]); setLoading(false); return; }
+    let cancelled = false;
+    setLoading(true);
+    supabase
+      .from('attestation_log_view')
+      .select('*')
+      .eq('evidence_id', evidenceId)
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        if (cancelled) return;
+        setVotes(data || []);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [evidenceId]);
+
+  return { votes, loading };
+}
+
 // ── Reviews-signed count hook ────────────────────────────────────────────────
 //
 // Lifetime count of attestations signed by a given peer address. Unlike the
@@ -807,9 +1243,10 @@ async function insertAttestation(payload) {
 // peerCount — live active-peer count from the contract (falls back to
 //             ACTIVE_PEER_COUNT when not provided)
 //
-export async function castReviewVote(item, verdict, peerAddr, peerHandle, note, sig, txHash = null, peerCount) {
+export async function castReviewVote(binding, verdict, peerAddr, peerHandle, note, sig, txHash = null, peerCount) {
   const result = await withRetry(() => insertAttestation({
-    evidence_id: item.id, peer_addr: peerAddr, peer_handle: peerHandle,
+    evidence_id: binding.id, topic_id: binding.topicId, binding_id: binding.bindingId,
+    peer_addr: peerAddr, peer_handle: peerHandle,
     phase: 'review', verdict, note: note || null,
     eip712_sig: sig || null, tx_hash: txHash || null,
     action: 'review_vote',
@@ -820,16 +1257,83 @@ export async function castReviewVote(item, verdict, peerAddr, peerHandle, note, 
   };
 }
 
-// ── Mark evidence as on-chain after submitEvidenceOnChain confirmed ──────────
+// ── Taxonomy endorsement: a signed vote on a proposed pillar/topic bundle ────
 //
-// The edge function verifies the tx hash contains an EvidenceSubmitted event
-// for the given uuid and peer, then flips submitted_onchain to true.
+// Endorsing a taxonomy node is the same accountable, signed act as a review
+// vote, so it is recorded as a first-class attestation (phase 'taxonomy',
+// verdict 'endorse') and surfaced in the Vote history.  The on-chain
+// `endorseNode` is the real consensus gate; this writes the off-chain signed
+// record after it confirms.  The attestation is tied to the proposal's FOUNDING
+// binding (every proposal ships one), so it joins the attestation log by
+// binding_id with no schema gymnastics.
 //
-export async function markEvidenceOnchain(evidenceId, peerAddr, txHash) {
+//   nodeHash   — the endorsed node's on-chain id (pillar hash for a pillar
+//                bundle; topic hash for a topic bundle); verified against the
+//                NodeEndorsed event in `txHash`.
+//   evidenceId — the founding evidence uuid (signed in the EIP-712 message)
+//   topicId    — the founding topic slug (signed in the EIP-712 message)
+//   bindingId  — the founding binding uuid (the attestation row's target)
+//
+export async function endorseNodeSupabase({ nodeHash, evidenceId, topicId, bindingId, peerAddr, peerHandle, note, sig, txHash = null }) {
   await withRetry(() => insertAttestation({
-    evidence_id: evidenceId, peer_addr: peerAddr,
+    evidence_id: evidenceId, topic_id: topicId, binding_id: bindingId,
+    node_hash: nodeHash,
+    peer_addr: peerAddr, peer_handle: peerHandle,
+    phase: 'taxonomy', verdict: 'endorse', note: note || null,
+    eip712_sig: sig || null, tx_hash: txHash || null,
+    action: 'endorse_node',
+  }));
+}
+
+// ── Taxonomy rejection: a signed vote AGAINST a proposed pillar/topic bundle ──
+//
+// The contract has no on-chain "reject node" — a node ratifies at threshold
+// endorsements and otherwise lapses at the proposal window. So a rejection is a
+// first-class, EIP-712-signed dissent recorded purely off-chain (phase
+// 'taxonomy', verdict 'reject', NO tx_hash). It carries no on-chain weight and
+// the vote-counter trigger ignores taxonomy rows, so it never touches the
+// founding binding's tallies — but it gives a peer a definite position on every
+// proposal (so the peer-review gate can clear) and puts that dissent, with its
+// deliberation note, on the public record next to the endorsements.
+//
+// Like an endorsement it targets the proposal's FOUNDING binding, so a peer has
+// at most one taxonomy attestation per proposal (unique binding_id+peer+phase):
+// a later endorseNode upsert simply overwrites a prior reject.
+export async function rejectNodeSupabase({ nodeHash, evidenceId, topicId, bindingId, peerAddr, peerHandle, note, sig }) {
+  await withRetry(() => insertAttestation({
+    evidence_id: evidenceId, topic_id: topicId, binding_id: bindingId,
+    node_hash: nodeHash,
+    peer_addr: peerAddr, peer_handle: peerHandle,
+    phase: 'taxonomy', verdict: 'reject', note: note || null,
+    eip712_sig: sig || null, tx_hash: null,
+    action: 'reject_node',
+  }));
+}
+
+// This peer's off-chain taxonomy rejections, as a Set of founding binding ids.
+// Endorsements are read on-chain (hasEndorsedNode); rejections live only here,
+// so the taxonomy gate combines both to know which proposals a peer has acted on.
+export async function fetchMyTaxonomyRejects(peerAddr) {
+  if (!peerAddr) return new Set();
+  const { data } = await supabase
+    .from('attestations')
+    .select('binding_id')
+    .eq('peer_addr', peerAddr.toLowerCase())
+    .eq('phase', 'taxonomy')
+    .eq('verdict', 'reject');
+  return new Set((data || []).map(r => r.binding_id).filter(Boolean));
+}
+
+// ── Register an (evidence × topic) binding on-chain ──────────────────────────
+//
+// After submitEvidence / fileBinding confirms, the edge function verifies the
+// tx contains the matching BindingSubmitted event and flips submitted_onchain.
+export async function markBindingOnchain(binding, peerAddr, txHash) {
+  await withRetry(() => insertAttestation({
+    evidence_id: binding.id, topic_id: binding.topicId, binding_id: binding.bindingId,
+    peer_addr: peerAddr,
     tx_hash: txHash,
-    action: 'register_evidence_onchain',
+    action: 'register_binding_onchain',
   }));
 }
 
@@ -840,11 +1344,12 @@ export async function markEvidenceOnchain(evidenceId, peerAddr, txHash) {
 //
 // txHash — confirmed on-chain transaction hash (null in dev mode / no contract)
 //
-export async function openChallenge(item, peerAddr, peerHandle, reason, sig, txHash = null, peerCount) {
-  // Single edge-function call: writes opener's attestation AND flips evidence
-  // status to contested atomically on the server side (service role).
+export async function openChallenge(binding, peerAddr, peerHandle, reason, sig, txHash = null, peerCount) {
+  // Single edge-function call: writes opener's attestation AND flips the
+  // binding status to contested atomically on the server side (service role).
   await withRetry(() => insertAttestation({
-    evidence_id: item.id, peer_addr: peerAddr, peer_handle: peerHandle,
+    evidence_id: binding.id, topic_id: binding.topicId, binding_id: binding.bindingId,
+    peer_addr: peerAddr, peer_handle: peerHandle,
     phase: 'challenge', verdict: 'challenge', note: reason,
     eip712_sig: sig || null, tx_hash: txHash || null,
     action: 'open_challenge',
@@ -858,15 +1363,16 @@ export async function openChallenge(item, peerAddr, peerHandle, reason, sig, txH
 // txHash — confirmed on-chain transaction hash (null in dev mode / no contract)
 // peerCount — live active-peer count from the contract
 //
-export async function castChallengeVote(item, supportChallenge, peerAddr, peerHandle, note, sig, txHash = null, peerCount) {
+export async function castChallengeVote(binding, supportChallenge, peerAddr, peerHandle, note, sig, txHash = null, peerCount) {
   const windowMs = CHALLENGE_WINDOW_DAYS * 86_400_000;
-  const windowExpired = item.challenged_at &&
-    (Date.now() - new Date(item.challenged_at).getTime()) > windowMs;
+  const windowExpired = binding.challenged_at &&
+    (Date.now() - new Date(binding.challenged_at).getTime()) > windowMs;
   if (windowExpired) throw new Error('Challenge window has expired');
 
   const verdict = supportChallenge ? 'challenge' : 'defend';
   const result  = await withRetry(() => insertAttestation({
-    evidence_id: item.id, peer_addr: peerAddr, peer_handle: peerHandle,
+    evidence_id: binding.id, topic_id: binding.topicId, binding_id: binding.bindingId,
+    peer_addr: peerAddr, peer_handle: peerHandle,
     phase: 'challenge', verdict, note: note || null,
     eip712_sig: sig || null, tx_hash: txHash || null,
     action: 'challenge_vote',
@@ -883,14 +1389,17 @@ export async function castChallengeVote(item, supportChallenge, peerAddr, peerHa
 // the window expires.  Resolves to 'reaffirmed' if defense won, 'canon' if the
 // challenge failed without reaching the deprecation threshold.
 //
-export async function finalizeChallengeSupabase(item, peerAddr, peerCount, txHash = null) {
+export async function finalizeChallengeSupabase(binding, peerAddr, peerCount, txHash = null) {
   const windowMs = CHALLENGE_WINDOW_DAYS * 86_400_000;
-  const windowExpired = item.challenged_at &&
-    (Date.now() - new Date(item.challenged_at).getTime()) > windowMs;
+  const windowExpired = binding.challenged_at &&
+    (Date.now() - new Date(binding.challenged_at).getTime()) > windowMs;
   if (!windowExpired) throw new Error('Challenge window is still open');
 
   const { data, error } = await supabase.functions.invoke('verify-attestation', {
-    body: { evidence_id: item.id, peer_addr: peerAddr, action: 'finalize_challenge', tx_hash: txHash },
+    body: {
+      evidence_id: binding.id, topic_id: binding.topicId, binding_id: binding.bindingId,
+      peer_addr: peerAddr, action: 'finalize_challenge', tx_hash: txHash,
+    },
   });
   if (error) throw error;
   if (data?.error) throw new Error(String(data.error));

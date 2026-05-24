@@ -2,14 +2,14 @@ import { useState } from 'react';
 
 // Icon-only copy button. Drop in next to any displayed identifier; calls
 // stopPropagation so it can safely sit inside a clickable card or row.
-// Styling uses .copy-chip (interstellar.css) + .copy-chip-icon modifier.
+// Styling uses .id-copy-btn (shared.css).
 export default function CopyChip({ value, label = 'id' }) {
   const [copied, setCopied] = useState(false);
   if (value == null || value === '') return null;
   return (
     <button
       type="button"
-      className={`copy-chip copy-chip-icon ${copied ? 'is-copied' : ''}`}
+      className={`id-copy-btn ${copied ? 'is-copied' : ''}`}
       aria-label={copied ? `${label} copied` : `Copy ${label}`}
       title={copied ? 'Copied' : `Copy ${label}`}
       onClick={async (e) => {

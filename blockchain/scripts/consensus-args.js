@@ -1,5 +1,5 @@
 module.exports = [
-  ["0x93d07265453E925e28E5d4F4A18064da009e0d5c"],
+  ["0x653B9B296FD3eF33a76869f76d9280A6074a9C94"],
   ["Genesis"],
   5,
 ];
