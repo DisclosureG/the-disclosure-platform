@@ -11,19 +11,63 @@ const CHALLENGE_WINDOW = 21 * DAY;
 const PROPOSAL_WINDOW  = 30 * DAY;
 const OPEN_SEED = 1_000_000; // keeps owner addPeer available so a test can grow the active set
 
+const ZERO_HASH = "0x" + "0".repeat(64);
+
 function evidenceId(seed) { return ethers.zeroPadValue(ethers.toBeHex(BigInt(seed)), 32); }
 function ch(body)         { return ethers.keccak256(ethers.toUtf8Bytes(body)); }
 function nodeId(slug)     { return ethers.keccak256(ethers.toUtf8Bytes(slug)); }
 
+// Sign a Vote(bindingId, phase, support, noteHash) EIP-712 message and submit it.
+// phase: 0 = review, 1 = challenge.  Attribution on-chain is the recovered signer.
+async function signVote(signer, addr, chainId, bid, phase, support, noteHash) {
+  const domain = { name: "EvidenceConsensus", version: "1", chainId, verifyingContract: addr };
+  const types = {
+    Vote: [
+      { name: "bindingId", type: "bytes32" },
+      { name: "phase",     type: "uint8" },
+      { name: "support",   type: "bool" },
+      { name: "noteHash",  type: "bytes32" },
+    ],
+  };
+  return signer.signTypedData(domain, types, { bindingId: bid, phase, support, noteHash });
+}
+
+async function reviewVote(c, signer, id, topicId, approve, noteHash = ZERO_HASH) {
+  const bid     = await c.bindingId(id, topicId);
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const sig     = await signVote(signer, await c.getAddress(), chainId, bid, 0, approve, noteHash);
+  return c.connect(signer).castReviewVote(id, topicId, approve, noteHash, sig);
+}
+
+async function openChallengeSigned(c, signer, id, topicId, noteHash = ZERO_HASH) {
+  const bid     = await c.bindingId(id, topicId);
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const sig     = await signVote(signer, await c.getAddress(), chainId, bid, 1, true, noteHash);
+  return c.connect(signer).openChallenge(id, topicId, noteHash, sig);
+}
+
+async function challengeVote(c, signer, id, topicId, support, noteHash = ZERO_HASH) {
+  const bid     = await c.bindingId(id, topicId);
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const sig     = await signVote(signer, await c.getAddress(), chainId, bid, 1, support, noteHash);
+  return c.connect(signer).castChallengeVote(id, topicId, support, noteHash, sig);
+}
+
 // Deploy with `n` real (signable) genesis peers and a single ratified topic so
 // the review/challenge paths have somewhere to file evidence.  Returns the topic
 // id plus the signer set.  seedPhaseK lets a test grow the set via owner addPeer.
+// Also deploys + wires the PeerGovernance sidecar that holds nominee/revocation.
 async function deployWithTopic(n, seedPhaseK = 0) {
   const signers = await ethers.getSigners();
   const peers   = signers.slice(0, n);
   const Factory = await ethers.getContractFactory("EvidenceConsensus");
   const c = await Factory.deploy(peers.map(s => s.address), peers.map((_, i) => `G-${i}`), seedPhaseK);
   await c.waitForDeployment();
+
+  const Gov = await ethers.getContractFactory("PeerGovernance");
+  const gov = await Gov.deploy(await c.getAddress());
+  await gov.waitForDeployment();
+  await c.connect(peers[0]).setGovernance(await gov.getAddress());
 
   const PILLAR = nodeId("seed-pillar");
   const TOPIC  = nodeId("seed-topic");
@@ -33,7 +77,7 @@ async function deployWithTopic(n, seedPhaseK = 0) {
     await c.connect(peers[i]).endorseNode(PILLAR);
     i++;
   }
-  return { c, signers, peers, TOPIC };
+  return { c, gov, signers, peers, TOPIC };
 }
 
 describe("AUDIT FIX — proposePillar rejects a reserved topic id as its own id", () => {
@@ -70,18 +114,23 @@ describe("AUDIT FIX — nominations stay open after the owner renounces", () => 
     const contract = await Factory.deploy(genesis.map(s => s.address), genesis.map((_, i) => `G-${i}`), 3);
     await contract.waitForDeployment();
 
+    const Gov = await ethers.getContractFactory("PeerGovernance");
+    const gov = await Gov.deploy(await contract.getAddress());
+    await gov.waitForDeployment();
+    await contract.setGovernance(await gov.getAddress()); // owner-only; must wire before renounce
+
     await contract.renounceOwnership();
     expect(await contract.owner()).to.equal(ethers.ZeroAddress);
 
-    await contract.connect(genesis[0]).motionRevoke(genesis[2].address);
-    await contract.connect(genesis[1]).voteRevoke(genesis[2].address); // n → 2 (< seedPhaseK)
+    await gov.connect(genesis[0]).motionRevoke(genesis[2].address);
+    await gov.connect(genesis[1]).voteRevoke(genesis[2].address); // n → 2 (< seedPhaseK)
     expect(await contract.activePeerCount()).to.equal(2n);
 
     // Previously this reverted ("seed phase: owner must seed peers first") with no
     // owner left to seed — a permanent liveness trap. Now the network can grow.
-    expect(await contract.nominationsOpen()).to.equal(true);
-    await expect(contract.connect(genesis[0]).nominatePeer(signers[4].address, "T"))
-      .to.emit(contract, "PeerNominated");
+    expect(await gov.nominationsOpen()).to.equal(true);
+    await expect(gov.connect(genesis[0]).nominatePeer(signers[4].address, "T"))
+      .to.emit(gov, "PeerNominated");
   });
 });
 
@@ -176,7 +225,7 @@ describe("HARDENING E — review outcome is judged against a peer-count snapshot
     expect(await c.activePeerCount()).to.equal(10n);
     expect(await c.canonizeThreshold(3)).to.equal(6n); // live threshold is now 6
 
-    for (let i = 0; i < 3; i++) await c.connect(peers[i]).castReviewVote(id, nodeId("seed-topic"), true);
+    for (let i = 0; i < 3; i++) await reviewVote(c, peers[i], id, nodeId("seed-topic"), true);
     expect((await c.getBinding(id, nodeId("seed-topic"))).state).to.equal(State.Canon); // snapshot bar = 3
   });
 
@@ -188,7 +237,7 @@ describe("HARDENING E — review outcome is judged against a peer-count snapshot
       const id = evidenceId(7);
       await c.connect(peers[0]).submitEvidence(id, 1, nodeId("seed-topic"), ch("x"));
       for (let i = 0; i < order.length; i++) {
-        await c.connect(peers[i]).castReviewVote(id, nodeId("seed-topic"), order[i]);
+        await reviewVote(c, peers[i], id, nodeId("seed-topic"), order[i]);
       }
       return Number((await c.getBinding(id, nodeId("seed-topic"))).state);
     }
@@ -211,8 +260,8 @@ describe("HARDENING E — review outcome is judged against a peer-count snapshot
 
     await c.connect(peers[1]).fileBinding(id, TOPIC); // re-file occupies a slot again
     expect(await c.activeReviewCount()).to.equal(1n);
-    await c.connect(peers[0]).castReviewVote(id, TOPIC, true);
-    await c.connect(peers[1]).castReviewVote(id, TOPIC, true); // → canon, frees the slot
+    await reviewVote(c, peers[0], id, TOPIC, true);
+    await reviewVote(c, peers[1], id, TOPIC, true); // → canon, frees the slot
     expect((await c.getBinding(id, TOPIC)).state).to.equal(State.Canon);
     expect(await c.activeReviewCount()).to.equal(0n);
   });
@@ -223,7 +272,7 @@ describe("HARDENING — challenge deprecate vs reaffirm math", () => {
   async function canonize(c, peers, id, tier, TOPIC) {
     await c.connect(peers[0]).submitEvidence(id, tier, TOPIC, ch("e" + id));
     const need = Number(await c.canonizeThreshold(tier));
-    for (let i = 0; i < need; i++) await c.connect(peers[i]).castReviewVote(id, TOPIC, true);
+    for (let i = 0; i < need; i++) await reviewVote(c, peers[i], id, TOPIC, true);
   }
 
   it("deprecates only when challenge votes reach deprecateThreshold", async () => {
@@ -232,10 +281,10 @@ describe("HARDENING — challenge deprecate vs reaffirm math", () => {
     await canonize(c, peers, id, 2, TOPIC);
     expect((await c.getBinding(id, TOPIC)).state).to.equal(State.Canon);
 
-    await c.connect(peers[0]).openChallenge(id, TOPIC);            // challengeVotes = 1
-    await c.connect(peers[1]).castChallengeVote(id, TOPIC, true);  // = 2 (< 3)
+    await openChallengeSigned(c, peers[0], id, TOPIC);            // challengeVotes = 1
+    await challengeVote(c, peers[1], id, TOPIC, true);  // = 2 (< 3)
     expect((await c.getBinding(id, TOPIC)).state).to.equal(State.Contested);
-    await c.connect(peers[2]).castChallengeVote(id, TOPIC, true);  // = 3 → deprecate
+    await challengeVote(c, peers[2], id, TOPIC, true);  // = 3 → deprecate
     expect((await c.getBinding(id, TOPIC)).state).to.equal(State.Deprecated);
   });
 
@@ -244,9 +293,9 @@ describe("HARDENING — challenge deprecate vs reaffirm math", () => {
     const id = evidenceId(4), TOPIC = nodeId("seed-topic");
     await canonize(c, peers, id, 2, TOPIC);
 
-    await c.connect(peers[0]).openChallenge(id, TOPIC);            // challengeVotes = 1
-    await c.connect(peers[1]).castChallengeVote(id, TOPIC, false); // defense
-    await c.connect(peers[2]).castChallengeVote(id, TOPIC, false); // defense; challenge stays at 1 < 3
+    await openChallengeSigned(c, peers[0], id, TOPIC);            // challengeVotes = 1
+    await challengeVote(c, peers[1], id, TOPIC, false); // defense
+    await challengeVote(c, peers[2], id, TOPIC, false); // defense; challenge stays at 1 < 3
     await time.increase(CHALLENGE_WINDOW + 1);
     await expect(c.finalizeChallenge(id, TOPIC)).to.emit(c, "BindingReaffirmed");
     expect((await c.getBinding(id, TOPIC)).state).to.equal(State.Reaffirmed);
@@ -267,7 +316,7 @@ describe("AUDIT FIX F1 — review verdict is order-independent under peer-set gr
     await c.connect(peers[0]).addPeer(signers[5].address, "p5"); // live = 6
     const approvers = [peers[1], peers[2], peers[3]]; // 3 approves
     const rejecters = [signers[4], signers[5]];       // 2 rejects
-    const cast = (s, v) => c.connect(s).castReviewVote(id, TOPIC, v);
+    const cast = (s, v) => reviewVote(c, s, id, TOPIC, v);
     if (rejectFirst) {
       for (const s of rejecters) await cast(s, false);
       for (const s of approvers) { try { await cast(s, true); } catch (_) {} }
@@ -291,20 +340,20 @@ describe("AUDIT FIX F1b — canon evidence needs a live supermajority to depreca
     const TOPIC = nodeId("seed-topic");
     const id = evidenceId(4201);
     await c.connect(peers[0]).submitEvidence(id, 1, TOPIC, ch("y")); // canonize(1)@4 = 3
-    for (let i = 0; i < 3; i++) await c.connect(peers[i]).castReviewVote(id, TOPIC, true);
+    for (let i = 0; i < 3; i++) await reviewVote(c, peers[i], id, TOPIC, true);
     expect((await c.getBinding(id, TOPIC)).state).to.equal(State.Canon);
 
-    await c.connect(peers[0]).openChallenge(id, TOPIC); // challengeVotes = 1 (snapshot 4)
+    await openChallengeSigned(c, peers[0], id, TOPIC); // challengeVotes = 1 (snapshot 4)
     for (let k = 4; k < 10; k++) await c.connect(peers[0]).addPeer(signers[k].address, "p" + k);
     expect(await c.deprecateThreshold(1)).to.equal(7n); // live supermajority
 
     // challenger + 2 = 3 votes: would have deprecated on the stale snapshot, now must NOT
-    await c.connect(peers[1]).castChallengeVote(id, TOPIC, true);
-    await c.connect(peers[2]).castChallengeVote(id, TOPIC, true);
+    await challengeVote(c, peers[1], id, TOPIC, true);
+    await challengeVote(c, peers[2], id, TOPIC, true);
     expect((await c.getBinding(id, TOPIC)).state).to.equal(State.Contested);
 
     // a genuine live supermajority (7) does deprecate
-    for (let k = 3; k < 7; k++) await c.connect(signers[k]).castChallengeVote(id, TOPIC, true);
+    for (let k = 3; k < 7; k++) await challengeVote(c, signers[k], id, TOPIC, true);
     expect((await c.getBinding(id, TOPIC)).state).to.equal(State.Deprecated);
   });
 });
@@ -316,7 +365,7 @@ describe("AUDIT FIX F1b — canon evidence needs a live supermajority to depreca
 // verdict, so the binding must LAPSE (re-filable), never terminally Expel.
 describe("AUDIT FIX F3 — a peer-set shrink lapses an unrejected binding, never expels it", () => {
   it("under heavy revocation, a stray reject cannot terminally expel a re-filable binding", async () => {
-    const { c, peers } = await deployWithTopic(10);
+    const { c, gov, peers } = await deployWithTopic(10);
     const TOPIC = nodeId("seed-topic");
     const id = evidenceId(4401);
 
@@ -328,22 +377,22 @@ describe("AUDIT FIX F3 — a peer-set shrink lapses an unrejected binding, never
     for (let t = 9; t >= 5; t--) {
       const n = Number(await c.activePeerCount());
       const need = Math.floor(n / 2) + (n % 2); // ceil(n/2) = revokeThreshold
-      await c.connect(peers[0]).motionRevoke(peers[t].address); // vote #1
-      for (let v = 1; v < need; v++) await c.connect(peers[v]).voteRevoke(peers[t].address);
+      await gov.connect(peers[0]).motionRevoke(peers[t].address); // vote #1
+      for (let v = 1; v < need; v++) await gov.connect(peers[v]).voteRevoke(peers[t].address);
     }
     expect(await c.activePeerCount()).to.equal(5n);
 
     // A single reject makes canon arithmetically impossible (6 > 5), but with only
     // 1 < expelThreshold(snapshot 10)=3 rejections this is churn, not a verdict, so
     // it LAPSES (re-filable) instead of terminally Expelling.
-    await expect(c.connect(peers[1]).castReviewVote(id, TOPIC, false))
+    await expect(reviewVote(c, peers[1], id, TOPIC, false))
       .to.emit(c, "BindingLapsed");
     expect((await c.getBinding(id, TOPIC)).state).to.equal(State.Lapsed);
 
     // Re-filed at the new (smaller) snapshot — canonize(1)@5 = 3 — it canonizes cleanly.
     await c.connect(peers[0]).fileBinding(id, TOPIC);
     expect((await c.getBinding(id, TOPIC)).peerSnapshot).to.equal(5n);
-    for (let i = 0; i < 3; i++) await c.connect(peers[i]).castReviewVote(id, TOPIC, true);
+    for (let i = 0; i < 3; i++) await reviewVote(c, peers[i], id, TOPIC, true);
     expect((await c.getBinding(id, TOPIC)).state).to.equal(State.Canon);
   });
 });

@@ -34,16 +34,31 @@ async function main() {
   const addr = await contract.getAddress();
   console.log("EvidenceConsensus deployed to:", addr);
 
+  // Peer-governance sidecar: holds the nominee + revocation flows moved off the
+  // core to stay under EIP-170. It mutates the core's peer set through the
+  // governance-gated gAddPeer/gRemovePeer, wired once via setGovernance below.
+  const GovFactory = await hre.ethers.getContractFactory("PeerGovernance");
+  const gov = await GovFactory.deploy(addr);
+  await gov.waitForDeployment();
+  const govAddr = await gov.getAddress();
+  console.log("PeerGovernance deployed to:", govAddr);
+
+  // One-shot wiring: link the governance contract so it can admit/revoke peers.
+  const wireTx = await contract.setGovernance(govAddr);
+  await wireTx.wait();
+  console.log("Wired core.governance ->", govAddr);
+
   // Read-only Lens sidecar: holds the peer/nominee/proposal aggregation views
   // moved off the core to stay under EIP-170. No storage, no privileges — it
-  // only reads the core's public state. Deployed after the core.
+  // only reads the core's and governance's public state. Deployed after both.
   const LensFactory = await hre.ethers.getContractFactory("EvidenceConsensusLens");
-  const lens = await LensFactory.deploy(addr);
+  const lens = await LensFactory.deploy(addr, govAddr);
   await lens.waitForDeployment();
   const lensAddr = await lens.getAddress();
   console.log("EvidenceConsensusLens deployed to:", lensAddr);
 
   console.log("Add to .env:  VITE_CONSENSUS_ADDR=" + addr);
+  console.log("Add to .env:  VITE_CONSENSUS_GOVERNANCE_ADDR=" + govAddr);
   console.log("Add to .env:  VITE_CONSENSUS_LENS_ADDR=" + lensAddr);
   console.log("Add to .env:  VITE_DEPLOY_BLOCK=" + (await hre.ethers.provider.getBlockNumber()));
 }

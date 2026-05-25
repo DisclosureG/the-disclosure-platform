@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "./EvidenceConsensus.sol";
+import "./PeerGovernance.sol";
 
 /// @title EvidenceConsensusLens
 /// @notice Read-only sidecar for {EvidenceConsensus}.  These aggregation views
@@ -12,11 +13,16 @@ import "./EvidenceConsensus.sol";
 /// zero consensus risk — the core remains the sole source of truth and the only
 /// contract that mutates state.  Deploy after the core and point read clients
 /// (the frontend) at this address for these views.
+///
+/// The nominee / revocation state now lives in {PeerGovernance}, so the Lens also
+/// holds that address and reads those aggregates from it.
 contract EvidenceConsensusLens {
     EvidenceConsensus public immutable core;
+    PeerGovernance    public immutable gov;
 
-    constructor(EvidenceConsensus _core) {
+    constructor(EvidenceConsensus _core, PeerGovernance _gov) {
         core = _core;
+        gov  = _gov;
     }
 
     /// @notice Genesis check (core.genesis() is public).
@@ -62,8 +68,8 @@ contract EvidenceConsensusLens {
         for (uint256 i = 0; i < n; i++) {
             address a = addrs[i];
             handles[i]     = core.peerHandle(a);
-            revActive[i]   = core.revocationActive(a);
-            revVotes[i]    = core.revokeVoteCount(a);
+            revActive[i]   = gov.revocationActive(a);
+            revVotes[i]    = gov.revokeVoteCount(a);
             lastActives[i] = core.lastActive(a);
         }
     }
@@ -74,14 +80,14 @@ contract EvidenceConsensusLens {
         string[]  memory handles,
         uint32[]  memory endorsements
     ) {
-        addrs = core.nomineeList();
+        addrs = gov.nomineeList();
         uint256 n = addrs.length;
         handles      = new string[](n);
         endorsements = new uint32[](n);
         for (uint256 i = 0; i < n; i++) {
             address a = addrs[i];
-            handles[i]      = core.nomineeHandle(a);
-            endorsements[i] = core.nomineeEndorsements(a);
+            handles[i]      = gov.nomineeHandle(a);
+            endorsements[i] = gov.nomineeEndorsements(a);
         }
     }
 

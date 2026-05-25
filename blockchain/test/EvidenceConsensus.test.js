@@ -51,6 +51,64 @@ function bindingId(id, topicId) {
 const NodeKind  = { Pillar: 0, Topic: 1 };
 const NodeState = { None: 0, Proposed: 1, Ratified: 2, Retired: 3 };
 
+// Sign a Vote(bindingId, phase, support, noteHash) EIP-712 typed message with the
+// voting signer; the contract recovers this signer on-chain and attributes the
+// vote to it (the submitter may be any relayer).  phase: 0 = review, 1 = challenge.
+async function signVote(signer, consensusAddr, chainId, bindingId, phase, support, noteHash) {
+  const domain = { name: "EvidenceConsensus", version: "1", chainId, verifyingContract: consensusAddr };
+  const types = {
+    Vote: [
+      { name: "bindingId", type: "bytes32" },
+      { name: "phase",     type: "uint8" },
+      { name: "support",   type: "bool" },
+      { name: "noteHash",  type: "bytes32" },
+    ],
+  };
+  return signer.signTypedData(domain, types, { bindingId, phase, support, noteHash });
+}
+
+// Convenience wrappers that sign with `signer` and submit (relayed by `signer`
+// too, but attribution is the recovered signer).  These mirror the old call
+// shapes so the test bodies stay focused on intent rather than signing plumbing.
+async function reviewVote(contract, signer, id, topicId, approve, noteHash = ZERO_HASH) {
+  const bid     = await contract.bindingId(id, topicId);
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const sig     = await signVote(signer, await contract.getAddress(), chainId, bid, 0, approve, noteHash);
+  return contract.connect(signer).castReviewVote(id, topicId, approve, noteHash, sig);
+}
+
+async function openChallengeSigned(contract, signer, id, topicId, noteHash = ZERO_HASH) {
+  const bid     = await contract.bindingId(id, topicId);
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const sig     = await signVote(signer, await contract.getAddress(), chainId, bid, 1, true, noteHash);
+  return contract.connect(signer).openChallenge(id, topicId, noteHash, sig);
+}
+
+async function challengeVote(contract, signer, id, topicId, support, noteHash = ZERO_HASH) {
+  const bid     = await contract.bindingId(id, topicId);
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const sig     = await signVote(signer, await contract.getAddress(), chainId, bid, 1, support, noteHash);
+  return contract.connect(signer).castChallengeVote(id, topicId, support, noteHash, sig);
+}
+
+// Sign a batch of review votes with a single `signer` (one per element) and
+// submit them via castReviewVoteBatch.  noteHashes default to ZERO_HASH.
+// Pass `overrides` to deliberately mismatch array lengths in negative tests.
+async function reviewVoteBatch(contract, signer, ids, topicIds, approves, overrides = {}) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const addr    = await contract.getAddress();
+  const noteHashes = overrides.noteHashes ?? ids.map(() => ZERO_HASH);
+  let sigs = overrides.sigs;
+  if (!sigs) {
+    sigs = [];
+    for (let i = 0; i < ids.length; i++) {
+      const bid = await contract.bindingId(ids[i], topicIds[i]);
+      sigs.push(await signVote(signer, addr, chainId, bid, 0, approves[i], noteHashes[i]));
+    }
+  }
+  return contract.connect(signer).castReviewVoteBatch(ids, topicIds, approves, noteHashes, sigs);
+}
+
 // A deterministic baseline pillar + two topics seeded into every deploy() so the
 // submitEvidence path has ratified topics to file bindings under. Every taxonomy
 // node is bootstrapped with a founding piece of evidence (bundled into the
@@ -108,13 +166,19 @@ async function deploy(seedPhaseK = 0, genesisSize = 1, seedTax = true) {
     seedPhaseK,
   );
   await contract.waitForDeployment();
+  // Peer-governance sidecar holding the nominee + revocation flows moved off the
+  // core for EIP-170 headroom; wired once via setGovernance so it can admit/revoke.
+  const Gov = await ethers.getContractFactory("PeerGovernance");
+  const gov = await Gov.deploy(await contract.getAddress());
+  await gov.waitForDeployment();
+  await contract.setGovernance(await gov.getAddress());
   // Read-only sidecar holding the peer/nominee/proposal aggregation views moved
-  // off the core for EIP-170 headroom.
+  // off the core for EIP-170 headroom (reads nominee/revoke state from gov).
   const Lens = await ethers.getContractFactory("EvidenceConsensusLens");
-  const lens = await Lens.deploy(await contract.getAddress());
+  const lens = await Lens.deploy(await contract.getAddress(), await gov.getAddress());
   await lens.waitForDeployment();
   if (seedTax) await seedDefaultTaxonomy(contract, genesis);
-  return { contract, lens, signers, genesis };
+  return { contract, gov, lens, signers, genesis };
 }
 
 // Read a binding's state for the default topic (most tests use one topic).
@@ -157,19 +221,19 @@ describe("EvidenceConsensus — deployment", () => {
 
 describe("EvidenceConsensus — thresholds", () => {
   it("floors all thresholds at 1 with one peer", async () => {
-    const { contract } = await deploy(0, 1, false);
+    const { contract, gov } = await deploy(0, 1, false);
     expect(await contract.canonizeThreshold(1)).to.equal(1n);
     expect(await contract.canonizeThreshold(2)).to.equal(1n);
     expect(await contract.canonizeThreshold(3)).to.equal(1n);
     expect(await contract.expelThreshold()).to.equal(1n);
     expect(await contract.deprecateThreshold(1)).to.equal(1n);
-    expect(await contract.nomineeThreshold()).to.equal(1n);
-    expect(await contract.revokeThreshold()).to.equal(1n);
+    expect(await gov.nomineeThreshold()).to.equal(1n);
+    expect(await gov.revokeThreshold()).to.equal(1n);
     expect(await contract.bundleThreshold(1)).to.equal(1n);
   });
 
   it("scales correctly for n=10 peers", async () => {
-    const { contract } = await deploy(0, 10, false);
+    const { contract, gov } = await deploy(0, 10, false);
     expect(await contract.activePeerCount()).to.equal(10n);
     expect(await contract.canonizeThreshold(1)).to.equal(6n);  // ceil(10*0.60)
     expect(await contract.canonizeThreshold(2)).to.equal(6n);  // ceil(10*0.55)
@@ -178,33 +242,33 @@ describe("EvidenceConsensus — thresholds", () => {
     expect(await contract.deprecateThreshold(1)).to.equal(7n);
     expect(await contract.deprecateThreshold(2)).to.equal(6n);
     expect(await contract.deprecateThreshold(3)).to.equal(6n);
-    expect(await contract.nomineeThreshold()).to.equal(4n);    // floor(10/3)+1
+    expect(await gov.nomineeThreshold()).to.equal(4n);    // floor(10/3)+1
     expect(await contract.taxonomyThreshold()).to.equal(6n);   // floor(10/2)+1 (decoupled majority)
-    expect(await contract.revokeThreshold()).to.equal(5n);
+    expect(await gov.revokeThreshold()).to.equal(5n);
     // Founding-evidence gate is max(taxonomy majority, tier canonize) — now a majority.
     expect(await contract.bundleThreshold(1)).to.equal(6n);    // max(6, 6)
     expect(await contract.bundleThreshold(3)).to.equal(6n);    // max(6, 6)
   });
 
   it("ramps the admission threshold as floor(n/3)+1 (strictly > 1/3) with no cap", async () => {
-    const { contract } = await deploy(OPEN_SEED, 1, false);
+    const { contract, gov } = await deploy(OPEN_SEED, 1, false);
     await padPeers(contract, 50);
-    expect(await contract.nomineeThreshold()).to.equal(17n);  // floor(50/3)+1 = 17
+    expect(await gov.nomineeThreshold()).to.equal(17n);  // floor(50/3)+1 = 17
     await padPeers(contract, 99);
-    expect(await contract.nomineeThreshold()).to.equal(34n);  // floor(99/3)+1 = 34 (was ceil=33)
+    expect(await gov.nomineeThreshold()).to.equal(34n);  // floor(99/3)+1 = 34 (was ceil=33)
     await padPeers(contract, 100);
-    expect(await contract.nomineeThreshold()).to.equal(34n);  // floor(100/3)+1 = 34
+    expect(await gov.nomineeThreshold()).to.equal(34n);  // floor(100/3)+1 = 34
     await padPeers(contract, 120);
-    expect(await contract.nomineeThreshold()).to.equal(41n);  // floor(120/3)+1 = 41 — uncapped
+    expect(await gov.nomineeThreshold()).to.equal(41n);  // floor(120/3)+1 = 41 — uncapped
     expect(await contract.taxonomyThreshold()).to.equal(61n); // floor(120/2)+1 — decoupled majority
   });
 
   it("admission gate requires STRICTLY more than 1/3 (closes the exactly-1/3 capture)", async () => {
-    const { contract } = await deploy(OPEN_SEED, 1, false);
+    const { contract, gov } = await deploy(OPEN_SEED, 1, false);
     await padPeers(contract, 9);
-    expect(await contract.nomineeThreshold()).to.equal(4n);   // floor(9/3)+1 = 4, not 3
+    expect(await gov.nomineeThreshold()).to.equal(4n);   // floor(9/3)+1 = 4, not 3
     await padPeers(contract, 12);
-    expect(await contract.nomineeThreshold()).to.equal(5n);   // floor(12/3)+1 = 5, not 4
+    expect(await gov.nomineeThreshold()).to.equal(5n);   // floor(12/3)+1 = 5, not 4
   });
 
   it("retireThreshold is a ceil(2n/3) supermajority, floored at 1", async () => {
@@ -218,20 +282,20 @@ describe("EvidenceConsensus — thresholds", () => {
 
 describe("EvidenceConsensus — seed-phase gating", () => {
   it("blocks nominatePeer when activePeerCount < seedPhaseK", async () => {
-    const { contract, signers } = await deploy(5, 1, false);
+    const { gov, signers } = await deploy(5, 1, false);
     const [, target] = signers;
     await expect(
-      contract.nominatePeer(target.address, "Target")
+      gov.nominatePeer(target.address, "Target")
     ).to.be.revertedWith("seed phase: owner must seed peers first");
   });
 
   it("owner can seed via addPeer during seed phase", async () => {
-    const { contract, signers } = await deploy(5, 1, false);
+    const { contract, gov, signers } = await deploy(5, 1, false);
     const [, a, b] = signers;
     await contract.addPeer(a.address, "A");
     await contract.addPeer(b.address, "B");
     expect(await contract.activePeerCount()).to.equal(3n);
-    expect(await contract.nominationsOpen()).to.equal(false);
+    expect(await gov.nominationsOpen()).to.equal(false);
   });
 
   it("blocks owner addPeer once the seed phase is over", async () => {
@@ -243,25 +307,25 @@ describe("EvidenceConsensus — seed-phase gating", () => {
   });
 
   it("unlocks nominations once K is reached", async () => {
-    const { contract, signers } = await deploy(3, 1, false);
+    const { contract, gov, signers } = await deploy(3, 1, false);
     const [, a, b, target] = signers;
     await contract.addPeer(a.address, "A");
     await contract.addPeer(b.address, "B");
-    expect(await contract.nominationsOpen()).to.equal(true);
-    await expect(contract.nominatePeer(target.address, "Target"))
-      .to.emit(contract, "PeerNominated");
+    expect(await gov.nominationsOpen()).to.equal(true);
+    await expect(gov.nominatePeer(target.address, "Target"))
+      .to.emit(gov, "PeerNominated");
   });
 });
 
 describe("EvidenceConsensus — peer registry + swap-pop", () => {
   it("swap-pop preserves _peerList integrity across revocations", async () => {
-    const { contract, signers } = await deploy(0, 4, false);
+    const { contract, gov, signers } = await deploy(0, 4, false);
     const [, a, b, c] = signers;
     expect(await contract.activePeerCount()).to.equal(4n);
 
     // n=4 → revokeThreshold = 2. Revoke the middle peer (b) via vote.
-    await contract.motionRevoke(b.address);                 // signer0 → 1
-    await contract.connect(c).voteRevoke(b.address);        // → 2 → removed
+    await gov.motionRevoke(b.address);                 // signer0 → 1
+    await gov.connect(c).voteRevoke(b.address);        // → 2 → removed
     expect(await contract.activePeerCount()).to.equal(3n);
     expect(await contract.isActivePeer(b.address)).to.equal(false);
 
@@ -276,17 +340,17 @@ describe("EvidenceConsensus — peer registry + swap-pop", () => {
   it("owner can re-add a revoked peer while still in seed phase", async () => {
     // K=3 with 3 genesis peers: revoking one drops count below K, re-opening
     // the seed phase so the owner can re-seed.
-    const { contract, signers } = await deploy(3, 3, false);
+    const { contract, gov, signers } = await deploy(3, 3, false);
     const [, peer2, peer3] = signers;
-    await contract.motionRevoke(peer3.address);             // signer0 → 1
-    await contract.connect(peer2).voteRevoke(peer3.address); // n=3 thr=2 → removed
+    await gov.motionRevoke(peer3.address);             // signer0 → 1
+    await gov.connect(peer2).voteRevoke(peer3.address); // n=3 thr=2 → removed
     expect(await contract.isActivePeer(peer3.address)).to.equal(false);
-    expect(await contract.revocationActive(peer3.address)).to.equal(false);
+    expect(await gov.revocationActive(peer3.address)).to.equal(false);
 
     await contract.addPeer(peer3.address, "peer3-readded");  // count 2 < K=3
     expect(await contract.isActivePeer(peer3.address)).to.equal(true);
     expect(await contract.peerHandle(peer3.address)).to.equal("peer3-readded");
-    expect(await contract.revokeVoteCount(peer3.address)).to.equal(0);
+    expect(await gov.revokeVoteCount(peer3.address)).to.equal(0);
   });
 
   it("rejects re-adding an already-active peer", async () => {
@@ -304,57 +368,57 @@ describe("EvidenceConsensus — peer registry + swap-pop", () => {
 
 describe("EvidenceConsensus — nominee flow", () => {
   it("auto-promotes nominee on endorsement quorum and removes from nominee list", async () => {
-    const { contract, signers } = await deploy(2, 2, false); // n=2 → nominee thr=1
+    const { contract, gov, signers } = await deploy(2, 2, false); // n=2 → nominee thr=1
     const [, peer2, target] = signers;
-    await contract.connect(peer2).nominatePeer(target.address, "Target");
+    await gov.connect(peer2).nominatePeer(target.address, "Target");
 
-    let nominees = await contract.nomineeList();
+    let nominees = await gov.nomineeList();
     expect(nominees.length).to.equal(1);
     expect(nominees[0]).to.equal(target.address);
 
-    await expect(contract.endorseNominee(target.address))
-      .to.emit(contract, "NomineeVerified");
+    await expect(gov.endorseNominee(target.address))
+      .to.emit(gov, "NomineeVerified");
 
     expect(await contract.isActivePeer(target.address)).to.equal(true);
-    expect(await contract.isNominated(target.address)).to.equal(false);
+    expect(await gov.isNominated(target.address)).to.equal(false);
 
-    nominees = await contract.nomineeList();
+    nominees = await gov.nomineeList();
     expect(nominees.length).to.equal(0);
   });
 
   it("prevents double-endorsement", async () => {
-    const { contract, signers } = await deploy(4, 4, false); // n=4 → nominee thr=2
+    const { contract, gov, signers } = await deploy(4, 4, false); // n=4 → nominee thr=2
     const target = signers[4];
-    await contract.connect(signers[1]).nominatePeer(target.address, "T");
-    await contract.endorseNominee(target.address);                     // signers[0] → 1
-    await expect(contract.endorseNominee(target.address))
+    await gov.connect(signers[1]).nominatePeer(target.address, "T");
+    await gov.endorseNominee(target.address);                     // signers[0] → 1
+    await expect(gov.endorseNominee(target.address))
       .to.be.revertedWith("already endorsed");
-    await contract.connect(signers[1]).endorseNominee(target.address); // → 2 → verified
+    await gov.connect(signers[1]).endorseNominee(target.address); // → 2 → verified
     expect(await contract.isActivePeer(target.address)).to.equal(true);
   });
 
   it("rejects nominating an already-active peer", async () => {
-    const { contract, signers } = await deploy(2, 2, false);
+    const { gov, signers } = await deploy(2, 2, false);
     const [, peer2] = signers;
-    await expect(contract.nominatePeer(peer2.address, "x"))
+    await expect(gov.nominatePeer(peer2.address, "x"))
       .to.be.revertedWith("already a peer");
   });
 
   it("non-peer cannot nominate", async () => {
-    const { contract, signers } = await deploy(0, 1, false);
+    const { gov, signers } = await deploy(0, 1, false);
     const [, outsider, target] = signers;
     await expect(
-      contract.connect(outsider).nominatePeer(target.address, "x")
+      gov.connect(outsider).nominatePeer(target.address, "x")
     ).to.be.revertedWith("not an active peer");
   });
 });
 
 describe("EvidenceConsensus — revocation", () => {
   it("simple majority revokes and removes peer", async () => {
-    const { contract, signers } = await deploy(0, 3, false);
+    const { contract, gov, signers } = await deploy(0, 3, false);
     const [, peer2, peer3] = signers;
-    await contract.motionRevoke(peer3.address);
-    await contract.connect(peer2).voteRevoke(peer3.address);
+    await gov.motionRevoke(peer3.address);
+    await gov.connect(peer2).voteRevoke(peer3.address);
     expect(await contract.isActivePeer(peer3.address)).to.equal(false);
     expect(await contract.activePeerCount()).to.equal(2n);
 
@@ -363,49 +427,49 @@ describe("EvidenceConsensus — revocation", () => {
   });
 
   it("self-revoke is blocked", async () => {
-    const { contract, signers } = await deploy(0, 2, false);
+    const { gov, signers } = await deploy(0, 2, false);
     const [g] = signers;
-    await expect(contract.motionRevoke(g.address))
+    await expect(gov.motionRevoke(g.address))
       .to.be.revertedWith("cannot self-revoke");
   });
 
   it("cannot double-motion", async () => {
-    const { contract, signers } = await deploy(0, 5, false); // n=5 thr=3 → stays open
+    const { gov, signers } = await deploy(0, 5, false); // n=5 thr=3 → stays open
     const [, peer2, peer3] = signers;
-    await contract.motionRevoke(peer3.address);
-    await expect(contract.connect(peer2).motionRevoke(peer3.address))
+    await gov.motionRevoke(peer3.address);
+    await expect(gov.connect(peer2).motionRevoke(peer3.address))
       .to.be.revertedWith("revocation already active");
   });
 
   it("cannot double-vote on an open revocation motion", async () => {
-    const { contract, signers } = await deploy(0, 5, false); // n=5 thr=3
+    const { gov, signers } = await deploy(0, 5, false); // n=5 thr=3
     const [, peer2, peer3] = signers;
-    await contract.motionRevoke(peer3.address);              // signer0 → 1
-    await contract.connect(peer2).voteRevoke(peer3.address); // → 2 (still < 3)
-    await expect(contract.connect(peer2).voteRevoke(peer3.address))
+    await gov.motionRevoke(peer3.address);              // signer0 → 1
+    await gov.connect(peer2).voteRevoke(peer3.address); // → 2 (still < 3)
+    await expect(gov.connect(peer2).voteRevoke(peer3.address))
       .to.be.revertedWith("already voted");
   });
 
   it("cancelStaleRevocation clears a motion after the window and frees a re-motion", async () => {
-    const { contract, signers } = await deploy(0, 5, false); // n=5 thr=3
+    const { gov, signers } = await deploy(0, 5, false); // n=5 thr=3
     const [, peer2, peer3] = signers;
-    await contract.motionRevoke(peer3.address);              // signer0 → 1 (< 3)
+    await gov.motionRevoke(peer3.address);              // signer0 → 1 (< 3)
 
-    await expect(contract.cancelStaleRevocation(peer3.address))
+    await expect(gov.cancelStaleRevocation(peer3.address))
       .to.be.revertedWith("window still open");
 
     await time.increase(REVOKE_WINDOW + 1);
-    await expect(contract.cancelStaleRevocation(peer3.address))
-      .to.emit(contract, "RevocationCancelled").withArgs(peer3.address);
-    expect(await contract.revocationActive(peer3.address)).to.equal(false);
-    expect(await contract.revokeVoteCount(peer3.address)).to.equal(0);
+    await expect(gov.cancelStaleRevocation(peer3.address))
+      .to.emit(gov, "RevocationCancelled").withArgs(peer3.address);
+    expect(await gov.revocationActive(peer3.address)).to.equal(false);
+    expect(await gov.revokeVoteCount(peer3.address)).to.equal(0);
 
     // A fresh motion starts a new round, so signer0 (who voted last time) may
     // vote again — votes are not permanently locked across motions.
-    await contract.connect(peer2).motionRevoke(peer3.address);   // peer2 → 1
-    expect(await contract.hasVotedRevoke(peer3.address, signers[0].address)).to.equal(false);
-    await expect(contract.voteRevoke(peer3.address)).to.not.be.reverted; // signer0 → 2
-    expect(await contract.revokeVoteCount(peer3.address)).to.equal(2);
+    await gov.connect(peer2).motionRevoke(peer3.address);   // peer2 → 1
+    expect(await gov.hasVotedRevoke(peer3.address, signers[0].address)).to.equal(false);
+    await expect(gov.voteRevoke(peer3.address)).to.not.be.reverted; // signer0 → 2
+    expect(await gov.revokeVoteCount(peer3.address)).to.equal(2);
   });
 });
 
@@ -506,13 +570,13 @@ describe("EvidenceConsensus — multi-binding (cross-listing)", () => {
   });
 
   it("each binding votes independently — one canon, one expelled", async () => {
-    const { contract } = await deploy(); // genesis-1, all thresholds = 1
+    const { contract, signers } = await deploy(); // genesis-1, all thresholds = 1
     const id = evidenceId(1);
     await contract.submitEvidence(id, 2, DEFAULT_TOPIC, contentHash("x")); // binding A
     await contract.fileBinding(id, DEFAULT_TOPIC_2);                        // binding B
 
-    await contract.castReviewVote(id, DEFAULT_TOPIC, true);    // canon A
-    await contract.castReviewVote(id, DEFAULT_TOPIC_2, false); // expel B
+    await reviewVote(contract, signers[0], id, DEFAULT_TOPIC, true);    // canon A
+    await reviewVote(contract, signers[0], id, DEFAULT_TOPIC_2, false); // expel B
 
     expect(await bindingState(contract, id, DEFAULT_TOPIC)).to.equal(State.Canon);
     expect(await bindingState(contract, id, DEFAULT_TOPIC_2)).to.equal(State.Expelled);
@@ -524,11 +588,10 @@ describe("EvidenceConsensus — multi-binding (cross-listing)", () => {
     await contract.submitEvidence(id, 1, DEFAULT_TOPIC, contentHash("x"));
     await contract.fileBinding(id, DEFAULT_TOPIC_2);
 
-    await contract.castReviewVote(id, DEFAULT_TOPIC, true);    // peer0 on A
-    await contract.castReviewVote(id, DEFAULT_TOPIC_2, true);  // peer0 on B — allowed
-    await expect(contract.castReviewVote(id, DEFAULT_TOPIC, true))
+    await reviewVote(contract, signers[0], id, DEFAULT_TOPIC, true);    // peer0 on A
+    await reviewVote(contract, signers[0], id, DEFAULT_TOPIC_2, true);  // peer0 on B — allowed
+    await expect(reviewVote(contract, signers[0], id, DEFAULT_TOPIC, true))
       .to.be.revertedWith("already voted");
-    void signers;
   });
 });
 
@@ -563,7 +626,7 @@ describe("EvidenceConsensus — submission queue (L2)", () => {
   });
 
   it("resolving a binding frees a slot for promotion", async () => {
-    const { contract } = await deploy(); // genesis-1, thresholds = 1, capacity 4
+    const { contract, signers } = await deploy(); // genesis-1, thresholds = 1, capacity 4
     for (let i = 1; i <= 4; i++)
       await contract.submitEvidence(evidenceId(i), 2, DEFAULT_TOPIC, contentHash("e" + i));
     await contract.submitEvidence(evidenceId(5), 2, DEFAULT_TOPIC, contentHash("e5")); // queued
@@ -573,7 +636,7 @@ describe("EvidenceConsensus — submission queue (L2)", () => {
     await expect(contract.promote(evidenceId(5), DEFAULT_TOPIC)).to.be.revertedWith("no review slot");
 
     // Canonize one active binding → frees a slot.
-    await contract.castReviewVote(evidenceId(1), DEFAULT_TOPIC, true);
+    await reviewVote(contract, signers[0], evidenceId(1), DEFAULT_TOPIC, true);
     expect(await contract.activeReviewCount()).to.equal(3n);
 
     await contract.promote(evidenceId(5), DEFAULT_TOPIC);
@@ -675,7 +738,7 @@ describe("EvidenceConsensus — peer garbage collection (L2)", () => {
     const id = evidenceId(1);
     await contract.submitEvidence(id, 2, DEFAULT_TOPIC, contentHash("x"));
     await time.increase(INACTIVITY_WINDOW - DAY); // still inside the 30-day review window
-    await contract.connect(victim).castReviewVote(id, DEFAULT_TOPIC, true);
+    await reviewVote(contract, victim, id, DEFAULT_TOPIC, true);
     await time.increase(2 * DAY);
     await expect(contract.pruneInactivePeer(victim.address)).to.be.revertedWith("still active");
   });
@@ -696,29 +759,29 @@ describe("EvidenceConsensus — peer garbage collection (L2)", () => {
 
 describe("EvidenceConsensus — review voting", () => {
   it("canonizes a binding on approve threshold (Genesis-1, threshold=1)", async () => {
-    const { contract } = await deploy();
+    const { contract, signers } = await deploy();
     const id = evidenceId(1);
     const bid = bindingId(id, DEFAULT_TOPIC);
     await contract.submitEvidence(id, 2, DEFAULT_TOPIC, contentHash("x"));
-    await expect(contract.castReviewVote(id, DEFAULT_TOPIC, true))
+    await expect(reviewVote(contract, signers[0], id, DEFAULT_TOPIC, true))
       .to.emit(contract, "BindingCanonized").withArgs(bid, id, DEFAULT_TOPIC, anyUint(), 1);
     expect(await bindingState(contract, id)).to.equal(State.Canon);
   });
 
   it("expels a binding on reject threshold (Genesis-1, threshold=1)", async () => {
-    const { contract } = await deploy();
+    const { contract, signers } = await deploy();
     const id = evidenceId(1);
     await contract.submitEvidence(id, 2, DEFAULT_TOPIC, contentHash("x"));
-    await contract.castReviewVote(id, DEFAULT_TOPIC, false);
+    await reviewVote(contract, signers[0], id, DEFAULT_TOPIC, false);
     expect(await bindingState(contract, id)).to.equal(State.Expelled);
   });
 
   it("prevents double-voting on a binding", async () => {
-    const { contract } = await deploy(0, 5);
+    const { contract, signers } = await deploy(0, 5);
     const id = evidenceId(1);
     await contract.submitEvidence(id, 1, DEFAULT_TOPIC, contentHash("x"));
-    await contract.castReviewVote(id, DEFAULT_TOPIC, true);
-    await expect(contract.castReviewVote(id, DEFAULT_TOPIC, true))
+    await reviewVote(contract, signers[0], id, DEFAULT_TOPIC, true);
+    await expect(reviewVote(contract, signers[0], id, DEFAULT_TOPIC, true))
       .to.be.revertedWith("already voted");
   });
 
@@ -727,24 +790,24 @@ describe("EvidenceConsensus — review voting", () => {
     const { contract, signers } = await deploy(0, 3);
     const id = evidenceId(1);
     await contract.submitEvidence(id, 2, DEFAULT_TOPIC, contentHash("x"));
-    await contract.castReviewVote(id, DEFAULT_TOPIC, true);
-    await contract.connect(signers[1]).castReviewVote(id, DEFAULT_TOPIC, true); // canonizes
-    await expect(contract.connect(signers[2]).castReviewVote(id, DEFAULT_TOPIC, true))
+    await reviewVote(contract, signers[0], id, DEFAULT_TOPIC, true);
+    await reviewVote(contract, signers[1], id, DEFAULT_TOPIC, true); // canonizes
+    await expect(reviewVote(contract, signers[2], id, DEFAULT_TOPIC, true))
       .to.be.revertedWith("not in review");
   });
 
   it("voting an unknown binding reverts (not in review)", async () => {
-    const { contract } = await deploy();
-    await expect(contract.castReviewVote(evidenceId(9), DEFAULT_TOPIC, true))
+    const { contract, signers } = await deploy();
+    await expect(reviewVote(contract, signers[0], evidenceId(9), DEFAULT_TOPIC, true))
       .to.be.revertedWith("not in review");
   });
 
   it("review votes are rejected after the pending window closes (L1)", async () => {
-    const { contract } = await deploy();
+    const { contract, signers } = await deploy();
     const id = evidenceId(1);
     await contract.submitEvidence(id, 2, DEFAULT_TOPIC, contentHash("x"));
     await time.increase(PENDING_WINDOW + 1);
-    await expect(contract.castReviewVote(id, DEFAULT_TOPIC, true))
+    await expect(reviewVote(contract, signers[0], id, DEFAULT_TOPIC, true))
       .to.be.revertedWith("review window closed");
   });
 
@@ -772,7 +835,7 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
     const n = Number(await contract.activePeerCount());
     const threshold = Number(await contract.canonizeThreshold(tier));
     for (let i = 0; i < threshold && i < n; i++) {
-      await contract.connect(signers[i]).castReviewVote(id, topicId, true);
+      await reviewVote(contract, signers[i], id, topicId, true);
     }
     return id;
   }
@@ -780,7 +843,7 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
   it("opens challenge, deprecates immediately when threshold met (Genesis-1, threshold=1)", async () => {
     const { contract, signers } = await deploy();
     const id = await canonized(contract, signers);
-    await expect(contract.openChallenge(id, DEFAULT_TOPIC))
+    await expect(openChallengeSigned(contract, signers[0], id, DEFAULT_TOPIC))
       .to.emit(contract, "ChallengeOpened")
       .and.to.emit(contract, "BindingDeprecated");
     expect(await bindingState(contract, id)).to.equal(State.Deprecated);
@@ -789,7 +852,7 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
   it("reaffirms via window expiry when challenge < threshold", async () => {
     const { contract, signers } = await deploy(0, 3);
     const id = await canonized(contract, signers, 2);
-    await contract.openChallenge(id, DEFAULT_TOPIC);
+    await openChallengeSigned(contract, signers[0], id, DEFAULT_TOPIC);
     expect(await bindingState(contract, id)).to.equal(State.Contested);
 
     await time.increase(CHALLENGE_WINDOW + 1);
@@ -801,7 +864,7 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
   it("reaffirms even with zero defense votes (silence ≠ deprecation)", async () => {
     const { contract, signers } = await deploy(0, 3);
     const id = await canonized(contract, signers, 2);
-    await contract.connect(signers[1]).openChallenge(id, DEFAULT_TOPIC);
+    await openChallengeSigned(contract, signers[1], id, DEFAULT_TOPIC);
     await time.increase(CHALLENGE_WINDOW + 1);
     await expect(contract.finalizeChallenge(id, DEFAULT_TOPIC))
       .to.emit(contract, "BindingReaffirmed");
@@ -811,7 +874,7 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
   it("anyone can call finalizeChallenge after window", async () => {
     const { contract, signers } = await deploy(0, 3);
     const id = await canonized(contract, signers, 2);
-    await contract.openChallenge(id, DEFAULT_TOPIC);
+    await openChallengeSigned(contract, signers[0], id, DEFAULT_TOPIC);
     await time.increase(CHALLENGE_WINDOW + 1);
     await expect(contract.connect(signers[7]).finalizeChallenge(id, DEFAULT_TOPIC))
       .to.not.be.reverted;
@@ -820,7 +883,7 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
   it("blocks finalize while window still open", async () => {
     const { contract, signers } = await deploy(0, 3);
     const id = await canonized(contract, signers, 2);
-    await contract.openChallenge(id, DEFAULT_TOPIC);
+    await openChallengeSigned(contract, signers[0], id, DEFAULT_TOPIC);
     await expect(contract.finalizeChallenge(id, DEFAULT_TOPIC))
       .to.be.revertedWith("window still open");
   });
@@ -828,17 +891,17 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
   it("cannot vote on challenge after window expires", async () => {
     const { contract, signers } = await deploy(0, 5);
     const id = await canonized(contract, signers, 2);
-    await contract.openChallenge(id, DEFAULT_TOPIC);
+    await openChallengeSigned(contract, signers[0], id, DEFAULT_TOPIC);
     await time.increase(CHALLENGE_WINDOW + 1);
-    await expect(contract.connect(signers[1]).castChallengeVote(id, DEFAULT_TOPIC, false))
+    await expect(challengeVote(contract, signers[1], id, DEFAULT_TOPIC, false))
       .to.be.revertedWith("window expired");
   });
 
   it("only a canon/reaffirmed binding can be challenged", async () => {
-    const { contract } = await deploy();
+    const { contract, signers } = await deploy();
     const id = evidenceId(1);
     await contract.submitEvidence(id, 2, DEFAULT_TOPIC, contentHash("x")); // Submitted, not canon
-    await expect(contract.openChallenge(id, DEFAULT_TOPIC)).to.be.revertedWith("not canon");
+    await expect(openChallengeSigned(contract, signers[0], id, DEFAULT_TOPIC)).to.be.revertedWith("not canon");
   });
 
   it("enforces 7-day per-peer challenge cooldown (across bindings)", async () => {
@@ -846,22 +909,22 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
     const id1 = await canonized(contract, signers, 2, 1);
     const id2 = await canonized(contract, signers, 2, 2);
 
-    await contract.openChallenge(id1, DEFAULT_TOPIC);
-    await expect(contract.openChallenge(id2, DEFAULT_TOPIC))
+    await openChallengeSigned(contract, signers[0], id1, DEFAULT_TOPIC);
+    await expect(openChallengeSigned(contract, signers[0], id2, DEFAULT_TOPIC))
       .to.be.revertedWith("challenge cooldown active");
 
     await time.increase(CHALLENGE_COOLDOWN + 1);
-    await expect(contract.openChallenge(id2, DEFAULT_TOPIC)).to.not.be.reverted;
+    await expect(openChallengeSigned(contract, signers[0], id2, DEFAULT_TOPIC)).to.not.be.reverted;
   });
 
   it("blocks re-challenging a binding until the per-binding cooldown elapses (L3)", async () => {
     const { contract, signers } = await deploy(0, 3);
     const id = await canonized(contract, signers, 2);
-    await contract.openChallenge(id, DEFAULT_TOPIC);
+    await openChallengeSigned(contract, signers[0], id, DEFAULT_TOPIC);
     await time.increase(CHALLENGE_WINDOW + 1);
     await contract.finalizeChallenge(id, DEFAULT_TOPIC); // reaffirmed
     // A different peer tries to immediately re-contest — too soon.
-    await expect(contract.connect(signers[1]).openChallenge(id, DEFAULT_TOPIC))
+    await expect(openChallengeSigned(contract, signers[1], id, DEFAULT_TOPIC))
       .to.be.revertedWith("rechallenge cooldown active");
   });
 
@@ -870,8 +933,8 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
     const id = await canonized(contract, signers, 2, 1); // deprecate2@5 = 3
 
     // Round 1: challenger signer0, defender signer1.
-    await contract.openChallenge(id, DEFAULT_TOPIC);                                 // cv=1
-    await contract.connect(signers[1]).castChallengeVote(id, DEFAULT_TOPIC, false);  // dv=1
+    await openChallengeSigned(contract, signers[0], id, DEFAULT_TOPIC);              // cv=1
+    await challengeVote(contract, signers[1], id, DEFAULT_TOPIC, false);             // dv=1
     let b = await contract.getBinding(id, DEFAULT_TOPIC);
     expect(b.challengeVotes).to.equal(1);
     expect(b.defenseVotes).to.equal(1);
@@ -883,7 +946,7 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
 
     // Wait out the per-binding re-challenge cooldown, then re-contest.
     await time.increase(RECHALLENGE_COOLDOWN + 1);
-    await contract.connect(signers[2]).openChallenge(id, DEFAULT_TOPIC);             // round 2, cv=1
+    await openChallengeSigned(contract, signers[2], id, DEFAULT_TOPIC);             // round 2, cv=1
     b = await contract.getBinding(id, DEFAULT_TOPIC);
     expect(b.state).to.equal(State.Contested);
     expect(b.challengeVotes).to.equal(1);
@@ -892,7 +955,7 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
 
     // signer0 voted in round 1; under per-round eligibility it can vote in round 2.
     expect(await contract.hasVoted(bindingId(id, DEFAULT_TOPIC), 1, signers[0].address)).to.equal(false);
-    await expect(contract.castChallengeVote(id, DEFAULT_TOPIC, true)).to.not.be.reverted; // cv=2
+    await expect(challengeVote(contract, signers[0], id, DEFAULT_TOPIC, true)).to.not.be.reverted; // cv=2
     b = await contract.getBinding(id, DEFAULT_TOPIC);
     expect(b.challengeVotes).to.equal(2);
   });
@@ -971,10 +1034,10 @@ describe("EvidenceConsensus — renounce ownership (trustless)", () => {
 
 describe("EvidenceConsensus — peer-floor invariant", () => {
   it("revocation cannot reduce the active set below one peer", async () => {
-    const { contract, signers } = await deploy(0, 2, false);
+    const { contract, gov, signers } = await deploy(0, 2, false);
     const [g, peer2] = signers;
     // n=2 → revokeThreshold 1, so a single motion removes the target.
-    await contract.connect(peer2).motionRevoke(g.address);
+    await gov.connect(peer2).motionRevoke(g.address);
     expect(await contract.isActivePeer(g.address)).to.equal(false);
     expect(await contract.activePeerCount()).to.equal(1n);
     // Only peer2 remains; no second peer exists to motion against it, so the
@@ -1003,14 +1066,15 @@ describe("EvidenceConsensus — pause", () => {
 
 describe("EvidenceConsensus — batched review voting", () => {
   it("castReviewVoteBatch records each binding vote like the single-vote path", async () => {
-    const { contract } = await deploy(0, 1);
+    const { contract, signers } = await deploy(0, 1);
     const id = evidenceId(101);
     await contract.submitEvidence(id, 3, DEFAULT_TOPIC, contentHash(id));
     await contract.fileBinding(id, DEFAULT_TOPIC_2);
     const id2 = evidenceId(102);
     await contract.submitEvidence(id2, 3, DEFAULT_TOPIC, contentHash(id2));
 
-    await contract.castReviewVoteBatch(
+    await reviewVoteBatch(
+      contract, signers[0],
       [id, id, id2],
       [DEFAULT_TOPIC, DEFAULT_TOPIC_2, DEFAULT_TOPIC],
       [true, false, true],
@@ -1022,43 +1086,44 @@ describe("EvidenceConsensus — batched review voting", () => {
   });
 
   it("rejects mismatched array lengths", async () => {
-    const { contract } = await deploy(0, 1);
+    const { contract, signers } = await deploy(0, 1);
     const id = evidenceId(200);
     await contract.submitEvidence(id, 2, DEFAULT_TOPIC, contentHash("x"));
-    await expect(contract.castReviewVoteBatch([id], [DEFAULT_TOPIC], [true, false]))
+    // ids/topics/noteHashes/sigs are length 1, but approves is length 2.
+    await expect(reviewVoteBatch(contract, signers[0], [id], [DEFAULT_TOPIC], [true, false]))
       .to.be.revertedWith("length mismatch");
   });
 
   it("rejects empty batch", async () => {
-    const { contract } = await deploy(0, 1);
-    await expect(contract.castReviewVoteBatch([], [], []))
+    const { contract, signers } = await deploy(0, 1);
+    await expect(reviewVoteBatch(contract, signers[0], [], [], []))
       .to.be.revertedWith("empty batch");
   });
 
   it("rejects oversize batch (> MAX_REVIEW_BATCH)", async () => {
-    const { contract } = await deploy(0, 1);
+    const { contract, signers } = await deploy(0, 1);
     const ids = Array.from({ length: 51 }, (_, i) => evidenceId(300 + i));
     const topics = Array.from({ length: 51 }, () => DEFAULT_TOPIC);
     const approves = Array.from({ length: 51 }, () => true);
-    await expect(contract.castReviewVoteBatch(ids, topics, approves))
+    await expect(reviewVoteBatch(contract, signers[0], ids, topics, approves))
       .to.be.revertedWith("batch too large");
   });
 
   it("reverts atomically: one bad binding rolls back the whole batch", async () => {
-    const { contract } = await deploy(0, 1);
+    const { contract, signers } = await deploy(0, 1);
     const good = evidenceId(400);
     const bad  = evidenceId(401); // not submitted
     await contract.submitEvidence(good, 2, DEFAULT_TOPIC, contentHash("g"));
-    await expect(contract.castReviewVoteBatch([good, bad], [DEFAULT_TOPIC, DEFAULT_TOPIC], [true, true]))
+    await expect(reviewVoteBatch(contract, signers[0], [good, bad], [DEFAULT_TOPIC, DEFAULT_TOPIC], [true, true]))
       .to.be.revertedWith("not in review");
     expect(await bindingState(contract, good)).to.equal(State.Submitted);
   });
 
   it("rejects double-voting inside a single batch", async () => {
-    const { contract } = await deploy(0, 3);
+    const { contract, signers } = await deploy(0, 3);
     const id = evidenceId(500);
     await contract.submitEvidence(id, 1, DEFAULT_TOPIC, contentHash("d"));
-    await expect(contract.castReviewVoteBatch([id, id], [DEFAULT_TOPIC, DEFAULT_TOPIC], [true, false]))
+    await expect(reviewVoteBatch(contract, signers[0], [id, id], [DEFAULT_TOPIC, DEFAULT_TOPIC], [true, false]))
       .to.be.revertedWith("already voted");
   });
 });
@@ -1079,9 +1144,9 @@ describe("EvidenceConsensus — handle length cap", () => {
   });
 
   it("nominatePeer rejects an oversize handle", async () => {
-    const { contract, signers } = await deploy(0, 1, false);
+    const { gov, signers } = await deploy(0, 1, false);
     const [, target] = signers;
-    await expect(contract.nominatePeer(target.address, "x".repeat(65)))
+    await expect(gov.nominatePeer(target.address, "x".repeat(65)))
       .to.be.revertedWith("handle too long");
   });
 
@@ -1114,9 +1179,9 @@ describe("EvidenceConsensus — aggregated views", () => {
   });
 
   it("getNominees (Lens) returns nominees with endorsement counts", async () => {
-    const { contract, lens, signers } = await deploy(5, 5, false);
+    const { gov, lens, signers } = await deploy(5, 5, false);
     const target = signers[5];
-    await contract.nominatePeer(target.address, "T");
+    await gov.nominatePeer(target.address, "T");
     const [addrs, handles, endorsements] = await lens.getNominees();
     expect(addrs).to.deep.equal([target.address]);
     expect(handles).to.deep.equal(["T"]);
@@ -1397,11 +1462,11 @@ describe("EvidenceConsensus — founding bundle invariants", () => {
   });
 
   it("a ratified topic accepts further evidence through the normal review flow", async () => {
-    const { contract } = await deploy(); // DEFAULT_TOPIC is ratified with its founding evidence
+    const { contract, signers } = await deploy(); // DEFAULT_TOPIC is ratified with its founding evidence
     const id = evidenceId(123);
     await contract.submitEvidence(id, 2, DEFAULT_TOPIC, contentHash("more"));
     expect(await bindingState(contract, id, DEFAULT_TOPIC)).to.equal(State.Submitted);
-    await contract.castReviewVote(id, DEFAULT_TOPIC, true); // threshold 1 → canon
+    await reviewVote(contract, signers[0], id, DEFAULT_TOPIC, true); // threshold 1 → canon
     expect(await bindingState(contract, id, DEFAULT_TOPIC)).to.equal(State.Canon);
   });
 });
@@ -1413,9 +1478,9 @@ describe("EvidenceConsensus — review determinism (H1)", () => {
     const { contract, signers } = await deploy(0, 10);
     const id = evidenceId(1);
     await contract.submitEvidence(id, 1, DEFAULT_TOPIC, contentHash("x"));
-    for (let i = 0; i < 4; i++) await contract.connect(signers[i]).castReviewVote(id, DEFAULT_TOPIC, false);
+    for (let i = 0; i < 4; i++) await reviewVote(contract, signers[i], id, DEFAULT_TOPIC, false);
     expect(await bindingState(contract, id)).to.equal(State.Submitted); // not expelled
-    for (let i = 4; i < 10; i++) await contract.connect(signers[i]).castReviewVote(id, DEFAULT_TOPIC, true); // 6 approves
+    for (let i = 4; i < 10; i++) await reviewVote(contract, signers[i], id, DEFAULT_TOPIC, true); // 6 approves
     expect(await bindingState(contract, id)).to.equal(State.Canon);     // majority wins
   });
 
@@ -1424,9 +1489,9 @@ describe("EvidenceConsensus — review determinism (H1)", () => {
     const { contract, signers } = await deploy(0, 10);
     const id = evidenceId(1);
     await contract.submitEvidence(id, 1, DEFAULT_TOPIC, contentHash("x"));
-    for (let i = 0; i < 4; i++) await contract.connect(signers[i]).castReviewVote(id, DEFAULT_TOPIC, false);
+    for (let i = 0; i < 4; i++) await reviewVote(contract, signers[i], id, DEFAULT_TOPIC, false);
     expect(await bindingState(contract, id)).to.equal(State.Submitted); // 4 rejects: canon still possible
-    await contract.connect(signers[4]).castReviewVote(id, DEFAULT_TOPIC, false); // 5th → canon impossible
+    await reviewVote(contract, signers[4], id, DEFAULT_TOPIC, false); // 5th → canon impossible
     expect(await bindingState(contract, id)).to.equal(State.Expelled);
   });
 
@@ -1436,8 +1501,8 @@ describe("EvidenceConsensus — review determinism (H1)", () => {
     const lapseId = evidenceId(2);
     await contract.submitEvidence(expelId, 1, DEFAULT_TOPIC, contentHash("e"));
     await contract.submitEvidence(lapseId, 1, DEFAULT_TOPIC, contentHash("l"));
-    for (let i = 0; i < 3; i++) await contract.connect(signers[i]).castReviewVote(expelId, DEFAULT_TOPIC, false); // 3 rejects, canon not impossible
-    await contract.connect(signers[0]).castReviewVote(lapseId, DEFAULT_TOPIC, false);                            // 1 reject only
+    for (let i = 0; i < 3; i++) await reviewVote(contract, signers[i], expelId, DEFAULT_TOPIC, false); // 3 rejects, canon not impossible
+    await reviewVote(contract, signers[0], lapseId, DEFAULT_TOPIC, false);                            // 1 reject only
     expect(await bindingState(contract, expelId)).to.equal(State.Submitted);
 
     await time.increase(PENDING_WINDOW + 1);
@@ -1453,7 +1518,7 @@ describe("EvidenceConsensus — lapsed re-file (L1)", () => {
     const { contract, signers } = await deploy(0, 5); // canonize(2)=3, expelThreshold=2
     const id = evidenceId(1);
     await contract.submitEvidence(id, 2, DEFAULT_TOPIC, contentHash("x"));
-    await contract.castReviewVote(id, DEFAULT_TOPIC, false); // 1 reject: < expel, canon still possible
+    await reviewVote(contract, signers[0], id, DEFAULT_TOPIC, false); // 1 reject: < expel, canon still possible
     await time.increase(PENDING_WINDOW + 1);
     await contract.markLapsed(id, DEFAULT_TOPIC);
     expect(await bindingState(contract, id)).to.equal(State.Lapsed);
@@ -1463,7 +1528,7 @@ describe("EvidenceConsensus — lapsed re-file (L1)", () => {
     expect(await bindingState(contract, id)).to.equal(State.Submitted);
     expect((await contract.getEvidence(id)).bindingCount).to.equal(1n); // not double-counted
     expect(await contract.hasVoted(bindingId(id, DEFAULT_TOPIC), 0, signers[0].address)).to.equal(false);
-    await contract.castReviewVote(id, DEFAULT_TOPIC, true);
+    await reviewVote(contract, signers[0], id, DEFAULT_TOPIC, true);
     const b = await contract.getBinding(id, DEFAULT_TOPIC);
     expect(b.reviewRound).to.equal(2n);
     expect(b.approveCount).to.equal(1n);
@@ -1471,7 +1536,7 @@ describe("EvidenceConsensus — lapsed re-file (L1)", () => {
     // An expelled binding stays terminal.
     const id2 = evidenceId(2);
     await contract.submitEvidence(id2, 2, DEFAULT_TOPIC, contentHash("y"));
-    for (let i = 0; i < 3; i++) await contract.connect(signers[i]).castReviewVote(id2, DEFAULT_TOPIC, false); // canonize 3 + 3 > 5 → expel at 3rd
+    for (let i = 0; i < 3; i++) await reviewVote(contract, signers[i], id2, DEFAULT_TOPIC, false); // canonize 3 + 3 > 5 → expel at 3rd
     expect(await bindingState(contract, id2)).to.equal(State.Expelled);
     await expect(contract.fileBinding(id2, DEFAULT_TOPIC)).to.be.revertedWith("binding active");
   });
@@ -1479,22 +1544,22 @@ describe("EvidenceConsensus — lapsed re-file (L1)", () => {
 
 describe("EvidenceConsensus — nominee expiry (L2)", () => {
   it("lapseNominee clears a stalled nominee; re-nomination starts a fresh round", async () => {
-    const { contract, signers } = await deploy(0, 6, false); // n=6 → nomineeThreshold 3
+    const { gov, signers } = await deploy(0, 6, false); // n=6 → nomineeThreshold 3
     const target = signers[6];
-    await contract.nominatePeer(target.address, "T");
-    await contract.endorseNominee(target.address); // signer0 → 1 (< 3)
+    await gov.nominatePeer(target.address, "T");
+    await gov.endorseNominee(target.address); // signer0 → 1 (< 3)
 
-    await expect(contract.lapseNominee(target.address)).to.be.revertedWith("window still open");
+    await expect(gov.lapseNominee(target.address)).to.be.revertedWith("window still open");
     await time.increase(PROPOSAL_WINDOW + 1);
-    await expect(contract.lapseNominee(target.address)).to.emit(contract, "NomineeLapsed").withArgs(target.address);
-    expect(await contract.isNominated(target.address)).to.equal(false);
-    expect(await contract.nomineeEndorsements(target.address)).to.equal(0);
+    await expect(gov.lapseNominee(target.address)).to.emit(gov, "NomineeLapsed").withArgs(target.address);
+    expect(await gov.isNominated(target.address)).to.equal(false);
+    expect(await gov.nomineeEndorsements(target.address)).to.equal(0);
 
     // Re-nominate fresh: the prior endorser is no longer locked.
-    await contract.connect(signers[1]).nominatePeer(target.address, "T2");
-    expect(await contract.hasEndorsed(target.address, signers[0].address)).to.equal(false);
-    await contract.endorseNominee(target.address); // signer0 endorses round 2 → 1
-    expect(await contract.nomineeEndorsements(target.address)).to.equal(1);
+    await gov.connect(signers[1]).nominatePeer(target.address, "T2");
+    expect(await gov.hasEndorsed(target.address, signers[0].address)).to.equal(false);
+    await gov.endorseNominee(target.address); // signer0 endorses round 2 → 1
+    expect(await gov.nomineeEndorsements(target.address)).to.equal(1);
   });
 });
 

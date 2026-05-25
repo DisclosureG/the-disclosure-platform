@@ -108,6 +108,16 @@ contract EvidenceConsensus {
     uint256 public immutable seedPhaseK;
     bool    public paused;
 
+    // ── EIP-712 vote-by-signature ─────────────────────────────────────────────
+    //
+    // Every review / challenge vote is authorised by an on-chain-recovered EIP-712
+    // signature, so a vote can never exist without the peer's signature.  The
+    // submitter (msg.sender) may be a relayer; attribution is the recovered
+    // signer, which must be an active peer.
+    bytes32 private immutable _DOMAIN_SEPARATOR;
+    bytes32 private constant _VOTE_TYPEHASH =
+        keccak256("Vote(bytes32 bindingId,uint8 phase,bool support,bytes32 noteHash)");
+
     // ── Peer registry ────────────────────────────────────────────────────────
 
     address[] private _peerList;
@@ -124,27 +134,14 @@ contract EvidenceConsensus {
     // threshold) honest so a stale network can still reach consensus.
     mapping(address => uint48) public lastActive;
 
-    // ── Nominee registry ─────────────────────────────────────────────────────
-
-    address[] private _nomineeList;
-    mapping(address => uint256) private nomineeIndex;     // 1-based
-    mapping(address => bool)    public isNominated;
-    mapping(address => string)  public nomineeHandle;
-    mapping(address => address) public nomineeBy;
-    mapping(address => uint48)  public nomineeAt;
-    mapping(address => uint32)  public nomineeEndorsements;
-    mapping(address => uint32)  public nomineeRound;      // bumped per (re-)nomination; isolates endorsements
-    // _endorsedNominee[nominee][round][endorser] — fresh eligibility each nomination.
-    mapping(address => mapping(uint32 => mapping(address => bool))) private _endorsedNominee;
-
-    // ── Revocation state ─────────────────────────────────────────────────────
-
-    mapping(address => bool)   public revocationActive;
-    mapping(address => uint32) public revokeVoteCount;
-    mapping(address => uint48) public revokeMotionAt;     // motion open time (for expiry)
-    mapping(address => uint32) public revokeRound;        // bumped per motion; isolates votes
-    // _votedRevoke[peer][round][voter] — fresh eligibility each motion.
-    mapping(address => mapping(uint32 => mapping(address => bool))) private _votedRevoke;
+    // ── Peer governance (nominee + revocation flows) ──────────────────────────
+    //
+    // The nominee (admission) and revocation (removal) flows live in the separate
+    // {PeerGovernance} contract to keep the core under EIP-170 once the EIP-712
+    // vote-by-signature machinery was added.  That contract mutates the peer set
+    // here through `gAddPeer` / `gRemovePeer`, gated on `onlyGovernance`.  Wired
+    // once after deploy via `setGovernance`.
+    address public governance;
 
     // ── Force-renounce state (peer eviction of a captured owner) ──────────────
     //
@@ -331,16 +328,6 @@ contract EvidenceConsensus {
     event PeerAdded   (address indexed peer, string handle, uint256 activePeerCount);
     event PeerRemoved (address indexed peer, uint256 activePeerCount);
 
-    event PeerNominated       (address indexed nominee, string handle, address indexed nominatedBy, uint256 threshold);
-    event PeerEndorsed        (address indexed nominee, address indexed endorser, uint32 endorsements, uint256 threshold);
-    event NomineeVerified     (address indexed peer, string handle, uint256 activePeerCount);
-    event NomineeLapsed       (address indexed nominee);
-
-    event RevocationMotioned  (address indexed peer, address indexed by, uint256 threshold);
-    event RevocationVoteCast  (address indexed peer, address indexed voter, uint32 votes, uint256 threshold);
-    event RevocationCancelled (address indexed peer);
-    event PeerRevoked         (address indexed peer, uint256 activePeerCount);
-
     event PillarProposed     (bytes32 indexed id, bytes32 metaHash, address indexed proposedBy, uint256 threshold);
     event TopicProposed      (bytes32 indexed id, bytes32 indexed parent, bytes32 metaHash, address indexed proposedBy, uint256 threshold);
     event NodeEndorsed       (bytes32 indexed id, address indexed endorser, uint32 endorsements, uint256 threshold);
@@ -360,13 +347,13 @@ contract EvidenceConsensus {
     event BindingSubmitted   (bytes32 indexed bindingId, bytes32 indexed id, bytes32 indexed topicId, uint8 tier, address submitter);
     event BindingQueued      (bytes32 indexed bindingId, bytes32 indexed id, bytes32 indexed topicId, uint8 tier, address submitter);
     event QueueBoosted       (bytes32 indexed bindingId, address indexed supporter, uint32 queuePriority);
-    event ReviewVoteCast     (bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool approve, uint32 approveCount, uint32 rejectCount);
+    event ReviewVoteCast     (bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool approve, uint32 approveCount, uint32 rejectCount, bytes sig);
     event BindingCanonized   (bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint48 canonAt, uint32 approveCount);
     event BindingExpelled    (bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 rejectCount);
     event BindingLapsed      (bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId);
 
     event ChallengeOpened    (bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed challenger, uint48 challengedAt);
-    event ChallengeVoteCast  (bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool supportChallenge, uint32 challengeVotes, uint32 defenseVotes);
+    event ChallengeVoteCast  (bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool supportChallenge, uint32 challengeVotes, uint32 defenseVotes, bytes sig);
     event BindingDeprecated  (bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 challengeVotes);
     event BindingReaffirmed  (bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 defenseVotes);
 
@@ -394,6 +381,16 @@ contract EvidenceConsensus {
             _addPeer(genesisPeers[i], handles[i]);
         }
         genesis = genesisPeers[0];
+
+        _DOMAIN_SEPARATOR = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes("EvidenceConsensus")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(this)
+            )
+        );
     }
 
     // ── Modifiers ────────────────────────────────────────────────────────────
@@ -410,6 +407,11 @@ contract EvidenceConsensus {
 
     modifier whenNotPaused() {
         require(!paused, "paused");
+        _;
+    }
+
+    modifier onlyGovernance() {
+        require(msg.sender == governance, "not governance");
         _;
     }
 
@@ -521,6 +523,27 @@ contract EvidenceConsensus {
         _addPeer(peer, handle);
     }
 
+    // ── Peer-governance wiring ────────────────────────────────────────────────
+    //
+    // The nominee / revocation flows live in {PeerGovernance}; it is the only
+    // contract authorized to add/remove peers post-seed-phase (besides inactivity
+    // GC), wired once by the owner via the one-shot `setGovernance`.
+
+    /// @notice One-shot setter linking the PeerGovernance contract.  Callable only
+    /// while unset, so governance can never be re-pointed once established.
+    function setGovernance(address g) external onlyOwner {
+        require(governance == address(0), "governance set");
+        governance = g;
+    }
+
+    function gAddPeer(address peer, string calldata handle) external onlyGovernance {
+        _addPeer(peer, handle);
+    }
+
+    function gRemovePeer(address peer) external onlyGovernance {
+        _removePeer(peer);
+    }
+
     function _addPeer(address peer, string memory handle) internal {
         require(peer != address(0), "zero address");
         require(!isActivePeer[peer], "already active");
@@ -554,9 +577,6 @@ contract EvidenceConsensus {
         peerIndex[peer]    = 0;
         isActivePeer[peer] = false;
         activePeerCount--;
-
-        revocationActive[peer] = false;
-        revokeVoteCount[peer]  = 0;
 
         emit PeerRemoved(peer, activePeerCount);
     }
@@ -627,20 +647,8 @@ contract EvidenceConsensus {
         return _deprecateThresholdAt(tier, activePeerCount);
     }
 
-    /// @notice Admission / taxonomy gate — floor(n/3) + 1, i.e. STRICTLY more
-    /// than one third of peers.  With ceil(n/3) a coalition of exactly n/3 (for n
-    /// divisible by 3) could self-admit and then bootstrap to a majority; the
-    /// strict gate closes that zero-margin case, so any coalition with ≤ 1/3 of
-    /// peers cannot admit anyone (or ratify/retire a node) without honest
-    /// cooperation — a clean BFT "honest > 2/3" boundary.
-    function nomineeThreshold() public view returns (uint256) {
-        return activePeerCount / 3 + 1; // ≥ 1 for all n ≥ 0
-    }
-
-    function revokeThreshold() public view returns (uint256) {
-        uint256 raw = (activePeerCount + 1) / 2; // ceiling(n / 2)
-        return raw < 1 ? 1 : raw;
-    }
+    // Admission (nomineeThreshold) and revocation (revokeThreshold) gates live in
+    // the {PeerGovernance} contract alongside the flows that use them.
 
     /// @notice Gate to ratify a taxonomy node — a STRICT MAJORITY floor(n/2)+1,
     /// decoupled from the 1/3+1 peer-admission gate (which stays load-bearing for
@@ -670,162 +678,13 @@ contract EvidenceConsensus {
         return t > c ? t : c;
     }
 
-    /// @notice Community nomination is open once the seed phase is reached.  If
-    /// the active set later dips below seedPhaseK while the owner is still seated,
-    /// the gate re-closes so the owner can re-seed.  But once the owner has
-    /// renounced there is no one left to re-seed, so nominations stay open
-    /// unconditionally — otherwise a post-renounce shrink below seedPhaseK would
-    /// permanently strand the network (unable to grow, only shrink).
-    function nominationsOpen() public view returns (bool open) {
-        return activePeerCount >= seedPhaseK || owner == address(0);
-    }
-
-    // ── Nominee flow ─────────────────────────────────────────────────────────
-
-    function nominatePeer(address nominee, string calldata handle)
-        external onlyActivePeer whenNotPaused
-    {
-        require(nominationsOpen(), "seed phase: owner must seed peers first");
-        require(nominee != address(0), "zero address");
-        require(!isActivePeer[nominee], "already a peer");
-        require(!isNominated[nominee], "already nominated");
-        require(bytes(handle).length <= MAX_HANDLE_BYTES, "handle too long");
-
-        ++nomineeRound[nominee];
-        isNominated[nominee]         = true;
-        nomineeHandle[nominee]       = handle;
-        nomineeBy[nominee]           = msg.sender;
-        nomineeAt[nominee]           = uint48(block.timestamp);
-        nomineeEndorsements[nominee] = 0;
-
-        _nomineeList.push(nominee);
-        nomineeIndex[nominee] = _nomineeList.length; // 1-based
-
-        emit PeerNominated(nominee, handle, msg.sender, nomineeThreshold());
-    }
-
-    function endorseNominee(address nominee)
-        external onlyActivePeer whenNotPaused
-    {
-        require(isNominated[nominee], "not nominated");
-        uint32 round = nomineeRound[nominee];
-        require(!_endorsedNominee[nominee][round][msg.sender], "already endorsed");
-
-        _endorsedNominee[nominee][round][msg.sender] = true;
-        nomineeEndorsements[nominee]++;
-
-        uint256 threshold = nomineeThreshold();
-        emit PeerEndorsed(nominee, msg.sender, nomineeEndorsements[nominee], threshold);
-        _checkNominee(nominee, threshold);
-    }
-
-    function _checkNominee(address nominee, uint256 threshold) internal {
-        if (nomineeEndorsements[nominee] >= threshold) {
-            string memory handle = nomineeHandle[nominee];
-            _removeNominee(nominee);
-            _addPeer(nominee, handle);
-            emit NomineeVerified(nominee, handle, activePeerCount);
-        }
-    }
-
-    /// @notice True iff `endorser` has endorsed the *current* nomination round of
-    /// `nominee`.  Stable across re-nominations thanks to per-nomination rounds.
-    function hasEndorsed(address nominee, address endorser) external view returns (bool) {
-        return _endorsedNominee[nominee][nomineeRound[nominee]][endorser];
-    }
-
-    /// @notice Garbage-collect a nominee that never reached its endorsement gate,
-    /// so the address can be nominated again fresh.  Permissionless after the
-    /// window; the next nomination gets a new round (so prior endorsers may
-    /// endorse again).
-    function lapseNominee(address nominee) external whenNotPaused {
-        require(isNominated[nominee], "not nominated");
-        require(block.timestamp > uint256(nomineeAt[nominee]) + PROPOSAL_WINDOW, "window still open");
-        _removeNominee(nominee);
-        emit NomineeLapsed(nominee);
-    }
-
-    function _removeNominee(address nominee) internal {
-        uint256 idx = nomineeIndex[nominee];
-        if (idx == 0) return;
-        uint256 lastIdx = _nomineeList.length;
-        if (idx != lastIdx) {
-            address moved = _nomineeList[lastIdx - 1];
-            _nomineeList[idx - 1] = moved;
-            nomineeIndex[moved]   = idx;
-        }
-        _nomineeList.pop();
-        nomineeIndex[nominee] = 0;
-        isNominated[nominee]  = false;
-        nomineeEndorsements[nominee] = 0;
-    }
-
-    function nomineeList() external view returns (address[] memory) {
-        return _nomineeList;
-    }
-
-    // ── Revocation flow ──────────────────────────────────────────────────────
-
-    function motionRevoke(address peer)
-        external onlyActivePeer whenNotPaused
-    {
-        require(isActivePeer[peer], "not active peer");
-        require(!revocationActive[peer], "revocation already active");
-        require(peer != msg.sender, "cannot self-revoke");
-
-        uint32 round = ++revokeRound[peer];
-        revocationActive[peer]              = true;
-        revokeMotionAt[peer]                = uint48(block.timestamp);
-        revokeVoteCount[peer]               = 1;
-        _votedRevoke[peer][round][msg.sender] = true;
-
-        uint256 threshold = revokeThreshold();
-        emit RevocationMotioned(peer, msg.sender, threshold);
-        emit RevocationVoteCast(peer, msg.sender, 1, threshold);
-
-        _checkRevocation(peer, threshold);
-    }
-
-    function voteRevoke(address peer)
-        external onlyActivePeer whenNotPaused
-    {
-        require(revocationActive[peer], "no revocation active");
-        uint32 round = revokeRound[peer];
-        require(!_votedRevoke[peer][round][msg.sender], "already voted");
-
-        _votedRevoke[peer][round][msg.sender] = true;
-        revokeVoteCount[peer]++;
-
-        uint256 thresh = revokeThreshold();
-        emit RevocationVoteCast(peer, msg.sender, revokeVoteCount[peer], thresh);
-
-        _checkRevocation(peer, thresh);
-    }
-
-    /// @notice Clear a stale revocation motion that never reached a majority,
-    /// so the peer is not left under a permanent cloud and the motion can be
-    /// re-opened fresh later.  Permissionless after the window.
-    function cancelStaleRevocation(address peer) external whenNotPaused {
-        require(revocationActive[peer], "no revocation active");
-        require(block.timestamp > uint256(revokeMotionAt[peer]) + REVOKE_WINDOW, "window still open");
-        revocationActive[peer] = false;
-        revokeVoteCount[peer]  = 0;
-        emit RevocationCancelled(peer);
-    }
-
-    function _checkRevocation(address peer, uint256 thresh) internal {
-        if (revokeVoteCount[peer] >= thresh) {
-            revocationActive[peer] = false;
-            _removePeer(peer);
-            emit PeerRevoked(peer, activePeerCount);
-        }
-    }
-
-    /// @notice True iff `voter` has voted on the *current* revocation motion
-    /// against `peer`.  Stable across re-motions thanks to per-motion rounds.
-    function hasVotedRevoke(address peer, address voter) external view returns (bool) {
-        return _votedRevoke[peer][revokeRound[peer]][voter];
-    }
+    // ── Peer governance (nominee + revocation flows) ──────────────────────────
+    //
+    // nominatePeer / endorseNominee / lapseNominee / nomineeList / hasEndorsed and
+    // motionRevoke / voteRevoke / cancelStaleRevocation / hasVotedRevoke, plus
+    // nominationsOpen / nomineeThreshold / revokeThreshold, live in the
+    // {PeerGovernance} contract.  It admits/removes peers here through the
+    // governance-gated gAddPeer / gRemovePeer.
 
     // ── Taxonomy flow ────────────────────────────────────────────────────────
 
@@ -1211,6 +1070,29 @@ contract EvidenceConsensus {
         return keccak256(abi.encode(id, topicId));
     }
 
+    // ── EIP-712 vote recovery ──────────────────────────────────────────────────
+
+    /// @notice Recover the signer of a Vote(bindingId, phase, support, noteHash)
+    /// EIP-712 typed message.  Every review / challenge vote is authorised by the
+    /// recovered signer (which the callers gate on `isActivePeer`), so a vote can
+    /// never exist without the peer's signature.  phase: 0 = review, 1 = challenge.
+    function _recoverVoter(bytes32 bid, uint8 phase, bool support, bytes32 noteHash, bytes calldata sig) internal view returns (address) {
+        require(sig.length == 65, "bad sig len");
+        bytes32 structHash = keccak256(abi.encode(_VOTE_TYPEHASH, bid, phase, support, noteHash));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _DOMAIN_SEPARATOR, structHash));
+        bytes32 r; bytes32 s; uint8 v;
+        assembly { r := calldataload(sig.offset) s := calldataload(add(sig.offset,32)) v := byte(0, calldataload(add(sig.offset,64))) }
+        address signer = ecrecover(digest, v, r, s);
+        require(signer != address(0), "bad sig");
+        return signer;
+    }
+
+    /// @notice The EIP-712 domain separator, exposed so off-chain signers can
+    /// reconstruct the digest.
+    function DOMAIN_SEPARATOR() external view returns (bytes32) {
+        return _DOMAIN_SEPARATOR;
+    }
+
     // ── Submit evidence + first binding ──────────────────────────────────────
 
     /**
@@ -1326,34 +1208,52 @@ contract EvidenceConsensus {
 
     uint256 public constant MAX_REVIEW_BATCH = 50;
 
-    function castReviewVote(bytes32 id, bytes32 topicId, bool approve)
-        external onlyActivePeer whenNotPaused
+    /// @notice Cast a review vote authorised by the voter's EIP-712 signature.
+    /// The submitter (msg.sender) may relay; attribution is the recovered signer,
+    /// which must be an active peer.  phase = 0.
+    function castReviewVote(bytes32 id, bytes32 topicId, bool approve, bytes32 noteHash, bytes calldata sig)
+        external whenNotPaused
     {
-        _castReviewVote(id, topicId, approve);
+        address voter = _recoverVoter(bindingId(id, topicId), 0, approve, noteHash, sig);
+        require(isActivePeer[voter], "not an active peer");
+        _castReviewVote(id, topicId, approve, voter, sig);
     }
 
-    /// @notice Batch the caller's votes across many bindings in one tx.
-    function castReviewVoteBatch(bytes32[] calldata ids, bytes32[] calldata topicIds_, bool[] calldata approves)
-        external onlyActivePeer whenNotPaused
+    /// @notice Batch many signed votes across bindings in one tx.  Each element
+    /// carries its own signature; attribution is per-element by recovered signer.
+    function castReviewVoteBatch(
+        bytes32[] calldata ids,
+        bytes32[] calldata topicIds_,
+        bool[]    calldata approves,
+        bytes32[] calldata noteHashes,
+        bytes[]   calldata sigs
+    )
+        external whenNotPaused
     {
         uint256 n = ids.length;
-        require(n == approves.length && n == topicIds_.length, "length mismatch");
+        require(
+            n == approves.length && n == topicIds_.length &&
+            n == noteHashes.length && n == sigs.length,
+            "length mismatch"
+        );
         require(n > 0, "empty batch");
         require(n <= MAX_REVIEW_BATCH, "batch too large");
         for (uint256 i = 0; i < n; i++) {
-            _castReviewVote(ids[i], topicIds_[i], approves[i]);
+            address voter = _recoverVoter(bindingId(ids[i], topicIds_[i]), 0, approves[i], noteHashes[i], sigs[i]);
+            require(isActivePeer[voter], "not an active peer");
+            _castReviewVote(ids[i], topicIds_[i], approves[i], voter, sigs[i]);
         }
     }
 
-    function _castReviewVote(bytes32 id, bytes32 topicId, bool approve) internal {
+    function _castReviewVote(bytes32 id, bytes32 topicId, bool approve, address voter, bytes calldata sig) internal {
         bytes32 bid = bindingId(id, topicId);
         Binding storage b = bindings[bid];
         require(b.state == EvidenceState.Submitted, "not in review");
         require(block.timestamp <= uint256(b.submittedAt) + PENDING_WINDOW, "review window closed");
-        require(!_votedReview[bid][b.reviewRound][msg.sender], "already voted");
+        require(!_votedReview[bid][b.reviewRound][voter], "already voted");
 
-        _votedReview[bid][b.reviewRound][msg.sender] = true;
-        lastActive[msg.sender] = uint48(block.timestamp);
+        _votedReview[bid][b.reviewRound][voter] = true;
+        lastActive[voter] = uint48(block.timestamp);
 
         // The canonization TARGET is judged against the peer count snapshotted when
         // this review round opened, so a fixed approve count canonizes regardless of
@@ -1367,7 +1267,7 @@ contract EvidenceConsensus {
 
         if (approve) {
             b.approveCount++;
-            emit ReviewVoteCast(bid, id, topicId, msg.sender, true, b.approveCount, b.rejectCount);
+            emit ReviewVoteCast(bid, id, topicId, voter, true, b.approveCount, b.rejectCount, sig);
             // Early canonization: the moment the high approve bar is met.
             if (b.approveCount >= canonize) {
                 b.state   = EvidenceState.Canon;
@@ -1377,7 +1277,7 @@ contract EvidenceConsensus {
             }
         } else {
             b.rejectCount++;
-            emit ReviewVoteCast(bid, id, topicId, msg.sender, false, b.approveCount, b.rejectCount);
+            emit ReviewVoteCast(bid, id, topicId, voter, false, b.approveCount, b.rejectCount, sig);
             // Canonization now arithmetically impossible — even if every peer who has
             // not voted yet approved, approve could not reach `canonize`.  Judged
             // against the LIVE count so canon and "canon impossible" stay mutually
@@ -1475,16 +1375,22 @@ contract EvidenceConsensus {
 
     // ── Challenge system ─────────────────────────────────────────────────────
 
-    function openChallenge(bytes32 id, bytes32 topicId)
-        external onlyActivePeer whenNotPaused
+    /// @notice Open a challenge, authorised by the challenger's EIP-712 signature
+    /// (support = true).  The submitter may relay; attribution is the recovered
+    /// signer, which must be an active peer.  phase = 1.
+    function openChallenge(bytes32 id, bytes32 topicId, bytes32 noteHash, bytes calldata sig)
+        external whenNotPaused
     {
+        bytes32 bid = bindingId(id, topicId);
+        address voter = _recoverVoter(bid, 1, true, noteHash, sig);
+        require(isActivePeer[voter], "not an active peer");
+
         require(
-            lastChallengeAt[msg.sender] == 0 ||
-            block.timestamp > uint256(lastChallengeAt[msg.sender]) + CHALLENGE_COOLDOWN,
+            lastChallengeAt[voter] == 0 ||
+            block.timestamp > uint256(lastChallengeAt[voter]) + CHALLENGE_COOLDOWN,
             "challenge cooldown active"
         );
 
-        bytes32 bid = bindingId(id, topicId);
         Binding storage b = bindings[bid];
         require(
             b.state == EvidenceState.Canon || b.state == EvidenceState.Reaffirmed,
@@ -1506,32 +1412,38 @@ contract EvidenceConsensus {
         b.defenseVotes    = 0;
         b.peerSnapshot    = uint32(activePeerCount); // vestigial: challenge resolution uses the LIVE count
 
-        _votedChallenge[bid][round][msg.sender] = true;
-        lastChallengeAt[msg.sender] = uint48(block.timestamp);
-        lastActive[msg.sender]      = uint48(block.timestamp);
+        _votedChallenge[bid][round][voter] = true;
+        lastChallengeAt[voter] = uint48(block.timestamp);
+        lastActive[voter]      = uint48(block.timestamp);
 
-        emit ChallengeOpened(bid, id, topicId, msg.sender, b.challengedAt);
-        emit ChallengeVoteCast(bid, id, topicId, msg.sender, true, b.challengeVotes, b.defenseVotes);
+        emit ChallengeOpened(bid, id, topicId, voter, b.challengedAt);
+        emit ChallengeVoteCast(bid, id, topicId, voter, true, b.challengeVotes, b.defenseVotes, sig);
 
         _resolveChallenge(bid, b);
     }
 
-    function castChallengeVote(bytes32 id, bytes32 topicId, bool supportChallenge)
-        external onlyActivePeer whenNotPaused
+    /// @notice Cast a challenge vote authorised by the voter's EIP-712 signature.
+    /// The submitter may relay; attribution is the recovered signer, which must be
+    /// an active peer.  phase = 1.
+    function castChallengeVote(bytes32 id, bytes32 topicId, bool supportChallenge, bytes32 noteHash, bytes calldata sig)
+        external whenNotPaused
     {
         bytes32 bid = bindingId(id, topicId);
+        address voter = _recoverVoter(bid, 1, supportChallenge, noteHash, sig);
+        require(isActivePeer[voter], "not an active peer");
+
         Binding storage b = bindings[bid];
         require(b.state == EvidenceState.Contested, "not contested");
         require(block.timestamp <= uint256(b.challengedAt) + CHALLENGE_WINDOW, "window expired");
-        require(!_votedChallenge[bid][b.challengeRound][msg.sender], "already voted");
+        require(!_votedChallenge[bid][b.challengeRound][voter], "already voted");
 
-        _votedChallenge[bid][b.challengeRound][msg.sender] = true;
-        lastActive[msg.sender] = uint48(block.timestamp);
+        _votedChallenge[bid][b.challengeRound][voter] = true;
+        lastActive[voter] = uint48(block.timestamp);
 
         if (supportChallenge) b.challengeVotes++;
         else                  b.defenseVotes++;
 
-        emit ChallengeVoteCast(bid, id, topicId, msg.sender, supportChallenge, b.challengeVotes, b.defenseVotes);
+        emit ChallengeVoteCast(bid, id, topicId, voter, supportChallenge, b.challengeVotes, b.defenseVotes, sig);
 
         _resolveChallenge(bid, b);
     }
