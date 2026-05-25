@@ -33,11 +33,13 @@ enabled = true
 # tables; the edge functions use the service role.
 
 # ── Edge functions ───────────────────────────────────────────────────────────
-# All three run with verify_jwt = false: gateway-level JWT auth is replaced by
-# each function's own application-level guarantees —
+# All run with verify_jwt = false: gateway-level JWT auth is replaced by each
+# function's own application-level guarantees —
 #   chain-indexer-evidence : service-role DB writes only (no user input trusted)
 #   verify-attestation     : EIP-712 signature + on-chain tx-receipt verification
 #   audit-content-hash     : read-only recompute of stored content hashes
+#   consensus-keeper       : service-role; permissionless prune/promote txs
+#   revocation-vote        : EIP-712 signature + on-chain revocation-round gate
 [functions.chain-indexer-evidence]
 enabled = true
 verify_jwt = false
@@ -47,5 +49,13 @@ enabled = true
 verify_jwt = false
 
 [functions.audit-content-hash]
+enabled = true
+verify_jwt = false
+
+[functions.consensus-keeper]
+enabled = true
+verify_jwt = false
+
+[functions.revocation-vote]
 enabled = true
 verify_jwt = false
