@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, Children, cloneElement } from 'react';
 import { useTaxonomy, useEvidence, useTierCounts, useQueuedBindings, useIndexerHealth, useEvidenceVotes, usePeerHandleMap, openChallenge } from '../evidence-data';
 import { supabase } from '../lib/supabase';
-import { isPeerActive, getPeerHandle, signAttestation, openChallengeOnChain, submitEvidenceOnChain, fileBindingOnChain, waitForTx, CONSENSUS_ADDR, getChallengeCooldownRemaining, getBoostCooldownRemaining, computeContentHash, bindingKey, slugToBytes32, connectWallet, switchToTargetChain, boostQueuedOnChain } from '../lib/wallet';
+import { isPeerActive, getPeerHandle, signVoteOnly, openChallengeOnChain, submitEvidenceOnChain, fileBindingOnChain, waitForTx, CONSENSUS_ADDR, getChallengeCooldownRemaining, getBoostCooldownRemaining, computeContentHash, bindingKey, slugToBytes32, connectWallet, switchToTargetChain, boostQueuedOnChain } from '../lib/wallet';
 import { markBindingOnchain } from '../evidence-data';
 import CopyChip from '../components/CopyChip';
 import AttestationVerifier from '../components/AttestationVerifier';
@@ -277,7 +277,7 @@ function Shelf({ q, setQ, tier, setTier, structural, pillars, counts, activePill
   );
 }
 
-function EvCard({ e, onOpen, onVotes, vote }) {
+function EvCard({ e, onOpen, onVotes, vote, style }) {
   const isDeprecated = e.status === 'deprecated';
   const isQueued = e.status === 'queued';
   const shortId = e.id ? `${String(e.id).slice(0, 8)}…` : '';
@@ -287,6 +287,7 @@ function EvCard({ e, onOpen, onVotes, vote }) {
       id={`ev-${e.id}`}
       role="button"
       tabIndex={0}
+      style={style}
       data-tier={e.tier}
       className={`ev-card${isDeprecated ? ' is-deprecated' : e.status === 'contested' ? ' is-contested' : ''}`}
       onClick={handleActivate}
@@ -432,6 +433,9 @@ function CardRail({ children, itemKey }) {
   const rafRef = useRef(0);
   const [canPrev, setCanPrev] = useState(false);
   const [canNext, setCanNext] = useState(false);
+  // Page geometry comes from the responsive --ev-card-cols/rows CSS vars so the
+  // row-major placement below tracks the same breakpoints as the grid sizing.
+  const [dims, setDims] = useState({ cols: 3, rows: 2 });
 
   const update = useCallback(() => {
     const g = gridRef.current;
@@ -441,12 +445,22 @@ function CardRail({ children, itemKey }) {
     setCanNext(g.scrollLeft < max - 2);
   }, []);
 
+  const measure = useCallback(() => {
+    const g = gridRef.current;
+    if (!g) return;
+    const cs = getComputedStyle(g);
+    const cols = parseInt(cs.getPropertyValue('--ev-card-cols'), 10) || 3;
+    const rows = parseInt(cs.getPropertyValue('--ev-card-rows'), 10) || 2;
+    setDims(prev => (prev.cols === cols && prev.rows === rows ? prev : { cols, rows }));
+  }, []);
+
   useEffect(() => {
     update();
-    const onResize = () => update();
+    measure();
+    const onResize = () => { update(); measure(); };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [update, itemKey]);
+  }, [update, measure, itemKey]);
 
   const onScroll = () => {
     if (rafRef.current) return;
@@ -457,13 +471,29 @@ function CardRail({ children, itemKey }) {
     if (g) g.scrollBy({ left: dir * g.clientWidth, behavior: 'smooth' });
   };
 
+  // Place each card at an explicit (row, column) so every page fills row 1 left
+  // to right, then row 2 — instead of the grid's default column-major flow.
+  const { cols, rows } = dims;
+  const pageSize = cols * rows;
+  const placed = Children.toArray(children).map((child, i) => {
+    const within = i % pageSize;
+    const c = within % cols;
+    return cloneElement(child, {
+      style: {
+        ...(child.props.style || {}),
+        gridColumn: Math.floor(i / pageSize) * cols + c + 1,
+        gridRow: Math.floor(within / cols) + 1,
+      },
+    });
+  });
+
   return (
     <div className="ev-pager-rail" data-can-scroll-prev={canPrev} data-can-scroll-next={canNext}>
       <button className="ev-scroll-arrow is-prev" aria-label="Previous page" disabled={!canPrev} onClick={() => scroll(-1)}>
         {arrowSvg('15,6 9,12 15,18')}
       </button>
       <div className="ev-grid" ref={gridRef} onScroll={onScroll}>
-        {children}
+        {placed}
       </div>
       <button className="ev-scroll-arrow is-next" aria-label="Next page" disabled={!canNext} onClick={() => scroll(1)}>
         {arrowSvg('9,6 15,12 9,18')}
@@ -799,46 +829,34 @@ function DetailModal({ e, onClose, walletPeer, vote }) {
     setChallenging(true);
     setChainWarning(null);
 
-    // EIP-712 signature is mandatory.  If the user rejects in MetaMask we
-    // surface a clear warning rather than silently writing an unsigned row.
-    let sig;
+    // Opening a challenge is a by-signature vote: the EIP-712 `Vote` signature is
+    // mandatory and IS the on-chain authorization (the contract recovers it). In
+    // dev mode (no contract) we still sign a Vote so the off-chain row is proven.
+    const reason    = challengeReason.trim();
+    const topicHash = await slugToBytes32(e.topicId);
+    let sig, txHash = null, round = null, noteHash = null, bindingHash = null;
     try {
-      sig = await signAttestation({
-        evidenceId: e.id,
-        topicId:    e.topicId,
-        phase:      'challenge',
-        verdict:    'challenge',
-        note:       challengeReason.trim(),
-      }, walletPeer.addr);
-    } catch (sigErr) {
-      setChainWarning(sigErr?.code === 4001
-        ? 'Signature rejected — challenge not filed.'
-        : `Signature failed — ${sigErr?.message || 'unknown error'}`);
+      if (CONSENSUS_ADDR) {
+        ({ txHash, sig, noteHash, round, bindingHash } = await openChallengeOnChain(e.id, topicHash, reason));
+        try { await waitForTx(txHash); }
+        catch (txErr) {
+          setChainWarning('Transaction reverted — challenge not recorded.');
+          setChallenging(false);
+          return;
+        }
+      } else {
+        ({ sig, noteHash, round, bindingHash } = await signVoteOnly(e.id, topicHash, 1, true, reason));
+      }
+    } catch (err) {
+      setChainWarning(err?.code === 4001 || err?.message?.includes('rejected')
+        ? 'Signature/transaction rejected — challenge not filed.'
+        : `Challenge failed — ${err?.message || 'unknown error'}`);
       setChallenging(false);
       return;
     }
 
-    let txHash = null;
-    if (CONSENSUS_ADDR) {
-      try {
-        txHash = await openChallengeOnChain(e.id, await slugToBytes32(e.topicId));
-      } catch (txErr) {
-        setChainWarning(txErr?.message?.includes('rejected')
-          ? 'Transaction rejected — challenge not recorded.'
-          : `On-chain call failed — ${txErr?.message || 'unknown error'}`);
-        setChallenging(false);
-        return;
-      }
-      try { await waitForTx(txHash); }
-      catch (txErr) {
-        setChainWarning('Transaction reverted — challenge not recorded.');
-        setChallenging(false);
-        return;
-      }
-    }
-
     try {
-      await openChallenge(e, walletPeer.addr, walletPeer.handle || '', challengeReason.trim(), sig, txHash);
+      await openChallenge(e, walletPeer.addr, walletPeer.handle || '', reason, sig, txHash, undefined, { round, noteHash, bindingHash });
     } catch (syncErr) {
       // On-chain succeeded; cache will catch up via indexer.
     }

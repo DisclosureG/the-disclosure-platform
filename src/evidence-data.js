@@ -545,7 +545,7 @@ export function useRecentVotes(limit = 6) {
     const refetch = () =>
       supabase
         .from('attestation_log_view')
-        .select('id, created_at, peer_handle, peer_addr, phase, verdict, evidence_title, evidence_id, binding_id, pillar_id, topic_id, tx_hash, note, eip712_sig')
+        .select('id, created_at, peer_handle, peer_addr, phase, verdict, evidence_title, evidence_id, binding_id, pillar_id, topic_id, tx_hash, note, eip712_sig, evidence_source, evidence_year, evidence_excerpt, evidence_link, evidence_tier, content_hash, submission_tx_hash')
         .order('created_at', { ascending: false })
         .limit(limit)
         .then(({ data }) => { if (!cancelled) setVotes(data || []); });
@@ -1243,12 +1243,20 @@ async function insertAttestation(payload) {
 // peerCount — live active-peer count from the contract (falls back to
 //             ACTIVE_PEER_COUNT when not provided)
 //
-export async function castReviewVote(binding, verdict, peerAddr, peerHandle, note, sig, txHash = null, peerCount) {
+// `sig` is now the EIP-712 **Vote** signature the chain recovered (or a
+// dev-mode signVoteOnly() signature) — not the old Attestation signature. The
+// trailing `vote` object carries the rest of what the chain bound the signature
+// to so verify-attestation can recover the same Vote digest server-side:
+//   round       — the binding's review round at signing time (anti-replay)
+//   noteHash    — keccak256 of the deliberation note (ZeroHash when empty)
+//   bindingHash — the on-chain bindingId (keccak256(abi.encode(id, topicId)))
+export async function castReviewVote(binding, verdict, peerAddr, peerHandle, note, sig, txHash = null, peerCount, vote = {}) {
   const result = await withRetry(() => insertAttestation({
     evidence_id: binding.id, topic_id: binding.topicId, binding_id: binding.bindingId,
     peer_addr: peerAddr, peer_handle: peerHandle,
     phase: 'review', verdict, note: note || null,
     eip712_sig: sig || null, tx_hash: txHash || null,
+    round: vote.round ?? null, note_hash: vote.noteHash ?? null, binding_hash: vote.bindingHash ?? null,
     action: 'review_vote',
   }));
   return {
@@ -1324,6 +1332,51 @@ export async function fetchMyTaxonomyRejects(peerAddr) {
   return new Set((data || []).map(r => r.binding_id).filter(Boolean));
 }
 
+// ── Peer revocation: off-chain signed "keep" position ────────────────────────
+//
+// The contract has no on-chain keep — only voteRevoke (discard, ceil(n/2) to
+// remove). A keep is a first-class EIP-712-signed dissent written off-chain via
+// the revocation-vote edge function (mirrors the taxonomy reject) and read by
+// the peer-review batch gate, so the network has to take a position on every
+// open revocation. Bound to the on-chain revokeRound, so a re-motion resets it.
+export async function castRevocationKeep({ subjectAddr, voterAddr, round, note, sig }) {
+  const { data, error } = await supabase.functions.invoke('revocation-vote', {
+    body: { subject_addr: subjectAddr, peer_addr: voterAddr, round, verdict: 'keep', note: note || null, eip712_sig: sig },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(String(data.error));
+  return data;
+}
+
+// This voter's keep positions, as a Set of `${subjectAddrLower}:${round}` — so a
+// keep only counts for the round it was cast in (a re-motion bumps the round).
+export async function fetchMyRevocationKeeps(voterAddr) {
+  if (!voterAddr) return new Set();
+  const { data } = await supabase
+    .from('revocation_votes')
+    .select('subject_addr, round')
+    .eq('voter_addr', voterAddr.toLowerCase())
+    .eq('verdict', 'keep');
+  return new Set((data || []).map(r => `${r.subject_addr}:${r.round}`));
+}
+
+// Keep-vote counts for the CURRENT round of each open revocation.
+// `rounds` maps subjectAddrLower → round; returns subjectAddrLower → count.
+export async function fetchRevocationKeepCounts(rounds) {
+  const subjects = Object.keys(rounds || {});
+  if (!subjects.length) return {};
+  const { data } = await supabase
+    .from('revocation_votes')
+    .select('subject_addr, round')
+    .in('subject_addr', subjects)
+    .eq('verdict', 'keep');
+  const counts = {};
+  for (const r of data || []) {
+    if (r.round === rounds[r.subject_addr]) counts[r.subject_addr] = (counts[r.subject_addr] || 0) + 1;
+  }
+  return counts;
+}
+
 // ── Register an (evidence × topic) binding on-chain ──────────────────────────
 //
 // After submitEvidence / fileBinding confirms, the edge function verifies the
@@ -1344,7 +1397,11 @@ export async function markBindingOnchain(binding, peerAddr, txHash) {
 //
 // txHash — confirmed on-chain transaction hash (null in dev mode / no contract)
 //
-export async function openChallenge(binding, peerAddr, peerHandle, reason, sig, txHash = null, peerCount) {
+// `sig` is now the EIP-712 **Vote** signature (phase 1, support true) the chain
+// recovered; the trailing `vote` object (round / noteHash / bindingHash) lets
+// verify-attestation rebuild the same Vote digest. Defaults to {} so older
+// callers that pass nothing keep working.
+export async function openChallenge(binding, peerAddr, peerHandle, reason, sig, txHash = null, peerCount, vote = {}) {
   // Single edge-function call: writes opener's attestation AND flips the
   // binding status to contested atomically on the server side (service role).
   await withRetry(() => insertAttestation({
@@ -1352,6 +1409,7 @@ export async function openChallenge(binding, peerAddr, peerHandle, reason, sig, 
     peer_addr: peerAddr, peer_handle: peerHandle,
     phase: 'challenge', verdict: 'challenge', note: reason,
     eip712_sig: sig || null, tx_hash: txHash || null,
+    round: vote.round ?? null, note_hash: vote.noteHash ?? null, binding_hash: vote.bindingHash ?? null,
     action: 'open_challenge',
     challenge_reason: reason,
   }));
@@ -1363,7 +1421,10 @@ export async function openChallenge(binding, peerAddr, peerHandle, reason, sig, 
 // txHash — confirmed on-chain transaction hash (null in dev mode / no contract)
 // peerCount — live active-peer count from the contract
 //
-export async function castChallengeVote(binding, supportChallenge, peerAddr, peerHandle, note, sig, txHash = null, peerCount) {
+// `sig` is the EIP-712 **Vote** signature (phase 1) the chain recovered; the
+// trailing `vote` object (round / noteHash / bindingHash) lets
+// verify-attestation rebuild the same Vote digest.
+export async function castChallengeVote(binding, supportChallenge, peerAddr, peerHandle, note, sig, txHash = null, peerCount, vote = {}) {
   const windowMs = CHALLENGE_WINDOW_DAYS * 86_400_000;
   const windowExpired = binding.challenged_at &&
     (Date.now() - new Date(binding.challenged_at).getTime()) > windowMs;
@@ -1375,6 +1436,7 @@ export async function castChallengeVote(binding, supportChallenge, peerAddr, pee
     peer_addr: peerAddr, peer_handle: peerHandle,
     phase: 'challenge', verdict, note: note || null,
     eip712_sig: sig || null, tx_hash: txHash || null,
+    round: vote.round ?? null, note_hash: vote.noteHash ?? null, binding_hash: vote.bindingHash ?? null,
     action: 'challenge_vote',
   }));
   return {

@@ -22,6 +22,10 @@ export const CONSENSUS_ADDR     = import.meta.env.VITE_CONSENSUS_ADDR || null;
 // Read-only Lens sidecar holding the peer/nominee/proposal aggregation views
 // moved off the core for EIP-170 headroom. Deployed alongside the core.
 export const CONSENSUS_LENS_ADDR = import.meta.env.VITE_CONSENSUS_LENS_ADDR || null;
+// PeerGovernance sidecar holding the nominee + revocation flows (and their
+// state/views) moved off the core for EIP-170 headroom. The core only exposes
+// gAddPeer/gRemovePeer to it; all nominate/endorse/revoke calls target this.
+export const CONSENSUS_GOVERNANCE_ADDR = import.meta.env.VITE_CONSENSUS_GOVERNANCE_ADDR || null;
 
 export const CONSENSUS_ABI = [
   // Views — peer registry
@@ -31,18 +35,7 @@ export const CONSENSUS_ABI = [
   "function peerHandle(address) view returns (string)",
   "function peerList() view returns (address[])",
   "function lastActive(address) view returns (uint48)",
-  // Views — nominees
-  "function nomineeThreshold() view returns (uint256)",
-  "function revokeThreshold() view returns (uint256)",
-  "function isNominated(address) view returns (bool)",
-  "function nomineeHandle(address) view returns (string)",
-  "function nomineeEndorsements(address) view returns (uint32)",
-  "function hasEndorsed(address,address) view returns (bool)",
-  "function nomineeList() view returns (address[])",
-  // Views — revocation, voting
-  "function revocationActive(address) view returns (bool)",
-  "function revokeVoteCount(address) view returns (uint32)",
-  "function hasVotedRevoke(address,address) view returns (bool)",
+  // Views — binding vote eligibility (nominee/revocation views live on governance)
   "function hasVoted(bytes32,uint8,address) view returns (bool)",  // keyed by bindingId
   // Views — evidence + bindings
   "function bindingId(bytes32 id, bytes32 topicId) pure returns (bytes32)",
@@ -56,9 +49,8 @@ export const CONSENSUS_ABI = [
   // Views — submission queue
   "function reviewCapacity() view returns (uint256)",
   "function activeReviewCount() view returns (uint256)",
-  // Views — seed phase + owner
+  // Views — seed phase + owner (nominationsOpen lives on governance)
   "function seedPhaseK() view returns (uint256)",
-  "function nominationsOpen() view returns (bool)",
   "function owner() view returns (address)",
   "function paused() view returns (bool)",
   "function forceRenounceActive() view returns (bool)",
@@ -77,13 +69,8 @@ export const CONSENSUS_ABI = [
   "function retireVotes(bytes32) view returns (uint32)",
   "function retireMotionAt(bytes32) view returns (uint48)",
   "function hasVotedRetire(bytes32 id, address voter) view returns (bool)",
-  // Writes — peer registry
-  "function nominatePeer(address nominee, string handle)",
-  "function endorseNominee(address)",
-  "function lapseNominee(address nominee)",
-  "function motionRevoke(address)",
-  "function voteRevoke(address)",
-  "function cancelStaleRevocation(address peer)",
+  // Writes — peer registry (owner seed only; nominee/revocation live on governance)
+  "function addPeer(address peer, string handle)",
   // Writes — peer liveness / garbage collection
   "function heartbeat()",
   "function pruneInactivePeer(address peer)",
@@ -102,10 +89,10 @@ export const CONSENSUS_ABI = [
   // Writes — evidence + (evidence × topic) bindings
   "function submitEvidence(bytes32 id, uint8 tier, bytes32 topicId, bytes32 contentHash)",
   "function fileBinding(bytes32 id, bytes32 topicId)",
-  "function castReviewVote(bytes32 id, bytes32 topicId, bool approve)",
-  "function castReviewVoteBatch(bytes32[] ids, bytes32[] topicIds, bool[] approves)",
-  "function openChallenge(bytes32 id, bytes32 topicId)",
-  "function castChallengeVote(bytes32 id, bytes32 topicId, bool supportChallenge)",
+  "function castReviewVote(bytes32 id, bytes32 topicId, bool approve, bytes32 noteHash, bytes sig)",
+  "function castReviewVoteBatch(bytes32[] ids, bytes32[] topicIds, bool[] approves, bytes32[] noteHashes, bytes[] sigs)",
+  "function openChallenge(bytes32 id, bytes32 topicId, bytes32 noteHash, bytes sig)",
+  "function castChallengeVote(bytes32 id, bytes32 topicId, bool supportChallenge, bytes32 noteHash, bytes sig)",
   "function markLapsed(bytes32 id, bytes32 topicId)",
   "function finalizeChallenge(bytes32 id, bytes32 topicId)",
   // Writes — submission queue (boost is open to anyone; promote is permissionless)
@@ -123,6 +110,33 @@ export const CONSENSUS_LENS_ABI = [
   "function getActivePeers() view returns (address[] addrs, string[] handles, bool[] revActive, uint32[] revVotes, uint48[] lastActives)",
   "function getNominees() view returns (address[] addrs, string[] handles, uint32[] endorsements)",
   "function getProposedNodes() view returns (bytes32[] ids, uint8[] kinds, bytes32[] parents, bytes32[] metaHashes, address[] proposers, uint32[] endorsements)",
+];
+
+// PeerGovernance sidecar ABI — the nominee + revocation flows (+ their views)
+// moved off the core. nominationsOpen/nomineeThreshold/revokeThreshold read the
+// core's activePeerCount/seedPhaseK/owner internally.
+export const GOVERNANCE_ABI = [
+  // Views — nominees
+  "function nomineeThreshold() view returns (uint256)",
+  "function revokeThreshold() view returns (uint256)",
+  "function nominationsOpen() view returns (bool)",
+  "function isNominated(address) view returns (bool)",
+  "function nomineeHandle(address) view returns (string)",
+  "function nomineeEndorsements(address) view returns (uint32)",
+  "function hasEndorsed(address,address) view returns (bool)",
+  "function nomineeList() view returns (address[])",
+  // Views — revocation
+  "function revocationActive(address) view returns (bool)",
+  "function revokeVoteCount(address) view returns (uint32)",
+  "function revokeRound(address) view returns (uint32)",
+  "function hasVotedRevoke(address,address) view returns (bool)",
+  // Writes
+  "function nominatePeer(address nominee, string handle)",
+  "function endorseNominee(address)",
+  "function lapseNominee(address nominee)",
+  "function motionRevoke(address)",
+  "function voteRevoke(address)",
+  "function cancelStaleRevocation(address peer)",
 ];
 
 // Multicall3 — canonical deploy at the same address on every EVM chain
@@ -165,6 +179,22 @@ export const ATTESTATION_TYPES = {
     { name: 'phase',      type: 'string'  },
     { name: 'verdict',    type: 'string'  },
     { name: 'note',       type: 'string'  },
+  ],
+};
+
+// On-chain vote authorization. Review / challenge votes are recovered ON-CHAIN
+// from this signature by EvidenceConsensus, so the fields + order MUST match the
+// contract's `keccak256("Vote(bytes32 bindingId,uint8 phase,bool support,uint32 round,bytes32 noteHash)")`
+// byte-for-byte. phase: 0 = review, 1 = challenge. The verify-attestation edge
+// function recovers the same typed data. Taxonomy endorse/reject still use the
+// Attestation type above (those are off-chain governance, not by-sig votes).
+export const VOTE_TYPES = {
+  Vote: [
+    { name: 'bindingId', type: 'bytes32' },
+    { name: 'phase',     type: 'uint8'   },
+    { name: 'support',   type: 'bool'    },
+    { name: 'round',     type: 'uint32'  },
+    { name: 'noteHash',  type: 'bytes32' },
   ],
 };
 

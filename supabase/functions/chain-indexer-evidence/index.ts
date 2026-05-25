@@ -15,6 +15,14 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { ethers } from "npm:ethers@6";
 
 const CONTRACT_ADDR = Deno.env.get("CONSENSUS_ADDR") ?? null;
+// The peer nominee / revocation governance moved to a separate PeerGovernance
+// contract at its own address.  Peer-membership events (PeerNominated,
+// PeerEndorsed, NomineeVerified, NomineeLapsed, RevocationMotioned,
+// RevocationVoteCast, RevocationCancelled, PeerRevoked) are now emitted there;
+// everything else — including PeerAdded / PeerRemoved — stays on the core.  We
+// scan BOTH addresses in one eth_getLogs (address array), and since each event's
+// topic0 is unique the merged ABI parses logs from whichever contract emitted.
+const GOVERNANCE_ADDR = Deno.env.get("GOVERNANCE_ADDR") ?? null;
 const RPC_URL       = Deno.env.get("CONSENSUS_RPC_URL") ?? "https://data-seed-prebsc-1-s1.binance.org:8545/";
 const MAX_RANGE     = 4_000; // BSC public RPCs cap eth_getLogs ranges
 const CONFIRMATIONS = Number(Deno.env.get("INDEXER_CONFIRMATIONS") ?? 12);
@@ -37,12 +45,12 @@ const ABI = [
   "event PillarRatified(bytes32 indexed id, bytes32 metaHash)",
   "event TopicRatified(bytes32 indexed id, bytes32 indexed parent, bytes32 metaHash)",
   "event NodeRetired(bytes32 indexed id, uint8 kind, bytes32 indexed parent)",
-  "event ReviewVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool approve, uint32 approveCount, uint32 rejectCount)",
+  "event ReviewVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool approve, uint32 approveCount, uint32 rejectCount, bytes sig)",
   "event BindingCanonized(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint48 canonAt, uint32 approveCount)",
   "event BindingExpelled(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 rejectCount)",
   "event BindingLapsed(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId)",
   "event ChallengeOpened(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed challenger, uint48 challengedAt)",
-  "event ChallengeVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool supportChallenge, uint32 challengeVotes, uint32 defenseVotes)",
+  "event ChallengeVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool supportChallenge, uint32 challengeVotes, uint32 defenseVotes, bytes sig)",
   "event BindingDeprecated(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 challengeVotes)",
   "event BindingReaffirmed(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 defenseVotes)",
   "event PeerAdded(address indexed peer, string handle, uint256 activePeerCount)",
@@ -50,6 +58,7 @@ const ABI = [
   "event PeerNominated(address indexed nominee, string handle, address indexed nominatedBy, uint256 threshold)",
   "event PeerEndorsed(address indexed nominee, address indexed endorser, uint32 endorsements, uint256 threshold)",
   "event NomineeVerified(address indexed peer, string handle, uint256 activePeerCount)",
+  "event NomineeLapsed(address indexed nominee)",
   "event RevocationMotioned(address indexed peer, address indexed by, uint256 threshold)",
   "event RevocationVoteCast(address indexed peer, address indexed voter, uint32 votes, uint256 threshold)",
   "event RevocationCancelled(address indexed peer)",
@@ -90,6 +99,32 @@ async function resolveBindingId(
   const { data } = await supabase
     .from("bindings").select("id, topic_id").eq("binding_hash", bHash).maybeSingle();
   return (data as { id: string; topic_id: string } | null) ?? null;
+}
+
+// Resolve a peer's human handle from already-indexed PeerAdded / NomineeVerified
+// events so an indexer-backfilled (tx-proof) attestation still carries the peer
+// name — vote history must always be able to show who voted, not a bare address.
+// A voter is necessarily a peer, so their add event sits in an earlier block and
+// is already in chain_events by the time their vote is processed. Cached per run;
+// null if the add event hasn't been indexed yet (UI then falls back to the addr).
+async function resolvePeerHandle(
+  supabase: ReturnType<typeof createClient>,
+  addr:     string,
+  cache:    Map<string, string | null>,
+): Promise<string | null> {
+  const key = addr.toLowerCase();
+  if (cache.has(key)) return cache.get(key)!;
+  const { data } = await supabase
+    .from("chain_events")
+    .select("payload")
+    .in("event_name", ["PeerAdded", "NomineeVerified"])
+    .eq("peer_addr", key)
+    .order("block_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const handle = (data as { payload?: { handle?: string } } | null)?.payload?.handle ?? null;
+  cache.set(key, handle);
+  return handle;
 }
 
 // Garbage-collect the pending founding evidence + binding placeholders under a
@@ -159,6 +194,7 @@ function project(name: string, args: ethers.Result): Decoded {
       out.payload = { node_hash: (args[0] as string).toLowerCase() };
       break;
     case "RevocationCancelled":
+    case "NomineeLapsed":
       out.peer_addr = (args[0] as string).toLowerCase();
       break;
     case "PillarRatified":
@@ -179,6 +215,9 @@ function project(name: string, args: ethers.Result): Decoded {
         approve:       args[4] as boolean,
         approve_count: Number(args[5]),
         reject_count:  Number(args[6]),
+        // The voter's EIP-712 Vote signature, emitted by the contract so a
+        // gap-filled attestation row carries the real signed proof.
+        sig:           args[7] ? (args[7] as string) : null,
       };
       break;
     case "BindingCanonized":
@@ -206,6 +245,9 @@ function project(name: string, args: ethers.Result): Decoded {
         support_challenge: args[4] as boolean,
         challenge_votes:   Number(args[5]),
         defense_votes:     Number(args[6]),
+        // The voter's EIP-712 Vote signature, emitted by the contract so a
+        // gap-filled attestation row carries the real signed proof.
+        sig:               args[7] ? (args[7] as string) : null,
       };
       break;
     case "BindingDeprecated":
@@ -317,12 +359,17 @@ Deno.serve(async (req: Request) => {
   let inserted = 0;
   let reconciled = 0;
   let lastProcessed = startFrom - 1;
+  const handleCache = new Map<string, string | null>();
 
   while (from <= scanUntil) {
     const to = Math.min(from + MAX_RANGE - 1, scanUntil);
     let logs;
     try {
-      logs = await provider.getLogs({ address: CONTRACT_ADDR, fromBlock: from, toBlock: to });
+      // eth_getLogs accepts an address ARRAY, so a single call covers both the
+      // core and the PeerGovernance contracts. Topic0 is unique per event, so
+      // the merged Interface parses each log regardless of which one emitted it.
+      const scanAddrs = [CONTRACT_ADDR, GOVERNANCE_ADDR].filter(Boolean) as string[];
+      logs = await provider.getLogs({ address: scanAddrs, fromBlock: from, toBlock: to });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       await writeHeartbeat(supabase, "error", {
@@ -394,15 +441,30 @@ Deno.serve(async (req: Request) => {
           : ((decoded.payload as { support_challenge?: boolean }).support_challenge ? "challenge" : "defend");
         const bid = await resolveBindingId(supabase, decoded);
         if (bid) {
+          const handle = await resolvePeerHandle(supabase, decoded.peer_addr, handleCache);
+          // The contract now emits the voter's EIP-712 Vote signature in the
+          // event, so a gap-filled row can carry the real signed proof instead
+          // of a bare tx proof. When a non-empty sig is present, store it with
+          // proof_type 'eip712' (so a backfilled row is as strong as a client-
+          // written one). Fall back to proof_type 'tx' (no eip712_sig) only when
+          // the sig is empty/missing — defensive, for legacy/edge cases.
+          // ignoreDuplicates still keeps this from downgrading a richer row the
+          // edge function may have already written for the same binding/peer/phase.
+          const emittedSig = (decoded.payload as { sig?: string | null }).sig ?? null;
+          const hasSig     = typeof emittedSig === "string" && emittedSig.length > 2; // > "0x"
           await supabase.from("attestations").upsert(
             {
               evidence_id: decoded.evidence_id,
               binding_id:  bid.id,
               topic_id:    bid.topic_id,
               peer_addr:   decoded.peer_addr,
+              peer_handle: handle,
               phase,
               verdict,
               tx_hash:     log.transactionHash,
+              ...(hasSig
+                ? { eip712_sig: emittedSig, proof_type: "eip712" }
+                : { proof_type: "tx" }),
               created_at:  occurred,
             },
             { onConflict: "binding_id,peer_addr,phase", ignoreDuplicates: true },

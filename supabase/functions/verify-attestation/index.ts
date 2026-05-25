@@ -36,8 +36,11 @@ function buildDomain(): Record<string, unknown> {
   return d;
 }
 
-// A vote attests to a specific (evidence × topic) binding, so topicId is part
-// of the signed message. Must match src/lib/wallet-constants.js exactly.
+// A taxonomy endorsement attests to a specific (evidence × topic) binding, so
+// topicId is part of the signed message. Must match src/lib/wallet-constants.js
+// exactly.  This Attestation type is STILL used by the taxonomy governance
+// actions (endorse_node / reject_node) — those are off-chain-only endorsements,
+// not the on-chain by-sig votes.
 const TYPES = {
   Attestation: [
     { name: "evidenceId", type: "string"  },
@@ -48,6 +51,31 @@ const TYPES = {
     { name: "note",       type: "string"  },
   ],
 };
+
+// The on-chain vote authorization.  Review / challenge votes are now authorised
+// by an EIP-712 `Vote` signature that the EvidenceConsensus contract itself
+// recovers, so the edge function MUST verify the SAME typed data byte-for-byte:
+//   keccak256("Vote(bytes32 bindingId,uint8 phase,bool support,uint32 round,bytes32 noteHash)")
+// phase: 0 = review, 1 = challenge.
+const VOTE_TYPES = {
+  Vote: [
+    { name: "bindingId", type: "bytes32" },
+    { name: "phase",     type: "uint8"   },
+    { name: "support",   type: "bool"    },
+    { name: "round",     type: "uint32"  },
+    { name: "noteHash",  type: "bytes32" },
+  ],
+};
+
+const ZERO_BYTES32 = "0x" + "0".repeat(64);
+
+// Mirrors EvidenceConsensus.bindingId(id, topicId) = keccak256(abi.encode(...)).
+// id = the evidence UUID packed into bytes32; topicId = keccak256(topic slug).
+// Used only as a FALLBACK when the frontend doesn't send `binding_hash`.
+const _abiCoder = ethers.AbiCoder.defaultAbiCoder();
+function computeBindingId(uuid: string, topicOnchain: string): string {
+  return ethers.keccak256(_abiCoder.encode(["bytes32", "bytes32"], [uuidToBytes32(uuid), topicOnchain]));
+}
 
 // ── Contract ABI + Interface ──────────────────────────────────────────────────
 //
@@ -325,12 +353,15 @@ Deno.serve(async (req: Request) => {
   const {
     evidence_id,
     binding_id       = null,
+    binding_hash     = null,
     topic_id         = null,
     peer_addr,
     peer_handle      = null,
     phase            = null,
     verdict          = null,
     note             = null,
+    note_hash        = null,
+    round            = null,
     eip712_sig       = null,
     tx_hash          = null,
     action           = null,
@@ -340,12 +371,15 @@ Deno.serve(async (req: Request) => {
   } = body as {
     evidence_id:       string;
     binding_id?:       string | null;
+    binding_hash?:     string | null;
     topic_id?:         string | null;
     peer_addr:         string;
     peer_handle?:      string | null;
     phase?:            string | null;
     verdict?:          string | null;
     note?:             string | null;
+    note_hash?:        string | null;
+    round?:            number | null;
     eip712_sig?:       string | null;
     tx_hash?:          string | null;
     action?:           string | null;
@@ -420,52 +454,150 @@ Deno.serve(async (req: Request) => {
   if (!isPeer) return json({ error: "peer_addr is not an active peer" }, 403, origin);
 
   // ── Signature verification ─────────────────────────────────────────────────
+  // VOTE actions (review_vote / open_challenge / challenge_vote) are authorised
+  // by the on-chain `Vote` EIP-712 typed data — the SAME message the contract
+  // recovers — so the off-chain row can never carry a signature the chain would
+  // reject.  Taxonomy actions (endorse_node / reject_node) are off-chain-only
+  // governance endorsements and keep the legacy `Attestation` typed data.
+  const isVoteAction = action === "review_vote" || action === "open_challenge" || action === "challenge_vote";
+
+  // The binding hash the Vote signature is bound to.  Prefer the value supplied
+  // by the frontend; fall back to looking it up from the bindings table by
+  // binding_id, then to recomputing it from (evidence id, topic on-chain hash).
+  let voteBindingHash: string | null = (binding_hash as string | null);
+
   if (!isFinalizeAction && !isRegisterAction) {
     if (!eip712_sig) return json({ error: "Missing required field: eip712_sig" }, 400, origin);
-    const message = {
-      evidenceId: evidence_id,
-      topicId:    (topic_id as string) ?? "",
-      peerAddr:   peerNorm,
-      phase,
-      verdict,
-      note: (note as string) ?? "",
-    };
 
-    // EOA path first — cheap and accounts for ~all peers today.
-    let eoaOk = false;
-    try {
-      const recovered = ethers.verifyTypedData(buildDomain(), TYPES, message, eip712_sig as string);
-      eoaOk = recovered.toLowerCase() === peerNorm;
-    } catch { eoaOk = false; }
+    if (isVoteAction) {
+      // ── Vote typed-data verification ─────────────────────────────────────
+      if (round === null || round === undefined) {
+        return json({ error: "Missing required field: round" }, 400, origin);
+      }
+      if (!note_hash) {
+        return json({ error: "Missing required field: note_hash" }, 400, origin);
+      }
+      // Bind the stored note to the signed digest: the note can never be swapped
+      // after signing because the signature commits to keccak256(utf8(note)).
+      // The contract treats "no note" as the all-zero bytes32, so an empty note
+      // may carry EITHER keccak256(utf8("")) or 0x000…0 — both are accepted only
+      // when the stored note is empty; a non-empty note MUST hash to note_hash.
+      const noteStr      = (note as string) ?? "";
+      const wantNoteHash = ethers.keccak256(ethers.toUtf8Bytes(noteStr)).toLowerCase();
+      const gotNoteHash  = (note_hash as string).toLowerCase();
+      const emptyNoteOk  = noteStr.length === 0 && gotNoteHash === ZERO_BYTES32;
+      if (gotNoteHash !== wantNoteHash && !emptyNoteOk) {
+        return json({ error: "note_hash does not match keccak256(note)" }, 401, origin);
+      }
 
-    if (!eoaOk) {
-      // EIP-1271 fallback — for smart-contract wallets (Safe, Argent, etc.)
-      // the on-chain contract at `peerNorm` decides whether the signature
-      // is valid. We hash the typed data exactly the way EOA recovery
-      // would, then ask the wallet contract: `isValidSignature(hash, sig)`.
-      // If it returns the EIP-1271 magic 0x1626ba7e, we treat the sig as
-      // authentic. RPC failures fall through to a 401 — never accept a
-      // sig we couldn't validate.
-      let smartOk = false;
+      // Resolve the bindingId if the frontend didn't send it.
+      if (!voteBindingHash && binding_id) {
+        const { data: bh } = await supabase
+          .from("bindings").select("binding_hash").eq("id", binding_id).maybeSingle();
+        voteBindingHash = (bh as { binding_hash?: string } | null)?.binding_hash ?? null;
+      }
+      if (!voteBindingHash && topicOnchain) {
+        // Last resort: recompute keccak256(abi.encode(idBytes32, topicIdBytes32)).
+        voteBindingHash = computeBindingId(evidence_id, topicOnchain);
+      }
+      if (!voteBindingHash) {
+        return json({ error: "Cannot resolve binding_hash (send binding_hash, or a resolvable binding_id / topic_id)" }, 400, origin);
+      }
+
+      // phase: review_vote → 0, open_challenge / challenge_vote → 1.
+      // support: review approve→true / reject→false; challenge 'challenge'→true /
+      // 'defend'→false; open_challenge→true.
+      const votePhase   = action === "review_vote" ? 0 : 1;
+      const voteSupport = action === "open_challenge"
+        ? true
+        : action === "review_vote"
+          ? verdict === "approve"
+          : verdict === "challenge";
+
+      const message = {
+        bindingId: voteBindingHash,
+        phase:     votePhase,
+        support:   voteSupport,
+        round:     Number(round),
+        noteHash:  note_hash,
+      };
+
+      // EOA path first — cheap and accounts for ~all peers today.
+      let eoaOk = false;
       try {
-        const digest = ethers.TypedDataEncoder.hash(buildDomain(), TYPES, message);
-        const provider = getProvider();
-        // First check whether peerNorm has contract code; an EOA returns "0x".
-        const code = await provider.getCode(peerNorm);
-        if (code && code !== "0x") {
-          const data = EIP1271_IFACE.encodeFunctionData(
-            "isValidSignature",
-            [digest, eip712_sig as string],
-          );
-          const ret = await provider.call({ to: peerNorm, data });
-          if (typeof ret === "string" && ret.startsWith(EIP1271_MAGIC)) {
-            smartOk = true;
-          }
-        }
-      } catch { smartOk = false; }
+        const recovered = ethers.verifyTypedData(buildDomain(), VOTE_TYPES, message, eip712_sig as string);
+        eoaOk = recovered.toLowerCase() === peerNorm;
+      } catch { eoaOk = false; }
 
-      if (!smartOk) {
-        return json({ error: "Signature signer does not match peer_addr" }, 401, origin);
+      if (!eoaOk) {
+        // EIP-1271 fallback — smart-contract wallets (Safe, Argent, etc.). Hash
+        // the Vote typed data exactly the way EOA recovery would, then ask the
+        // wallet contract isValidSignature(hash, sig); the magic 0x1626ba7e
+        // means valid.  RPC failure falls through to 401 — never accept a sig we
+        // couldn't validate.
+        let smartOk = false;
+        try {
+          const digest = ethers.TypedDataEncoder.hash(buildDomain(), VOTE_TYPES, message);
+          const provider = getProvider();
+          const code = await provider.getCode(peerNorm);
+          if (code && code !== "0x") {
+            const data = EIP1271_IFACE.encodeFunctionData("isValidSignature", [digest, eip712_sig as string]);
+            const ret = await provider.call({ to: peerNorm, data });
+            if (typeof ret === "string" && ret.startsWith(EIP1271_MAGIC)) smartOk = true;
+          }
+        } catch { smartOk = false; }
+
+        if (!smartOk) {
+          return json({ error: "Signature signer does not match peer_addr" }, 401, origin);
+        }
+      }
+    } else {
+      // ── Taxonomy Attestation verification (endorse_node / reject_node) ────
+      const message = {
+        evidenceId: evidence_id,
+        topicId:    (topic_id as string) ?? "",
+        peerAddr:   peerNorm,
+        phase,
+        verdict,
+        note: (note as string) ?? "",
+      };
+
+      // EOA path first — cheap and accounts for ~all peers today.
+      let eoaOk = false;
+      try {
+        const recovered = ethers.verifyTypedData(buildDomain(), TYPES, message, eip712_sig as string);
+        eoaOk = recovered.toLowerCase() === peerNorm;
+      } catch { eoaOk = false; }
+
+      if (!eoaOk) {
+        // EIP-1271 fallback — for smart-contract wallets (Safe, Argent, etc.)
+        // the on-chain contract at `peerNorm` decides whether the signature
+        // is valid. We hash the typed data exactly the way EOA recovery
+        // would, then ask the wallet contract: `isValidSignature(hash, sig)`.
+        // If it returns the EIP-1271 magic 0x1626ba7e, we treat the sig as
+        // authentic. RPC failures fall through to a 401 — never accept a
+        // sig we couldn't validate.
+        let smartOk = false;
+        try {
+          const digest = ethers.TypedDataEncoder.hash(buildDomain(), TYPES, message);
+          const provider = getProvider();
+          // First check whether peerNorm has contract code; an EOA returns "0x".
+          const code = await provider.getCode(peerNorm);
+          if (code && code !== "0x") {
+            const data = EIP1271_IFACE.encodeFunctionData(
+              "isValidSignature",
+              [digest, eip712_sig as string],
+            );
+            const ret = await provider.call({ to: peerNorm, data });
+            if (typeof ret === "string" && ret.startsWith(EIP1271_MAGIC)) {
+              smartOk = true;
+            }
+          }
+        } catch { smartOk = false; }
+
+        if (!smartOk) {
+          return json({ error: "Signature signer does not match peer_addr" }, 401, origin);
+        }
       }
     }
   }
@@ -613,6 +745,15 @@ Deno.serve(async (req: Request) => {
         note:        note ?? null,
         eip712_sig:  eip712_sig ?? null,
         tx_hash:     tx_hash ?? null,
+        // Vote-reconstruction surface (review/challenge): lets the public proof
+        // modal recompute the Vote digest and recover the signer client-side.
+        round:       round ?? null,
+        note_hash:   note_hash ?? null,
+        // Reaching here means the signature was verified above (the !eip712_sig
+        // guard 400s first), so this row is provably signed by the peer. The
+        // overwriting upsert also UPGRADES any earlier indexer 'tx' gap-row in
+        // place — attaching the signature and flipping proof_type to 'eip712'.
+        proof_type:  "eip712",
       },
       { onConflict: "binding_id,peer_addr,phase" },
     );

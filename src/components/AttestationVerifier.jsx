@@ -1,15 +1,48 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ATTESTATION_DOMAIN, ATTESTATION_TYPES, CONSENSUS_CHAIN_ID } from '../lib/wallet-constants';
-import { recoverAttestationSigner } from '../lib/wallet';
+import { verifyTypedData } from 'ethers';
+import { ATTESTATION_DOMAIN, ATTESTATION_TYPES, VOTE_TYPES, CONSENSUS_CHAIN_ID } from '../lib/wallet-constants';
+import { recoverAttestationSigner, computeContentHash } from '../lib/wallet';
 
 const explorerBase = CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com';
 const SHORT = (a) => (a ? `${a.slice(0, 10)}…${a.slice(-8)}` : '');
 
-// Reconstruct the exact EIP-712 message that was signed. Field order/values must
-// match signAttestation() in wallet-constants.js — `note` is the empty string
-// (not null) when no note was attached, and the address type is case-insensitive
-// so the stored lowercased peer_addr recovers identically.
+// Review / challenge votes are now authorised by an EIP-712 *Vote* recovered
+// on-chain; taxonomy endorse/reject still use the off-chain *Attestation* type.
+// So the proof modal recovers a Vote for review/challenge rows and an
+// Attestation for taxonomy rows.
+const isVotePhase = (a) => a?.phase === 'review' || a?.phase === 'challenge';
+
+// A Vote signature can only be re-derived in-browser when the row carries every
+// field the contract bound it to: the on-chain bindingId hash, the round, and
+// the note hash. The attestation_log_view does not expose these today, so vote
+// rows fall back to the tx-proven display — but the moment the view surfaces
+// them, recovery turns on automatically.
+function voteMessage(a) {
+  const bindingId = a.binding_hash ?? a.bindingHash ?? null;
+  const round     = a.round ?? null;
+  const noteHash  = a.note_hash ?? a.noteHash ?? null;
+  if (!bindingId || round == null || !noteHash) return null;
+  // verdict → support: approve/challenge = true, reject/defend = false.
+  const support = a.verdict === 'approve' || a.verdict === 'challenge';
+  const phase   = a.phase === 'challenge' ? 1 : 0;
+  return { bindingId, phase, support, round: Number(round), noteHash };
+}
+
+// Whether this row's signature can be recovered client-side: a taxonomy row
+// needs only the Attestation signature; a vote row also needs the Vote-digest
+// fields (bindingId/round/noteHash). When neither holds we show the chain-only
+// proof (tx) instead of a recovery that can't succeed.
+function canRecoverRow(a) {
+  if (!a?.eip712_sig) return false;
+  return isVotePhase(a) ? !!voteMessage(a) : true;
+}
+
+// Reconstruct the exact EIP-712 Attestation message that was signed (taxonomy
+// phase). Field order/values must match signAttestation() in
+// wallet-constants.js — `note` is the empty string (not null) when no note was
+// attached, and the address type is case-insensitive so the stored lowercased
+// peer_addr recovers identically.
 function buildMessage(a) {
   return {
     evidenceId: String(a.evidence_id ?? ''),
@@ -46,6 +79,102 @@ function CopyButton({ text, label = 'Copy payload' }) {
   );
 }
 
+// Content-integrity proof for the evidence the vote was cast on. The attestation
+// signature covers the evidence id; the evidence's `content_hash` (committed
+// on-chain at submission) binds the actual content — title, source, year,
+// excerpt, SOURCE LINK and tier. Recomputing that hash here from the displayed
+// fields and matching it to the stored hash proves the source link shown is the
+// exact one bound to this evidence on-chain, not a value the page could swap.
+function ContentProof({ a }) {
+  const [status, setStatus] = useState('idle'); // idle → loading → ok | bad | error
+  const [computed, setComputed] = useState('');
+  const [error, setError] = useState('');
+
+  const onchainHash = a.content_hash || '';
+  const content = {
+    title:   a.evidence_title,
+    source:  a.evidence_source,
+    year:    a.evidence_year,
+    excerpt: a.evidence_excerpt,
+    link:    a.evidence_link,
+    tier:    a.evidence_tier,
+  };
+
+  const verify = async () => {
+    setStatus('loading');
+    setError('');
+    try {
+      const h = await computeContentHash(content);
+      setComputed(h);
+      setStatus(h.toLowerCase() === onchainHash.toLowerCase() ? 'ok' : 'bad');
+    } catch (e) {
+      setError(e?.message || 'Hash computation failed');
+      setStatus('error');
+    }
+  };
+
+  return (
+    <div className="av-content">
+      <div className="av-payload-head">
+        <span className="av-label">Evidence source · content integrity</span>
+      </div>
+      <div className={`av-result ${status === 'ok' ? 'is-ok' : status === 'bad' ? 'is-bad' : ''}`}>
+        <div className="av-row"><span className="k">Evidence</span><span className="v">{a.evidence_title || '—'}</span></div>
+        {(a.evidence_source || a.evidence_year) && (
+          <div className="av-row"><span className="k">Source</span><span className="v">{[a.evidence_source, a.evidence_year].filter(Boolean).join(' · ')}</span></div>
+        )}
+        <div className="av-row">
+          <span className="k">Source link</span>
+          <span className="v">
+            {a.evidence_link
+              ? <a className="av-srclink" href={a.evidence_link} target="_blank" rel="noopener noreferrer">{a.evidence_link} <span aria-hidden="true">↗</span></a>
+              : <em>No source link on this evidence</em>}
+          </span>
+        </div>
+
+        {onchainHash ? (
+          <>
+            <div className="av-row"><span className="k">Content hash</span><span className="v mono">{onchainHash}</span></div>
+            {(status === 'ok' || status === 'bad') && (
+              <div className="av-row"><span className="k">Recomputed</span><span className="v mono">{computed}</span></div>
+            )}
+            <p className="av-verdict">
+              {status === 'ok'
+                ? 'The source link and content above hash to the commitment registered on-chain. The link is provably bound to this evidence — change it and this hash would differ.'
+                : status === 'bad'
+                ? 'The recomputed hash does NOT match the on-chain content commitment. The displayed source/content may have been altered — do not trust it.'
+                : 'Recompute the keccak256 content hash in your browser and confirm it equals the on-chain commitment, proving the source link shown is the one bound to this evidence.'}
+            </p>
+            <div className="av-verify">
+              <button
+                type="button"
+                className={`av-btn ${status === 'ok' ? 'is-ok' : status === 'bad' || status === 'error' ? 'is-bad' : ''}`}
+                onClick={verify}
+                disabled={status === 'loading'}
+              >
+                {status === 'loading' ? 'Hashing…'
+                  : status === 'ok' ? 'Content hash matches ✓'
+                  : status === 'bad' ? 'Hash mismatch ✗'
+                  : status === 'error' ? 'Computation failed'
+                  : 'Verify content hash in your browser'}
+              </button>
+              {status === 'error' && <p className="av-err">{error}</p>}
+            </div>
+          </>
+        ) : (
+          <p className="av-verdict">No on-chain content hash is recorded for this evidence yet, so the source link is shown but not yet cryptographically bound.</p>
+        )}
+      </div>
+
+      {a.submission_tx_hash && (
+        <a className="av-tx" href={`${explorerBase}/tx/${a.submission_tx_hash}`} target="_blank" rel="noopener noreferrer">
+          View the evidence submission transaction <span className="mono">{SHORT(a.submission_tx_hash)}</span> <span aria-hidden="true">↗</span>
+        </a>
+      )}
+    </div>
+  );
+}
+
 function VerifierModal({ a, onClose, handle }) {
   // status: idle → loading → ok | bad | error
   const [status, setStatus] = useState('idle');
@@ -58,18 +187,38 @@ function VerifierModal({ a, onClose, handle }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const sig = a.eip712_sig || '';
-  const message = buildMessage(a);
-  const payloadJson = JSON.stringify(
-    { domain: ATTESTATION_DOMAIN, types: ATTESTATION_TYPES, primaryType: 'Attestation', message, signature: sig },
-    null, 2,
-  );
+  const rawSig = a.eip712_sig || '';
+  // A vote row (review/challenge) recovers a *Vote*; a taxonomy row recovers an
+  // *Attestation*. A vote row can only be recovered in-browser when the row also
+  // carries the bindingId/round/noteHash the Vote digest needs; if not, treat it
+  // like a chain-only row (tx is the proof) rather than offering a recovery that
+  // can't succeed.
+  const vote = isVotePhase(a) ? voteMessage(a) : null;
+  const canRecoverVote = isVotePhase(a) && !!vote;
+  const canRecover = canRecoverRow(a);
+  const sig = canRecover ? rawSig : '';
+
+  const message = canRecoverVote
+    ? vote
+    : buildMessage(a);
+  const payloadJson = sig
+    ? JSON.stringify(
+        canRecoverVote
+          ? { domain: ATTESTATION_DOMAIN, types: VOTE_TYPES, primaryType: 'Vote', message, signature: sig }
+          : { domain: ATTESTATION_DOMAIN, types: ATTESTATION_TYPES, primaryType: 'Attestation', message, signature: sig },
+        null, 2,
+      )
+    : '';
 
   const verify = async () => {
     setStatus('loading');
     setError('');
     try {
-      const addr = await recoverAttestationSigner({ message, signature: sig });
+      // Vote rows recover with VOTE_TYPES over the same domain (client-side,
+      // no server); taxonomy rows recover the Attestation as before.
+      const addr = canRecoverVote
+        ? verifyTypedData(ATTESTATION_DOMAIN, VOTE_TYPES, message, sig)
+        : await recoverAttestationSigner({ message, signature: sig });
       setRecovered(addr);
       setStatus(addr.toLowerCase() === String(a.peer_addr).toLowerCase() ? 'ok' : 'bad');
     } catch (e) {
@@ -113,10 +262,10 @@ function VerifierModal({ a, onClose, handle }) {
                   <div className="av-row"><span className="k">Claimed peer</span><span className="v mono">{a.peer_addr}{(handle || a.peer_handle) ? ` · ${handle || a.peer_handle}` : ''}</span></div>
                   {status === 'ok' && (
                     <>
-                      <div className="av-row"><span className="k">Signed verdict</span><span className="v mono">{message.verdict || '—'}</span></div>
+                      <div className="av-row"><span className="k">Signed verdict</span><span className="v mono">{a.verdict || '—'}</span></div>
                       <div className="av-row">
                         <span className="k">Signed note</span>
-                        <span className="v av-note-val">{message.note ? message.note : <em>No note attached</em>}</span>
+                        <span className="v av-note-val">{a.note ? a.note : <em>No note attached</em>}</span>
                       </div>
                     </>
                   )}
@@ -162,6 +311,8 @@ function VerifierModal({ a, onClose, handle }) {
             View the on-chain transaction <span className="mono">{SHORT(a.tx_hash)}</span> <span aria-hidden="true">↗</span>
           </a>
         )}
+
+        <ContentProof a={a} />
       </div>
     </div>,
     document.body,
@@ -176,7 +327,10 @@ function VerifierModal({ a, onClose, handle }) {
 // instead so it never claims a signature that isn't archived.
 export default function AttestationVerifier({ a, handle }) {
   const [open, setOpen] = useState(false);
-  const hasSig = !!a.eip712_sig;
+  // "EIP-712 ✓" only when the row is actually recoverable in-browser. A vote row
+  // whose Vote-digest fields aren't surfaced (or any sig-less gap row) reads
+  // "On-chain ✓" and links to the tx, never claiming a signature it can't replay.
+  const hasSig = canRecoverRow(a);
   return (
     <>
       <button

@@ -1006,6 +1006,10 @@ p { margin: 0 0 1em; }
 .av-result.is-bad .av-verdict { color: var(--danger); }
 .av-err { color: var(--danger); font-size: 13px; line-height: 1.5; margin: 4px 0 0; }
 
+.av-content { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line-soft); }
+.av-content .av-result { gap: 10px; }
+.av-srclink { color: var(--accent); text-decoration: none; word-break: break-all; }
+.av-srclink:hover { opacity: 0.8; }
 .av-payload { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line-soft); }
 .av-payload-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .av-label { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint); }

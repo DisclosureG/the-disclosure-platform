@@ -11,16 +11,18 @@
  */
 import {
   CONSENSUS_ADDR, CONSENSUS_CHAIN_ID, CONSENSUS_ABI,
+  CONSENSUS_GOVERNANCE_ADDR,
   MULTICALL3_ADDR,
-  ATTESTATION_DOMAIN, ATTESTATION_TYPES, buildEIP712DomainType,
+  ATTESTATION_DOMAIN, ATTESTATION_TYPES, VOTE_TYPES, buildEIP712DomainType,
   signAttestation,
 } from './wallet-constants';
 
 // Re-export the ethers-free surface verbatim.
 export {
   CONSENSUS_ADDR, CONSENSUS_CHAIN_ID, CONSENSUS_ABI,
+  CONSENSUS_GOVERNANCE_ADDR,
   MULTICALL3_ADDR,
-  ATTESTATION_DOMAIN, ATTESTATION_TYPES, buildEIP712DomainType,
+  ATTESTATION_DOMAIN, ATTESTATION_TYPES, VOTE_TYPES, buildEIP712DomainType,
   signAttestation,
 };
 
@@ -65,12 +67,14 @@ export const getNomineeEndorsements         = (...a) => impl().then(m => m.getNo
 export const hasEndorsedNominee             = (...a) => impl().then(m => m.hasEndorsedNominee(...a));
 export const getNomineeHandle               = (...a) => impl().then(m => m.getNomineeHandle(...a));
 export const isRevocationActive             = (...a) => impl().then(m => m.isRevocationActive(...a));
+export const getRevokeRound                 = (...a) => impl().then(m => m.getRevokeRound(...a));
 export const getRevokeVoteCount             = (...a) => impl().then(m => m.getRevokeVoteCount(...a));
 export const hasVotedForRevoke              = (...a) => impl().then(m => m.hasVotedForRevoke(...a));
 export const getChallengeCooldownRemaining  = (...a) => impl().then(m => m.getChallengeCooldownRemaining(...a));
 export const getBoostCooldownRemaining       = (...a) => impl().then(m => m.getBoostCooldownRemaining(...a));
 export const isNominationsOpen              = (...a) => impl().then(m => m.isNominationsOpen(...a));
 export const getSeedPhaseK                  = (...a) => impl().then(m => m.getSeedPhaseK(...a));
+export const getOwner                       = (...a) => impl().then(m => m.getOwner(...a));
 
 export const getTaxonomyThreshold           = (...a) => impl().then(m => m.getTaxonomyThreshold(...a));
 export const getRetireThreshold             = (...a) => impl().then(m => m.getRetireThreshold(...a));
@@ -100,10 +104,12 @@ export const getPeerList                    = (...a) => impl().then(m => m.getPe
 export const getNomineeList                 = (...a) => impl().then(m => m.getNomineeList(...a));
 
 export const nominatePeer                   = (...a) => impl().then(m => m.nominatePeer(...a));
+export const addPeer                         = (...a) => impl().then(m => m.addPeer(...a));
 export const endorseNominee                 = (...a) => impl().then(m => m.endorseNominee(...a));
 export const lapseNominee                    = (...a) => impl().then(m => m.lapseNominee(...a));
 export const motionRevoke                   = (...a) => impl().then(m => m.motionRevoke(...a));
 export const voteRevoke                     = (...a) => impl().then(m => m.voteRevoke(...a));
+export const cancelStaleRevocation          = (...a) => impl().then(m => m.cancelStaleRevocation(...a));
 export const heartbeatOnChain               = (...a) => impl().then(m => m.heartbeatOnChain(...a));
 export const pruneInactivePeerOnChain       = (...a) => impl().then(m => m.pruneInactivePeerOnChain(...a));
 export const motionForceRenounce            = (...a) => impl().then(m => m.motionForceRenounce(...a));
@@ -114,6 +120,7 @@ export const castReviewVoteOnChain          = (...a) => impl().then(m => m.castR
 export const castReviewVoteBatchOnChain     = (...a) => impl().then(m => m.castReviewVoteBatchOnChain(...a));
 export const openChallengeOnChain           = (...a) => impl().then(m => m.openChallengeOnChain(...a));
 export const castChallengeVoteOnChain       = (...a) => impl().then(m => m.castChallengeVoteOnChain(...a));
+export const signVoteOnly                   = (...a) => impl().then(m => m.signVoteOnly(...a));
 export const finalizeChallengeOnChain       = (...a) => impl().then(m => m.finalizeChallengeOnChain(...a));
 export const markLapsedOnChain              = (...a) => impl().then(m => m.markLapsedOnChain(...a));
 export const boostQueuedOnChain             = (...a) => impl().then(m => m.boostQueuedOnChain(...a));

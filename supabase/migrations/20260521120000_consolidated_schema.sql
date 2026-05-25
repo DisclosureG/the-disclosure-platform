@@ -227,13 +227,52 @@ create table public.attestations (
   note        text,
   eip712_sig  text,
   tx_hash     text,
+  -- Vote-signature reconstruction surface: review/challenge eip712_sig rows are
+  -- the on-chain `Vote(bindingId,phase,support,round,noteHash)` signature, so the
+  -- public proof modal needs `round` + `note_hash` (plus the binding's on-chain
+  -- binding_hash, joined in the view) to recompute the digest and recover the
+  -- signer client-side. Null for taxonomy (Attestation-typed) and tx-proof rows.
+  round       integer,
+  note_hash   text,
+  -- Every vote must carry a verifiable proof of its peer. 'eip712' rows are
+  -- signed in the voter's browser (verify-attestation recovers the signer);
+  -- 'tx' rows are indexer gap-fills proven by the on-chain tx sender. The
+  -- CHECK below makes a proof-less row impossible, so vote history can never
+  -- show a peer that isn't cryptographically attributable.
+  proof_type  text not null default 'eip712' check (proof_type in ('eip712','tx')),
   created_at  timestamptz not null default now(),
-  unique (binding_id, peer_addr, phase)         -- upsert conflict target
+  unique (binding_id, peer_addr, phase),        -- upsert conflict target
+  constraint attestations_proof_present check (
+    (proof_type = 'eip712' and eip712_sig is not null)
+    or (proof_type = 'tx' and tx_hash is not null)
+  )
 );
 
 create index attestations_evidence_idx on public.attestations (evidence_id);
 create index attestations_binding_idx  on public.attestations (binding_id);
 create index attestations_count_idx    on public.attestations (binding_id, phase, verdict);
+
+-- Peer-revocation positions. The contract only tracks DISCARD votes (voteRevoke,
+-- ceil(n/2) to remove) — there is no on-chain "keep". A keep is therefore an
+-- off-chain EIP-712-signed dissent (mirrors the taxonomy reject): public,
+-- attributable, and used by the peer-review batch gate so the network has to
+-- take a position (keep or discard) on every open revocation and move on.
+-- `subject_addr` is the peer under revocation; `voter_addr` the signing peer;
+-- `round` is the on-chain revokeRound at write time, so a re-motion resets
+-- positions exactly like the contract's per-round revoke votes.
+create table public.revocation_votes (
+  id           uuid primary key default gen_random_uuid(),
+  subject_addr text not null,
+  voter_addr   text not null,
+  round        integer not null,
+  verdict      text not null check (verdict in ('keep','discard')),
+  note         text,
+  eip712_sig   text not null,
+  created_at   timestamptz not null default now(),
+  unique (subject_addr, voter_addr, round)
+);
+create index revocation_votes_subject_idx on public.revocation_votes (subject_addr, round);
+create index revocation_votes_voter_idx   on public.revocation_votes (voter_addr);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- CHAIN MIRROR + OPS TABLES
@@ -310,6 +349,7 @@ create table public.edge_function_heartbeat (
 alter table public.evidence                enable row level security;
 alter table public.bindings                enable row level security;
 alter table public.attestations            enable row level security;
+alter table public.revocation_votes        enable row level security;
 alter table public.pillars                 enable row level security;
 alter table public.topics                  enable row level security;
 alter table public.chain_events            enable row level security;
@@ -322,6 +362,7 @@ alter table public.edge_function_heartbeat enable row level security;
 create policy evidence_read          on public.evidence                for select using (true);
 create policy bindings_read          on public.bindings                for select using (true);
 create policy attestations_read      on public.attestations            for select using (true);
+create policy revocation_votes_read  on public.revocation_votes        for select using (true);
 create policy pillars_read           on public.pillars                 for select using (true);
 create policy topics_read            on public.topics                  for select using (true);
 create policy chain_events_read      on public.chain_events            for select using (true);
@@ -543,7 +584,19 @@ create view public.attestation_log_view with (security_invoker = true) as
          a.created_at, a.eip712_sig, a.tx_hash,
          e.title as evidence_title, e.search_text as evidence_search_text,
          a.evidence_id::text as evidence_id_text,
-         b.pillar_id, b.topic_id, t.title as topic_title
+         b.pillar_id, b.topic_id, t.title as topic_title,
+         -- Evidence content surface: lets the proof modal recompute
+         -- content_hash = keccak256({title,source,year,excerpt,link,tier})
+         -- client-side and prove the displayed source link is the one bound to
+         -- this evidence's on-chain commitment. submission_tx_hash is where that
+         -- commitment was registered.
+         e.source as evidence_source, e.year as evidence_year,
+         e.excerpt as evidence_excerpt, e.link as evidence_link,
+         e.tier as evidence_tier, e.content_hash, e.submission_tx_hash,
+         -- proof_type + the Vote-reconstruction surface appended last so the live
+         -- DB's `create or replace view` (append-only) matches byte-for-byte.
+         -- binding_hash is the on-chain bindingId the Vote signature commits to.
+         a.proof_type, b.binding_hash, a.round, a.note_hash
     from public.attestations a
     join public.evidence e on e.id = a.evidence_id
     left join public.bindings b on b.id = a.binding_id

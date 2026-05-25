@@ -8,17 +8,19 @@
  * Keep this module ethers-only — no React, no Supabase.  Public API mirrors
  * the names re-exported by wallet.js.
  */
-import { AbiCoder, BrowserProvider, Contract, Interface, JsonRpcProvider, keccak256, toUtf8Bytes, verifyTypedData } from 'ethers';
+import { AbiCoder, BrowserProvider, Contract, Interface, JsonRpcProvider, keccak256, toUtf8Bytes, verifyTypedData, ZeroHash } from 'ethers';
 import {
   CONSENSUS_ADDR, CONSENSUS_ABI, CONSENSUS_CHAIN_ID,
   CONSENSUS_LENS_ADDR, CONSENSUS_LENS_ABI,
+  CONSENSUS_GOVERNANCE_ADDR, GOVERNANCE_ABI,
   MULTICALL3_ADDR, MULTICALL3_ABI,
-  ATTESTATION_DOMAIN, ATTESTATION_TYPES,
+  ATTESTATION_DOMAIN, ATTESTATION_TYPES, VOTE_TYPES,
 } from './wallet-constants';
 
 const TARGET_CHAIN_ID_HEX = '0x' + CONSENSUS_CHAIN_ID.toString(16);
 
 export const IFACE             = new Interface(CONSENSUS_ABI);
+const GOVERNANCE_IFACE         = new Interface(GOVERNANCE_ABI);
 const MULTICALL3_IFACE         = new Interface(MULTICALL3_ABI);
 const MULTICALL3_CHUNK         = 200;
 
@@ -65,6 +67,18 @@ async function writeContract() {
   if (!CONSENSUS_ADDR) throw new Error('VITE_CONSENSUS_ADDR not set');
   const signer = await getBrowserProvider().getSigner();
   return new Contract(CONSENSUS_ADDR, CONSENSUS_ABI, signer);
+}
+
+// PeerGovernance sidecar — the nominee + revocation flows (and their views)
+// moved off the core for EIP-170 headroom.
+function govContract() {
+  if (!CONSENSUS_GOVERNANCE_ADDR) throw new Error('VITE_CONSENSUS_GOVERNANCE_ADDR not set');
+  return new Contract(CONSENSUS_GOVERNANCE_ADDR, GOVERNANCE_ABI, getReadProvider());
+}
+async function govWriteContract() {
+  if (!CONSENSUS_GOVERNANCE_ADDR) throw new Error('VITE_CONSENSUS_GOVERNANCE_ADDR not set');
+  const signer = await getBrowserProvider().getSigner();
+  return new Contract(CONSENSUS_GOVERNANCE_ADDR, GOVERNANCE_ABI, signer);
 }
 
 // ── UUID ↔ bytes32 ──────────────────────────────────────────────────────────
@@ -196,19 +210,21 @@ export const getLastActive            = safe(async (addr)       => Number(await 
 export const getReviewCapacity        = safe(async ()           => Number(await readContract().reviewCapacity()), 0);
 export const getActiveReviewCount     = safe(async ()           => Number(await readContract().activeReviewCount()), 0);
 export const getPeerHandle            = safe(async (addr)       => await readContract().peerHandle(addr), '');
-export const getNomineeThreshold      = safe(async ()           => Number(await readContract().nomineeThreshold()), 1);
-export const getRevokeThreshold       = safe(async ()           => Number(await readContract().revokeThreshold()), 1);
-export const isNomineeAddress         = safe(async (addr)       => await readContract().isNominated(addr), false);
-export const getNomineeEndorsements   = safe(async (addr)       => Number(await readContract().nomineeEndorsements(addr)), 0);
-export const hasEndorsedNominee       = safe(async (nom, from)  => await readContract().hasEndorsed(nom, from), false);
-export const getNomineeHandle         = safe(async (addr)       => await readContract().nomineeHandle(addr), '');
-export const isRevocationActive       = safe(async (addr)       => await readContract().revocationActive(addr), false);
-export const getRevokeVoteCount       = safe(async (addr)       => Number(await readContract().revokeVoteCount(addr)), 0);
-export const hasVotedForRevoke        = safe(async (t, v)       => await readContract().hasVotedRevoke(t, v), false);
+export const getNomineeThreshold      = safe(async ()           => Number(await govContract().nomineeThreshold()), 1);
+export const getRevokeThreshold       = safe(async ()           => Number(await govContract().revokeThreshold()), 1);
+export const isNomineeAddress         = safe(async (addr)       => await govContract().isNominated(addr), false);
+export const getNomineeEndorsements   = safe(async (addr)       => Number(await govContract().nomineeEndorsements(addr)), 0);
+export const hasEndorsedNominee       = safe(async (nom, from)  => await govContract().hasEndorsed(nom, from), false);
+export const getNomineeHandle         = safe(async (addr)       => await govContract().nomineeHandle(addr), '');
+export const isRevocationActive       = safe(async (addr)       => await govContract().revocationActive(addr), false);
+export const getRevokeRound           = safe(async (addr)       => Number(await govContract().revokeRound(addr)), 0);
+export const getRevokeVoteCount       = safe(async (addr)       => Number(await govContract().revokeVoteCount(addr)), 0);
+export const hasVotedForRevoke        = safe(async (t, v)       => await govContract().hasVotedRevoke(t, v), false);
 export const getChallengeCooldownRemaining = safe(async (addr)  => Number(await lensContract().challengeCooldownRemaining(addr)), 0);
 export const getBoostCooldownRemaining     = safe(async (addr)  => Number(await lensContract().boostCooldownRemaining(addr)), 0);
-export const isNominationsOpen        = safe(async ()           => await readContract().nominationsOpen(), false);
+export const isNominationsOpen        = safe(async ()           => await govContract().nominationsOpen(), false);
 export const getSeedPhaseK            = safe(async ()           => Number(await readContract().seedPhaseK()), 0);
+export const getOwner                 = safe(async ()           => await readContract().owner(), null);
 
 export async function hasVotedOnChain(uuid, topicId, phase, addr) {
   try { return await readContract().hasVoted(bindingKey(uuid, topicId), phase, addr); }
@@ -265,10 +281,10 @@ export async function hasVotedManyOnChain(bindings, phase, addr) {
 }
 
 export async function hasVotedForRevokeMany(peerAddrs, voterAddr) {
-  if (!CONSENSUS_ADDR || !peerAddrs.length) return new Map();
+  if (!CONSENSUS_GOVERNANCE_ADDR || !peerAddrs.length) return new Map();
   const calls = peerAddrs.map(p => ({
-    target:   CONSENSUS_ADDR,
-    callData: IFACE.encodeFunctionData('hasVotedRevoke', [p, voterAddr]),
+    target:   CONSENSUS_GOVERNANCE_ADDR,
+    callData: GOVERNANCE_IFACE.encodeFunctionData('hasVotedRevoke', [p, voterAddr]),
   }));
   try {
     const results = await multicallAggregate3(calls);
@@ -276,7 +292,7 @@ export async function hasVotedForRevokeMany(peerAddrs, voterAddr) {
     results.forEach((r, i) => {
       let v = false;
       if (r.success) {
-        try { [v] = IFACE.decodeFunctionResult('hasVotedRevoke', r.returnData); } catch { v = false; }
+        try { [v] = GOVERNANCE_IFACE.decodeFunctionResult('hasVotedRevoke', r.returnData); } catch { v = false; }
       }
       out.set(peerAddrs[i].toLowerCase(), !!v);
     });
@@ -319,7 +335,7 @@ export async function getPeerList() {
 }
 export async function getNomineeList() {
   try {
-    const list = await readContract().nomineeList();
+    const list = await govContract().nomineeList();
     return list.map(a => a.toLowerCase());
   } catch { return []; }
 }
@@ -373,11 +389,56 @@ async function sendTx(fnName, args) {
   return tx.hash;
 }
 
-export async function nominatePeer(nominee, handle)            { return sendTx('nominatePeer', [nominee, handle]); }
-export async function endorseNominee(nominee)                  { return sendTx('endorseNominee', [nominee]); }
-export async function lapseNominee(nominee)                    { return sendTx('lapseNominee', [nominee]); }
-export async function motionRevoke(peer)                       { return sendTx('motionRevoke', [peer]); }
-export async function voteRevoke(peer)                         { return sendTx('voteRevoke', [peer]); }
+// Same as sendTx but against the PeerGovernance sidecar (nominee + revocation).
+async function sendGovTx(fnName, args) {
+  const c  = await govWriteContract();
+  const tx = await c[fnName](...args);
+  return tx.hash;
+}
+
+// ── EIP-712 Vote signing ──────────────────────────────────────────────────────
+//
+// Review / challenge votes are authorised by an on-chain-recovered EIP-712
+// signature, so signing is folded into the vote write below. The domain is the
+// same one verify-attestation uses (verifyingContract = CONSENSUS_ADDR, which is
+// always set when an on-chain vote is possible). noteHash binds the deliberation
+// note; round binds the binding's current review/challenge round (anti-replay).
+function noteHashOf(note) {
+  const s = String(note ?? '');
+  return s.length ? keccak256(toUtf8Bytes(s)) : ZeroHash;
+}
+async function signVote({ bindingId, phase, support, round, noteHash }) {
+  const signer = await getBrowserProvider().getSigner();
+  return signer.signTypedData(ATTESTATION_DOMAIN, VOTE_TYPES, { bindingId, phase, support, round, noteHash });
+}
+
+// Sign a Vote WITHOUT broadcasting a tx — used by the dev-mode (no CONSENSUS_ADDR)
+// path so an off-chain attestation still carries a verifiable Vote signature.
+// round is read from chain when a contract is configured, else 0.
+// phase: 0 = review, 1 = challenge. Returns { sig, noteHash, round, bindingHash }.
+export async function signVoteOnly(uuid, topicId, phase, support, note = '') {
+  const bindingHash = bindingKey(uuid, topicId);
+  let round = 0;
+  if (CONSENSUS_ADDR) {
+    const b = await readContract().getBinding(uuidToBytes32(uuid), topicId);
+    round = phase === 1 ? Number(b.challengeRound) : Number(b.reviewRound);
+  }
+  const noteHash = noteHashOf(note);
+  const sig = await signVote({ bindingId: bindingHash, phase, support, round, noteHash });
+  return { sig, noteHash, round, bindingHash };
+}
+
+// Nominee + revocation governance — target the PeerGovernance sidecar.
+export async function nominatePeer(nominee, handle)            { return sendGovTx('nominatePeer', [nominee, handle]); }
+export async function endorseNominee(nominee)                  { return sendGovTx('endorseNominee', [nominee]); }
+export async function lapseNominee(nominee)                    { return sendGovTx('lapseNominee', [nominee]); }
+export async function motionRevoke(peer)                       { return sendGovTx('motionRevoke', [peer]); }
+export async function voteRevoke(peer)                         { return sendGovTx('voteRevoke', [peer]); }
+export async function cancelStaleRevocation(peer)             { return sendGovTx('cancelStaleRevocation', [peer]); }
+// Owner-only, seed-phase only (activePeerCount < seedPhaseK): seed a founding
+// peer directly on the CORE. Once the count reaches seedPhaseK the open
+// nominate→endorse flow (governance) takes over and addPeer reverts.
+export async function addPeer(peer, handle)                    { return sendTx('addPeer', [peer, handle]); }
 export async function heartbeatOnChain()                       { return sendTx('heartbeat', []); }
 export async function pruneInactivePeerOnChain(peer)           { return sendTx('pruneInactivePeer', [peer]); }
 // Peer supermajority (2/3) eviction of a captured/paused owner.
@@ -404,15 +465,53 @@ export async function cancelStaleRetireOnChain(id)                  { return sen
 
 export async function submitEvidenceOnChain(uuid, tier, topicId, ch) { return sendTx('submitEvidence', [uuidToBytes32(uuid), tier, topicId, ch]); }
 export async function fileBindingOnChain(uuid, topicId)        { return sendTx('fileBinding', [uuidToBytes32(uuid), topicId]); }
-export async function castReviewVoteOnChain(uuid, topicId, approve) { return sendTx('castReviewVote', [uuidToBytes32(uuid), topicId, approve]); }
+// Vote writes are by-signature: they sign the EIP-712 Vote (bound to the
+// binding's current round + the note hash) and submit it. They return
+// { txHash, sig, noteHash, round, bindingHash } so the off-chain writer can
+// persist the SAME signature the chain recovered.
+export async function castReviewVoteOnChain(uuid, topicId, approve, note = '') {
+  const bindingHash = bindingKey(uuid, topicId);
+  const round       = Number((await readContract().getBinding(uuidToBytes32(uuid), topicId)).reviewRound);
+  const noteHash    = noteHashOf(note);
+  const sig         = await signVote({ bindingId: bindingHash, phase: 0, support: approve, round, noteHash });
+  const c  = await writeContract();
+  const tx = await c.castReviewVote(uuidToBytes32(uuid), topicId, approve, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round, bindingHash };
+}
 export async function castReviewVoteBatchOnChain(uuids, topicIds, aprs) {
   if (![uuids, topicIds, aprs].every(Array.isArray) || uuids.length !== aprs.length || uuids.length !== topicIds.length) {
     throw new Error('Batch arrays must be same length');
   }
-  return sendTx('castReviewVoteBatch', [uuids.map(uuidToBytes32), topicIds, aprs]);
+  const rc = readContract();
+  const items = [];
+  for (let i = 0; i < uuids.length; i++) {
+    const bindingHash = bindingKey(uuids[i], topicIds[i]);
+    const round       = Number((await rc.getBinding(uuidToBytes32(uuids[i]), topicIds[i])).reviewRound);
+    const sig         = await signVote({ bindingId: bindingHash, phase: 0, support: aprs[i], round, noteHash: ZeroHash });
+    items.push({ bindingHash, round, noteHash: ZeroHash, sig });
+  }
+  const c  = await writeContract();
+  const tx = await c.castReviewVoteBatch(uuids.map(uuidToBytes32), topicIds, aprs, items.map(() => ZeroHash), items.map(it => it.sig));
+  return { txHash: tx.hash, items };
 }
-export async function openChallengeOnChain(uuid, topicId)      { return sendTx('openChallenge', [uuidToBytes32(uuid), topicId]); }
-export async function castChallengeVoteOnChain(uuid, topicId, support) { return sendTx('castChallengeVote', [uuidToBytes32(uuid), topicId, support]); }
+export async function openChallengeOnChain(uuid, topicId, note = '') {
+  const bindingHash = bindingKey(uuid, topicId);
+  const round       = Number((await readContract().getBinding(uuidToBytes32(uuid), topicId)).challengeRound) + 1; // open creates round+1
+  const noteHash    = noteHashOf(note);
+  const sig         = await signVote({ bindingId: bindingHash, phase: 1, support: true, round, noteHash });
+  const c  = await writeContract();
+  const tx = await c.openChallenge(uuidToBytes32(uuid), topicId, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round, bindingHash };
+}
+export async function castChallengeVoteOnChain(uuid, topicId, support, note = '') {
+  const bindingHash = bindingKey(uuid, topicId);
+  const round       = Number((await readContract().getBinding(uuidToBytes32(uuid), topicId)).challengeRound);
+  const noteHash    = noteHashOf(note);
+  const sig         = await signVote({ bindingId: bindingHash, phase: 1, support, round, noteHash });
+  const c  = await writeContract();
+  const tx = await c.castChallengeVote(uuidToBytes32(uuid), topicId, support, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round, bindingHash };
+}
 export async function finalizeChallengeOnChain(uuid, topicId)  { return sendTx('finalizeChallenge', [uuidToBytes32(uuid), topicId]); }
 export async function markLapsedOnChain(uuid, topicId)         { return sendTx('markLapsed', [uuidToBytes32(uuid), topicId]); }
 export async function boostQueuedOnChain(uuid, topicId)        { return sendTx('boostQueued', [uuidToBytes32(uuid), topicId]); }
