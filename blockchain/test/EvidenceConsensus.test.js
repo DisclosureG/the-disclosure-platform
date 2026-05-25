@@ -54,17 +54,18 @@ const NodeState = { None: 0, Proposed: 1, Ratified: 2, Retired: 3 };
 // Sign a Vote(bindingId, phase, support, noteHash) EIP-712 typed message with the
 // voting signer; the contract recovers this signer on-chain and attributes the
 // vote to it (the submitter may be any relayer).  phase: 0 = review, 1 = challenge.
-async function signVote(signer, consensusAddr, chainId, bindingId, phase, support, noteHash) {
+async function signVote(signer, consensusAddr, chainId, bindingId, phase, support, round, noteHash) {
   const domain = { name: "EvidenceConsensus", version: "1", chainId, verifyingContract: consensusAddr };
   const types = {
     Vote: [
       { name: "bindingId", type: "bytes32" },
       { name: "phase",     type: "uint8" },
       { name: "support",   type: "bool" },
+      { name: "round",     type: "uint32" },
       { name: "noteHash",  type: "bytes32" },
     ],
   };
-  return signer.signTypedData(domain, types, { bindingId, phase, support, noteHash });
+  return signer.signTypedData(domain, types, { bindingId, phase, support, round, noteHash });
 }
 
 // Convenience wrappers that sign with `signer` and submit (relayed by `signer`
@@ -72,22 +73,25 @@ async function signVote(signer, consensusAddr, chainId, bindingId, phase, suppor
 // shapes so the test bodies stay focused on intent rather than signing plumbing.
 async function reviewVote(contract, signer, id, topicId, approve, noteHash = ZERO_HASH) {
   const bid     = await contract.bindingId(id, topicId);
+  const round   = (await contract.getBinding(id, topicId)).reviewRound;
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
-  const sig     = await signVote(signer, await contract.getAddress(), chainId, bid, 0, approve, noteHash);
+  const sig     = await signVote(signer, await contract.getAddress(), chainId, bid, 0, approve, round, noteHash);
   return contract.connect(signer).castReviewVote(id, topicId, approve, noteHash, sig);
 }
 
 async function openChallengeSigned(contract, signer, id, topicId, noteHash = ZERO_HASH) {
   const bid     = await contract.bindingId(id, topicId);
+  const round   = (await contract.getBinding(id, topicId)).challengeRound + 1n; // open creates round+1
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
-  const sig     = await signVote(signer, await contract.getAddress(), chainId, bid, 1, true, noteHash);
+  const sig     = await signVote(signer, await contract.getAddress(), chainId, bid, 1, true, round, noteHash);
   return contract.connect(signer).openChallenge(id, topicId, noteHash, sig);
 }
 
 async function challengeVote(contract, signer, id, topicId, support, noteHash = ZERO_HASH) {
   const bid     = await contract.bindingId(id, topicId);
+  const round   = (await contract.getBinding(id, topicId)).challengeRound;
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
-  const sig     = await signVote(signer, await contract.getAddress(), chainId, bid, 1, support, noteHash);
+  const sig     = await signVote(signer, await contract.getAddress(), chainId, bid, 1, support, round, noteHash);
   return contract.connect(signer).castChallengeVote(id, topicId, support, noteHash, sig);
 }
 
@@ -102,8 +106,9 @@ async function reviewVoteBatch(contract, signer, ids, topicIds, approves, overri
   if (!sigs) {
     sigs = [];
     for (let i = 0; i < ids.length; i++) {
-      const bid = await contract.bindingId(ids[i], topicIds[i]);
-      sigs.push(await signVote(signer, addr, chainId, bid, 0, approves[i], noteHashes[i]));
+      const bid   = await contract.bindingId(ids[i], topicIds[i]);
+      const round = (await contract.getBinding(ids[i], topicIds[i])).reviewRound;
+      sigs.push(await signVote(signer, addr, chainId, bid, 0, approves[i], round, noteHashes[i]));
     }
   }
   return contract.connect(signer).castReviewVoteBatch(ids, topicIds, approves, noteHashes, sigs);

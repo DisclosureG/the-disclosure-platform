@@ -19,37 +19,41 @@ function nodeId(slug)     { return ethers.keccak256(ethers.toUtf8Bytes(slug)); }
 
 // Sign a Vote(bindingId, phase, support, noteHash) EIP-712 message and submit it.
 // phase: 0 = review, 1 = challenge.  Attribution on-chain is the recovered signer.
-async function signVote(signer, addr, chainId, bid, phase, support, noteHash) {
+async function signVote(signer, addr, chainId, bid, phase, support, round, noteHash) {
   const domain = { name: "EvidenceConsensus", version: "1", chainId, verifyingContract: addr };
   const types = {
     Vote: [
       { name: "bindingId", type: "bytes32" },
       { name: "phase",     type: "uint8" },
       { name: "support",   type: "bool" },
+      { name: "round",     type: "uint32" },
       { name: "noteHash",  type: "bytes32" },
     ],
   };
-  return signer.signTypedData(domain, types, { bindingId: bid, phase, support, noteHash });
+  return signer.signTypedData(domain, types, { bindingId: bid, phase, support, round, noteHash });
 }
 
 async function reviewVote(c, signer, id, topicId, approve, noteHash = ZERO_HASH) {
   const bid     = await c.bindingId(id, topicId);
+  const round   = (await c.getBinding(id, topicId)).reviewRound;
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
-  const sig     = await signVote(signer, await c.getAddress(), chainId, bid, 0, approve, noteHash);
+  const sig     = await signVote(signer, await c.getAddress(), chainId, bid, 0, approve, round, noteHash);
   return c.connect(signer).castReviewVote(id, topicId, approve, noteHash, sig);
 }
 
 async function openChallengeSigned(c, signer, id, topicId, noteHash = ZERO_HASH) {
   const bid     = await c.bindingId(id, topicId);
+  const round   = (await c.getBinding(id, topicId)).challengeRound + 1n; // open creates round+1
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
-  const sig     = await signVote(signer, await c.getAddress(), chainId, bid, 1, true, noteHash);
+  const sig     = await signVote(signer, await c.getAddress(), chainId, bid, 1, true, round, noteHash);
   return c.connect(signer).openChallenge(id, topicId, noteHash, sig);
 }
 
 async function challengeVote(c, signer, id, topicId, support, noteHash = ZERO_HASH) {
   const bid     = await c.bindingId(id, topicId);
+  const round   = (await c.getBinding(id, topicId)).challengeRound;
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
-  const sig     = await signVote(signer, await c.getAddress(), chainId, bid, 1, support, noteHash);
+  const sig     = await signVote(signer, await c.getAddress(), chainId, bid, 1, support, round, noteHash);
   return c.connect(signer).castChallengeVote(id, topicId, support, noteHash, sig);
 }
 

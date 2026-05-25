@@ -115,8 +115,11 @@ contract EvidenceConsensus {
     // submitter (msg.sender) may be a relayer; attribution is the recovered
     // signer, which must be an active peer.
     bytes32 private immutable _DOMAIN_SEPARATOR;
+    // `round` binds a signature to the binding's CURRENT review/challenge round,
+    // so a signature can never be replayed on a later re-filed round of the same
+    // binding (which would re-count a peer's verdict without fresh consent).
     bytes32 private constant _VOTE_TYPEHASH =
-        keccak256("Vote(bytes32 bindingId,uint8 phase,bool support,bytes32 noteHash)");
+        keccak256("Vote(bytes32 bindingId,uint8 phase,bool support,uint32 round,bytes32 noteHash)");
 
     // ── Peer registry ────────────────────────────────────────────────────────
 
@@ -1076,9 +1079,9 @@ contract EvidenceConsensus {
     /// EIP-712 typed message.  Every review / challenge vote is authorised by the
     /// recovered signer (which the callers gate on `isActivePeer`), so a vote can
     /// never exist without the peer's signature.  phase: 0 = review, 1 = challenge.
-    function _recoverVoter(bytes32 bid, uint8 phase, bool support, bytes32 noteHash, bytes calldata sig) internal view returns (address) {
+    function _recoverVoter(bytes32 bid, uint8 phase, bool support, uint32 round, bytes32 noteHash, bytes calldata sig) internal view returns (address) {
         require(sig.length == 65, "bad sig len");
-        bytes32 structHash = keccak256(abi.encode(_VOTE_TYPEHASH, bid, phase, support, noteHash));
+        bytes32 structHash = keccak256(abi.encode(_VOTE_TYPEHASH, bid, phase, support, round, noteHash));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _DOMAIN_SEPARATOR, structHash));
         bytes32 r; bytes32 s; uint8 v;
         assembly { r := calldataload(sig.offset) s := calldataload(add(sig.offset,32)) v := byte(0, calldataload(add(sig.offset,64))) }
@@ -1214,7 +1217,8 @@ contract EvidenceConsensus {
     function castReviewVote(bytes32 id, bytes32 topicId, bool approve, bytes32 noteHash, bytes calldata sig)
         external whenNotPaused
     {
-        address voter = _recoverVoter(bindingId(id, topicId), 0, approve, noteHash, sig);
+        bytes32 bid = bindingId(id, topicId);
+        address voter = _recoverVoter(bid, 0, approve, bindings[bid].reviewRound, noteHash, sig);
         require(isActivePeer[voter], "not an active peer");
         _castReviewVote(id, topicId, approve, voter, sig);
     }
@@ -1239,7 +1243,8 @@ contract EvidenceConsensus {
         require(n > 0, "empty batch");
         require(n <= MAX_REVIEW_BATCH, "batch too large");
         for (uint256 i = 0; i < n; i++) {
-            address voter = _recoverVoter(bindingId(ids[i], topicIds_[i]), 0, approves[i], noteHashes[i], sigs[i]);
+            bytes32 bid = bindingId(ids[i], topicIds_[i]);
+            address voter = _recoverVoter(bid, 0, approves[i], bindings[bid].reviewRound, noteHashes[i], sigs[i]);
             require(isActivePeer[voter], "not an active peer");
             _castReviewVote(ids[i], topicIds_[i], approves[i], voter, sigs[i]);
         }
@@ -1382,7 +1387,10 @@ contract EvidenceConsensus {
         external whenNotPaused
     {
         bytes32 bid = bindingId(id, topicId);
-        address voter = _recoverVoter(bid, 1, true, noteHash, sig);
+        Binding storage b = bindings[bid];
+        // Sign over the round this open will create (current + 1), so an old
+        // open-challenge signature can't be replayed to re-open a later round.
+        address voter = _recoverVoter(bid, 1, true, b.challengeRound + 1, noteHash, sig);
         require(isActivePeer[voter], "not an active peer");
 
         require(
@@ -1391,7 +1399,6 @@ contract EvidenceConsensus {
             "challenge cooldown active"
         );
 
-        Binding storage b = bindings[bid];
         require(
             b.state == EvidenceState.Canon || b.state == EvidenceState.Reaffirmed,
             "not canon"
@@ -1429,10 +1436,10 @@ contract EvidenceConsensus {
         external whenNotPaused
     {
         bytes32 bid = bindingId(id, topicId);
-        address voter = _recoverVoter(bid, 1, supportChallenge, noteHash, sig);
+        Binding storage b = bindings[bid];
+        address voter = _recoverVoter(bid, 1, supportChallenge, b.challengeRound, noteHash, sig);
         require(isActivePeer[voter], "not an active peer");
 
-        Binding storage b = bindings[bid];
         require(b.state == EvidenceState.Contested, "not contested");
         require(block.timestamp <= uint256(b.challengedAt) + CHALLENGE_WINDOW, "window expired");
         require(!_votedChallenge[bid][b.challengeRound][voter], "already voted");
