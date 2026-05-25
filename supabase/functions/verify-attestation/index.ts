@@ -86,9 +86,9 @@ const CONTRACT_ABI = [
   "function activePeerCount() view returns (uint256)",
   "event EvidenceSubmitted(bytes32 indexed id, uint8 tier, address indexed submitter, bytes32 contentHash)",
   "event BindingSubmitted(bytes32 indexed bindingId, bytes32 indexed id, bytes32 indexed topicId, uint8 tier, address submitter)",
-  "event ReviewVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool approve, uint32 approveCount, uint32 rejectCount)",
+  "event ReviewVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool approve, uint32 approveCount, uint32 rejectCount, bytes sig)",
   "event ChallengeOpened(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed challenger, uint48 challengedAt)",
-  "event ChallengeVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool supportChallenge, uint32 challengeVotes, uint32 defenseVotes)",
+  "event ChallengeVoteCast(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, address indexed voter, bool supportChallenge, uint32 challengeVotes, uint32 defenseVotes, bytes sig)",
   "event BindingLapsed(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId)",
   "event BindingDeprecated(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 challengeVotes)",
   "event BindingReaffirmed(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 defenseVotes)",
@@ -454,12 +454,17 @@ Deno.serve(async (req: Request) => {
   if (!isPeer) return json({ error: "peer_addr is not an active peer" }, 403, origin);
 
   // ── Signature verification ─────────────────────────────────────────────────
-  // VOTE actions (review_vote / open_challenge / challenge_vote) are authorised
-  // by the on-chain `Vote` EIP-712 typed data — the SAME message the contract
-  // recovers — so the off-chain row can never carry a signature the chain would
-  // reject.  Taxonomy actions (endorse_node / reject_node) are off-chain-only
-  // governance endorsements and keep the legacy `Attestation` typed data.
-  const isVoteAction = action === "review_vote" || action === "open_challenge" || action === "challenge_vote";
+  // VOTE actions are authorised by the on-chain `Vote` EIP-712 typed data — the
+  // SAME message the contract recovers — so the off-chain row can never carry a
+  // signature the chain would reject. This now includes taxonomy ENDORSE
+  // (endorse_node: Vote phase 2, bindingId = the node id), which is recovered
+  // on-chain by EvidenceConsensus. Only taxonomy REJECT (reject_node) remains an
+  // off-chain-only dissent that keeps the legacy `Attestation` typed data.
+  // endorse_node carries a round only when it rode an on-chain Vote (production);
+  // the dev-mode (no-contract) fallback signs a legacy Attestation with no round,
+  // so it stays on the Attestation path below.
+  const endorseAsVote = isEndorseAction && round !== null && round !== undefined;
+  const isVoteAction = action === "review_vote" || action === "open_challenge" || action === "challenge_vote" || endorseAsVote;
 
   // The binding hash the Vote signature is bound to.  Prefer the value supplied
   // by the frontend; fall back to looking it up from the bindings table by
@@ -490,29 +495,41 @@ Deno.serve(async (req: Request) => {
         return json({ error: "note_hash does not match keccak256(note)" }, 401, origin);
       }
 
-      // Resolve the bindingId if the frontend didn't send it.
-      if (!voteBindingHash && binding_id) {
-        const { data: bh } = await supabase
-          .from("bindings").select("binding_hash").eq("id", binding_id).maybeSingle();
-        voteBindingHash = (bh as { binding_hash?: string } | null)?.binding_hash ?? null;
+      // phase / support / bindingId differ by action:
+      //   review_vote      → phase 0, bindingId = the (evidence × topic) binding
+      //   open/challenge   → phase 1, bindingId = the binding
+      //   endorse_node     → phase 2, bindingId = the NODE id (node_hash)
+      let votePhase: number;
+      let voteSupport: boolean;
+      if (isEndorseAction) {
+        votePhase   = 2;     // taxonomy
+        voteSupport = true;  // an endorsement is always support=true
+        // The taxonomy Vote signs the node id, not the founding binding hash.
+        voteBindingHash = (binding_hash as string | null) ?? (node_hash as string | null);
+        if (!voteBindingHash) {
+          return json({ error: "endorse_node requires node_hash" }, 400, origin);
+        }
+      } else {
+        // Resolve the bindingId if the frontend didn't send it.
+        if (!voteBindingHash && binding_id) {
+          const { data: bh } = await supabase
+            .from("bindings").select("binding_hash").eq("id", binding_id).maybeSingle();
+          voteBindingHash = (bh as { binding_hash?: string } | null)?.binding_hash ?? null;
+        }
+        if (!voteBindingHash && topicOnchain) {
+          // Last resort: recompute keccak256(abi.encode(idBytes32, topicIdBytes32)).
+          voteBindingHash = computeBindingId(evidence_id, topicOnchain);
+        }
+        if (!voteBindingHash) {
+          return json({ error: "Cannot resolve binding_hash (send binding_hash, or a resolvable binding_id / topic_id)" }, 400, origin);
+        }
+        votePhase   = action === "review_vote" ? 0 : 1;
+        voteSupport = action === "open_challenge"
+          ? true
+          : action === "review_vote"
+            ? verdict === "approve"
+            : verdict === "challenge";
       }
-      if (!voteBindingHash && topicOnchain) {
-        // Last resort: recompute keccak256(abi.encode(idBytes32, topicIdBytes32)).
-        voteBindingHash = computeBindingId(evidence_id, topicOnchain);
-      }
-      if (!voteBindingHash) {
-        return json({ error: "Cannot resolve binding_hash (send binding_hash, or a resolvable binding_id / topic_id)" }, 400, origin);
-      }
-
-      // phase: review_vote → 0, open_challenge / challenge_vote → 1.
-      // support: review approve→true / reject→false; challenge 'challenge'→true /
-      // 'defend'→false; open_challenge→true.
-      const votePhase   = action === "review_vote" ? 0 : 1;
-      const voteSupport = action === "open_challenge"
-        ? true
-        : action === "review_vote"
-          ? verdict === "approve"
-          : verdict === "challenge";
 
       const message = {
         bindingId: voteBindingHash,
@@ -745,10 +762,13 @@ Deno.serve(async (req: Request) => {
         note:        note ?? null,
         eip712_sig:  eip712_sig ?? null,
         tx_hash:     tx_hash ?? null,
-        // Vote-reconstruction surface (review/challenge): lets the public proof
-        // modal recompute the Vote digest and recover the signer client-side.
+        // Vote-reconstruction surface: lets the public proof modal recompute the
+        // Vote digest and recover the signer client-side. node_hash is the
+        // taxonomy ENDORSE Vote's bindingId (the node id); without it the modal
+        // can't rebuild the Vote and would wrongly fall back to Attestation recovery.
         round:       round ?? null,
         note_hash:   note_hash ?? null,
+        node_hash:   node_hash ?? null,
         // Reaching here means the signature was verified above (the !eip712_sig
         // guard 400s first), so this row is provably signed by the peer. The
         // overwriting upsert also UPGRADES any earlier indexer 'tx' gap-row in
