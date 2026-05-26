@@ -6,7 +6,8 @@ import {
   ATTESTATION_DOMAIN, ATTESTATION_TYPES, CONSENSUS_CHAIN_ID,
 } from '../lib/wallet-constants';
 import { recoverAttestationSigner } from '../lib/wallet';
-import { ProofStep, CopyButton } from './AttestationVerifier';
+import { ProofStep, CopyButton, DerivationPanel } from './AttestationVerifier';
+import { getRegistryDerivation } from '../evidence-data';
 
 // The registry analogue of AttestationVerifier: a per-row proof control for the
 // peer-registry vote history. Registry membership votes are authorised by an
@@ -65,7 +66,7 @@ function proofMessage(r) {
   return { scheme: 'peervote', domain: PEER_GOVERNANCE_DOMAIN, types: PEER_VOTE_TYPES, primaryType: 'PeerVote', message };
 }
 
-function RegistryVerifierModal({ r, actorName, actionLabel, onClose }) {
+function RegistryVerifierModal({ r, actorName, actionLabel, onClose, peers, onLinkback }) {
   const [status, setStatus] = useState('idle');
   const [recovered, setRecovered] = useState(null);
   const [error, setError] = useState('');
@@ -82,6 +83,14 @@ function RegistryVerifierModal({ r, actorName, actionLabel, onClose }) {
     ? JSON.stringify({ domain: proof.domain, types: proof.types, primaryType: proof.primaryType, message: proof.message, signature: r.sig }, null, 2)
     : '';
 
+  // Consensus Network rows = verified / revoked / cancelled. These are the
+  // contract's projection of underlying signed registry votes (nominee
+  // endorsements / revocation discards / keep dissents), so step 1 swaps the
+  // signer-recovery body for a DerivationPanel showing the tally + threshold +
+  // a linkback that filters the log to the contributing signatures.
+  const descriptor = getRegistryDerivation(r, peers);
+  const isConsensus = !!descriptor;
+
   const verify = async () => {
     setStatus('loading');
     setError('');
@@ -97,8 +106,8 @@ function RegistryVerifierModal({ r, actorName, actionLabel, onClose }) {
     }
   };
 
-  const authState = !sig ? 'na' : status === 'ok' ? 'ok' : status === 'bad' ? 'bad' : 'idle';
-  const authChip  = !sig ? 'Not signed' : status === 'ok' ? 'Authentic ✓' : status === 'bad' ? 'Mismatch ✗' : null;
+  const authState = isConsensus ? 'na' : !sig ? 'na' : status === 'ok' ? 'ok' : status === 'bad' ? 'bad' : 'idle';
+  const authChip  = isConsensus ? 'Derived' : !sig ? 'Not signed' : status === 'ok' ? 'Authentic ✓' : status === 'bad' ? 'Mismatch ✗' : null;
   const txState = r.txHash ? 'idle' : 'na';
   const txChip  = r.txHash ? 'On-chain' : 'Off-chain';
 
@@ -108,24 +117,40 @@ function RegistryVerifierModal({ r, actorName, actionLabel, onClose }) {
         <button className="av-close" onClick={onClose} aria-label="Close">×</button>
 
         <span className="av-eyebrow">Independent verification</span>
-        <h3 className="av-title">Prove this registry vote yourself</h3>
+        <h3 className="av-title">{isConsensus ? 'How this consensus outcome was derived' : 'Prove this registry vote yourself'}</h3>
         <p className="av-lead">
-          This act stands on two independent proofs — <b>who</b> cast it and <b>that</b> it was
-          recorded. Each one re-checks in your own browser, with no server in the loop — you never
-          have to trust this page.
+          {isConsensus ? (
+            <>
+              The contract emitted this outcome when the underlying signed registry votes crossed
+              threshold. <b>Step 1</b> shows the tally + threshold derived from the signed peer
+              votes; <b>Step 2</b> shows the on-chain transaction the contract emitted. Each
+              contributing peer vote is its own row in this log with an EIP-712 signature you can
+              recover in your browser.
+            </>
+          ) : (
+            <>
+              This act stands on two independent proofs — <b>who</b> cast it and <b>that</b> it was
+              recorded. Each one re-checks in your own browser, with no server in the loop — you never
+              have to trust this page.
+            </>
+          )}
         </p>
 
         <div className="av-steps">
 
-          {/* STEP 1 — Authorship */}
+          {/* STEP 1 — Authorship (signed-peer rows) / Derivation (consensus Network rows) */}
           <ProofStep
             n={1}
-            title="Who signed it"
-            proves="That the named peer — not the platform — authored this exact vote and note."
+            title={isConsensus ? 'How peers got here' : 'Who signed it'}
+            proves={isConsensus
+              ? 'That the on-chain outcome is the contract\'s projection of the underlying signed peer votes — recountable from the public registry-vote tables.'
+              : 'That the named peer — not the platform — authored this exact vote and note.'}
             state={authState}
             chip={authChip}
           >
-            {sig ? (
+            {isConsensus ? (
+              <DerivationPanel descriptor={descriptor} peers={peers} onLinkback={onLinkback} />
+            ) : sig ? (
               <>
                 <div className="av-verify">
                   <button
@@ -225,22 +250,25 @@ function RegistryVerifierModal({ r, actorName, actionLabel, onClose }) {
 // Inline proof control for one registry-log row. "EIP-712 ✓" when the row's
 // signature is recoverable in-browser; "On-chain ✓" for a sig-less act that still
 // has a tx; a plain dash when there's neither.
-export default function RegistryProofVerifier({ r, actorName, actionLabel }) {
+export default function RegistryProofVerifier({ r, actorName, actionLabel, peers, onLinkback }) {
   const [open, setOpen] = useState(false);
   const recoverable = !!proofMessage(r);
+  const isConsensus = !!getRegistryDerivation(r, peers);
   if (!recoverable && !r.txHash) return <span style={{ color: 'var(--ink-faint)' }}>—</span>;
   return (
     <>
       <button
         type="button"
-        className={`av-trigger ${recoverable ? '' : 'is-chainonly'}`}
+        className={`av-trigger ${isConsensus ? 'is-derived' : recoverable ? '' : 'is-chainonly'}`}
         onClick={() => setOpen(true)}
-        title={recoverable ? 'Verify the EIP-712 signature yourself' : 'On-chain act — view the proof'}
+        title={isConsensus
+          ? 'Derived consensus outcome — projection of the signed registry votes (modal shows the tally + the on-chain emission tx)'
+          : recoverable ? 'Verify the EIP-712 signature yourself' : 'On-chain act — view the proof'}
       >
         <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M12 2l7 3v6c0 4.5-3 8.5-7 9-4-.5-7-4.5-7-9V5l7-3z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
-        <span className="sig">{recoverable ? 'EIP-712 ✓' : 'On-chain ✓'}</span>
+        <span className="sig">{isConsensus ? 'Derived ✓' : recoverable ? 'EIP-712 ✓' : 'On-chain ✓'}</span>
       </button>
-      {open && <RegistryVerifierModal r={r} actorName={actorName} actionLabel={actionLabel} onClose={() => setOpen(false)} />}
+      {open && <RegistryVerifierModal r={r} actorName={actorName} actionLabel={actionLabel} onClose={() => setOpen(false)} peers={peers} onLinkback={onLinkback} />}
     </>
   );
 }

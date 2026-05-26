@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { verifyTypedData } from 'ethers';
 import { ATTESTATION_DOMAIN, ATTESTATION_TYPES, VOTE_TYPES, CONSENSUS_CHAIN_ID } from '../lib/wallet-constants';
 import { recoverAttestationSigner, computeContentHash } from '../lib/wallet';
+import { getVoteLogDerivation, fetchDerivationTally } from '../evidence-data';
 
 const explorerBase = CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com';
 const SHORT = (a) => (a ? `${a.slice(0, 10)}…${a.slice(-8)}` : '');
@@ -211,7 +212,100 @@ function ContentProofBody({ a, onStatus }) {
   );
 }
 
-function VerifierModal({ a, onClose, handle }) {
+// Derivation panel — renders the underlying signed-peer tally that produced a
+// Network outcome. Used inside step 1 of the verifier modal for any Network row
+// (chain-emitted canonized / expelled / lapsed / deprecated / reaffirmed /
+// ratified / retired, plus the off-chain-only consensus-reject). Takes either:
+//   • `precomputed`: stats already on the row (the consensus-reject case,
+//     computed client-side in useDerivedConsensusRejects), OR
+//   • `descriptor` + `peers`: a descriptor from getVoteLogDerivation, which the
+//     panel resolves into a tally via fetchDerivationTally on mount.
+// `onLinkback` (optional) — when present, the panel renders a "View signed
+// votes" button that calls back with the descriptor's filterTerm so the host
+// log can filter to the contributing rows.
+export function DerivationPanel({ descriptor, precomputed, peers, onLinkback }) {
+  const [tally, setTally] = useState(null);
+  const [tallyState, setTallyState] = useState(precomputed ? 'ok' : 'loading');
+
+  useEffect(() => {
+    if (precomputed || !descriptor) return;
+    let cancelled = false;
+    setTallyState('loading');
+    fetchDerivationTally(descriptor)
+      .then(t => { if (!cancelled) { setTally(t); setTallyState('ok'); } })
+      .catch(() => { if (!cancelled) setTallyState('error'); });
+    return () => { cancelled = true; };
+  }, [descriptor, precomputed]);
+
+  if (precomputed) {
+    return (
+      <div className="av-kv">
+        <div className="av-row"><span className="k">Signed dissents</span><span className="v"><b>{precomputed.dissents}</b> peers signed a reject on this proposal</span></div>
+        {precomputed.peers != null && <div className="av-row"><span className="k">Active peers</span><span className="v">{precomputed.peers}</span></div>}
+        {precomputed.need != null && <div className="av-row"><span className="k">Endorses needed to ratify</span><span className="v">{precomputed.need}</span></div>}
+        {precomputed.peers != null && precomputed.need != null && (
+          <div className="av-row"><span className="k">Eligible endorsers left</span><span className="v">{Math.max(0, precomputed.peers - precomputed.dissents)} — below the {precomputed.need} threshold</span></div>
+        )}
+        <p className="av-verdict">
+          Once dissents exceed <code>peers − threshold</code>, fewer than the required number of peers
+          remain available to endorse — ratification becomes impossible regardless of how many of them
+          later vote yes. This row marks that crossing.
+        </p>
+        {onLinkback && precomputed.filterTerm && (
+          <button type="button" className="av-btn" onClick={() => onLinkback(precomputed.filterTerm)}>
+            View the {precomputed.dissents} signed dissents →
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (!descriptor) {
+    return (
+      <p className="av-step-note">
+        This is a <b>Network outcome</b>. The contract emitted it when peer votes crossed the
+        threshold; <b>Step 2</b> proves the chain emitted it, and the underlying signed peer votes
+        appear as their own rows in this log.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <p className="av-step-note">{descriptor.question}</p>
+      {tallyState === 'loading' && <p className="av-step-note">Counting signed peer votes…</p>}
+      {tallyState === 'error' && <p className="av-err">Could not load the tally.</p>}
+      {tallyState === 'ok' && (tally || []).length > 0 && (
+        <div className="av-kv">
+          {(tally || []).map(t => (
+            <div key={t.label} className="av-row">
+              <span className="k">{t.label}</span>
+              <span className="v"><b>{t.count ?? '—'}</b> signed</span>
+            </div>
+          ))}
+          {descriptor.threshold != null && (
+            <div className="av-row"><span className="k">{descriptor.thresholdLabel}</span><span className="v">{descriptor.threshold}{peers ? ` of ${peers} active peers` : ''}</span></div>
+          )}
+          {descriptor.thresholdNote && (
+            <div className="av-row"><span className="k">Note</span><span className="v" style={{ opacity: 0.8 }}>{descriptor.thresholdNote}</span></div>
+          )}
+        </div>
+      )}
+      <p className="av-verdict">
+        The on-chain {descriptor.outcomeLabel.toLowerCase()} is the contract's projection of the
+        signed peer votes above. Each one is its own row in this log with an EIP-712 signature you
+        can recover in your own browser.
+      </p>
+      {onLinkback && descriptor.filterTerm && (
+        <button type="button" className="av-btn" onClick={() => onLinkback(descriptor.filterTerm)}>
+          View the contributing signed votes →
+        </button>
+      )}
+    </>
+  );
+}
+
+function VerifierModal({ a, onClose, handle, peers, onLinkback }) {
   const [status, setStatus] = useState('idle');   // step 1 recovery
   const [recovered, setRecovered] = useState(null);
   const [error, setError] = useState('');
@@ -224,6 +318,18 @@ function VerifierModal({ a, onClose, handle }) {
   }, [onClose]);
 
   const isDerived = !!a.derived;
+  // A "Network" row is the contract's projection of underlying signed peer
+  // votes (canonized / expelled / lapsed / deprecated / reaffirmed / ratified
+  // / retired) OR the off-chain consensus-reject projection. For these the
+  // step 1 body renders a DerivationPanel instead of signature recovery.
+  const isNetwork = (!a.peer_addr && a.peer_handle === 'Network') || isDerived;
+  const descriptor = isNetwork && !isDerived ? getVoteLogDerivation(a, peers) : null;
+  const precomputed = isDerived ? {
+    dissents: a.derived_dissents,
+    peers: a.derived_peers,
+    need: a.derived_need,
+    filterTerm: a.node_hash || null,
+  } : null;
   const rawSig = a.eip712_sig || '';
   const vote = voteMessage(a);
   const canRecoverVote = !!vote;
@@ -256,8 +362,8 @@ function VerifierModal({ a, onClose, handle }) {
   };
 
   // Per-step rail state + status chip.
-  const authState = isDerived ? 'na' : !sig ? 'na' : status === 'ok' ? 'ok' : status === 'bad' ? 'bad' : 'idle';
-  const authChip  = isDerived ? 'Derived' : !sig ? 'Not archived' : status === 'ok' ? 'Authentic ✓' : status === 'bad' ? 'Mismatch ✗' : null;
+  const authState = isNetwork ? 'na' : !sig ? 'na' : status === 'ok' ? 'ok' : status === 'bad' ? 'bad' : 'idle';
+  const authChip  = isNetwork ? 'Derived' : !sig ? 'Not archived' : status === 'ok' ? 'Authentic ✓' : status === 'bad' ? 'Mismatch ✗' : null;
 
   const txState = a.tx_hash ? 'idle' : 'na';
   const txChip  = isDerived ? 'Off-chain by design' : a.tx_hash ? 'On-chain' : 'No tx';
@@ -277,7 +383,7 @@ function VerifierModal({ a, onClose, handle }) {
         <button className="av-close" onClick={onClose} aria-label="Close">×</button>
 
         <span className="av-eyebrow">Independent verification</span>
-        <h3 className="av-title">{isDerived ? 'How this consensus outcome was derived' : 'Prove this vote yourself'}</h3>
+        <h3 className="av-title">{isNetwork ? 'How this consensus outcome was derived' : 'Prove this vote yourself'}</h3>
         <p className="av-lead">
           {isDerived ? (
             <>
@@ -287,6 +393,14 @@ function VerifierModal({ a, onClose, handle }) {
               arithmetically impossible. Nothing here is invented: each dissent has its own row in
               this log, signed by its peer and independently verifiable. The steps below explain the
               math and how to inspect the underlying signatures.
+            </>
+          ) : isNetwork ? (
+            <>
+              The contract emitted this outcome when the underlying signed peer votes crossed
+              threshold. This row is a <b>projection</b> of those votes: <b>Step 1</b> shows the
+              tally + threshold derived from the signed peer attestations; <b>Step 2</b> shows the
+              on-chain transaction the contract emitted. Each contributing peer vote is its own row
+              in this log with an EIP-712 signature you can recover in your browser.
             </>
           ) : (
             <>
@@ -300,15 +414,24 @@ function VerifierModal({ a, onClose, handle }) {
 
         <div className="av-steps">
 
-          {/* STEP 1 — Authorship */}
+          {/* STEP 1 — Authorship (signed-peer rows) / Derivation (Network rows) */}
           <ProofStep
             n={1}
-            title="Who signed it"
-            proves="That the named peer — not the platform — authored this exact verdict and note."
+            title={isNetwork ? 'How peers got here' : 'Who signed it'}
+            proves={isNetwork
+              ? 'That the on-chain outcome is the contract\'s projection of the underlying signed peer votes — recountable from the public attestations table.'
+              : 'That the named peer — not the platform — authored this exact verdict and note.'}
             state={authState}
             chip={authChip}
           >
-            {sig ? (
+            {isNetwork ? (
+              <DerivationPanel
+                descriptor={descriptor}
+                precomputed={precomputed}
+                peers={peers}
+                onLinkback={onLinkback}
+              />
+            ) : sig ? (
               <>
                 <div className="av-verify">
                   <button
@@ -362,29 +485,6 @@ function VerifierModal({ a, onClose, handle }) {
                   </div>
                 </details>
               </>
-            ) : isDerived ? (
-              <div className="av-kv">
-                <div className="av-row"><span className="k">Signed dissents</span><span className="v"><b>{a.derived_dissents}</b> peers signed a reject on this proposal</span></div>
-                {a.derived_peers != null && <div className="av-row"><span className="k">Active peers</span><span className="v">{a.derived_peers}</span></div>}
-                {a.derived_need != null && <div className="av-row"><span className="k">Endorses needed to ratify</span><span className="v">{a.derived_need}</span></div>}
-                {a.derived_peers != null && a.derived_need != null && (
-                  <div className="av-row"><span className="k">Eligible endorsers left</span><span className="v">{Math.max(0, a.derived_peers - a.derived_dissents)} — below the {a.derived_need} threshold</span></div>
-                )}
-                <p className="av-verdict">
-                  Once dissents exceed <code>peers − threshold</code>, fewer than the required number of
-                  peers remain available to endorse — ratification becomes impossible regardless of how
-                  many of them later vote yes. This row marks that crossing. The underlying signed
-                  dissents each have their own row in this log; filter the log by this evidence to
-                  inspect every signature individually.
-                </p>
-              </div>
-            ) : !a.peer_addr ? (
-              <p className="av-step-note">
-                This is a <b>Network consensus outcome</b> — no peer signed it. The contract emitted
-                this event when peer votes crossed the threshold, so there is no individual author
-                to recover. <b>Step 2</b> proves the chain emitted it; the underlying peer votes
-                have their own rows in this log.
-              </p>
             ) : (
               <p className="av-step-note">
                 No off-chain signature is archived for this vote — the voter likely lost
@@ -447,24 +547,24 @@ function VerifierModal({ a, onClose, handle }) {
 // row whose Vote-digest fields aren't surfaced (or any sig-less gap row) reads
 // "On-chain ✓" and leans on the tx proof, never claiming a signature it can't
 // replay.
-export default function AttestationVerifier({ a, handle }) {
+export default function AttestationVerifier({ a, handle, peers, onLinkback }) {
   const [open, setOpen] = useState(false);
   const hasSig = canRecoverRow(a);
-  const isDerived = !!a.derived;
+  const isNetwork = (!a.peer_addr && a.peer_handle === 'Network') || !!a.derived;
   return (
     <>
       <button
         type="button"
-        className={`av-trigger ${isDerived ? 'is-derived' : hasSig ? '' : 'is-chainonly'}`}
+        className={`av-trigger ${isNetwork ? 'is-derived' : hasSig ? '' : 'is-chainonly'}`}
         onClick={() => setOpen(true)}
-        title={isDerived
-          ? 'Derived consensus outcome — computed from signed peer dissents (no on-chain reject exists for taxonomy)'
+        title={isNetwork
+          ? 'Derived consensus outcome — projection of the signed peer votes (modal shows the tally + the on-chain emission tx)'
           : hasSig ? 'Verify the EIP-712 signature yourself' : 'On-chain vote — view the proof'}
       >
         <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M12 2l7 3v6c0 4.5-3 8.5-7 9-4-.5-7-4.5-7-9V5l7-3z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
-        <span className="sig">{isDerived ? 'Derived ✓' : hasSig ? 'EIP-712 ✓' : 'On-chain ✓'}</span>
+        <span className="sig">{isNetwork ? 'Derived ✓' : hasSig ? 'EIP-712 ✓' : 'On-chain ✓'}</span>
       </button>
-      {open && <VerifierModal a={a} onClose={() => setOpen(false)} handle={handle} />}
+      {open && <VerifierModal a={a} onClose={() => setOpen(false)} handle={handle} peers={peers} onLinkback={onLinkback} />}
     </>
   );
 }

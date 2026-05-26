@@ -1298,6 +1298,183 @@ export function useDerivedConsensusRejects(activePeers, query = '', verdict = ''
   return rows;
 }
 
+// ── Network-row derivation descriptors ───────────────────────────────────────
+//
+// Every "Network" outcome row in the vote log (binding / taxonomy / challenge
+// lifecycle) and in the peer registry log (verified / revoked / cancelled) is
+// the contract's projection of underlying signed peer votes. These descriptors
+// map each outcome type to the query that produces its tally + the threshold
+// that was crossed, so the proof modal can render "X of N peers signed Y, ≥
+// threshold Z" — the on-chain consensus, derived from data anyone can re-query.
+//
+// Returns null for non-consensus Network rows (review timeouts, inactivity
+// prunes, owner seeds) and for any signed-peer row.
+
+const NOMINEE_THRESHOLD       = (peers) => Math.max(1, Math.ceil(peers / 2));
+const REVOKE_THRESHOLD        = (peers) => Math.max(1, Math.ceil(peers / 2));
+const RETIRE_THRESHOLD        = (peers) => Math.max(1, Math.ceil((2 * peers) / 3));
+
+export function getVoteLogDerivation(row, peers) {
+  if (!row || row.peer_handle !== 'Network') return null;
+  const tier      = Number(row.evidence_tier ?? 0) || null;
+  const bindingId = row.binding_id || null;
+  const nodeHash  = row.node_hash || null;
+  const eviTerm   = row.evidence_id_text || row.evidence_id || null;
+  switch (row.verdict) {
+    case 'canonized':
+      return bindingId ? {
+        kind: 'canonized',
+        outcomeLabel: 'Approved into the canon',
+        question: 'How many peers approved this binding?',
+        query: { table: 'attestations', filter: { binding_id: bindingId, phase: 'review', verdict: 'approve' } },
+        threshold: tier && peers ? canonizeThreshold(tier, peers) : null,
+        thresholdLabel: 'Canonize threshold',
+        filterTerm: eviTerm,
+      } : null;
+    case 'expelled':
+      return bindingId ? {
+        kind: 'expelled',
+        outcomeLabel: 'Expelled at review',
+        question: 'How many peers rejected this binding?',
+        query: { table: 'attestations', filter: { binding_id: bindingId, phase: 'review', verdict: 'reject' } },
+        threshold: peers ? expelThreshold(peers) : null,
+        thresholdLabel: 'Expel threshold',
+        filterTerm: eviTerm,
+      } : null;
+    case 'lapsed':
+      if (row.phase === 'review' && bindingId) {
+        return {
+          kind: 'review-lapsed',
+          outcomeLabel: 'Lapsed at review (no consensus)',
+          question: 'Why did this binding lapse?',
+          queries: [
+            { table: 'attestations', label: 'Approves', filter: { binding_id: bindingId, phase: 'review', verdict: 'approve' } },
+            { table: 'attestations', label: 'Rejects',  filter: { binding_id: bindingId, phase: 'review', verdict: 'reject' } },
+          ],
+          threshold: tier && peers ? canonizeThreshold(tier, peers) : null,
+          thresholdLabel: 'Canonize threshold (not reached)',
+          filterTerm: eviTerm,
+        };
+      }
+      if (row.phase === 'taxonomy' && nodeHash) {
+        return {
+          kind: 'taxonomy-lapsed',
+          outcomeLabel: 'Proposal lapsed (no ratification)',
+          question: 'How many peers endorsed before the window closed?',
+          query: { table: 'attestations', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
+          threshold: tier && peers ? bundleThreshold(tier, peers) : null,
+          thresholdLabel: 'Bundle threshold (not reached)',
+          filterTerm: nodeHash,
+        };
+      }
+      return null;
+    case 'deprecated':
+      return bindingId ? {
+        kind: 'deprecated',
+        outcomeLabel: 'Deprecated at challenge',
+        question: 'How many peers voted to deprecate?',
+        query: { table: 'attestations', filter: { binding_id: bindingId, phase: 'challenge', verdict: 'challenge' } },
+        threshold: tier && peers ? deprecateThreshold(tier, peers) : null,
+        thresholdLabel: 'Deprecate threshold',
+        filterTerm: eviTerm,
+      } : null;
+    case 'reaffirmed':
+      return bindingId ? {
+        kind: 'reaffirmed',
+        outcomeLabel: 'Reaffirmed against the challenge',
+        question: 'Why did the challenge fail?',
+        queries: [
+          { table: 'attestations', label: 'Challenge votes', filter: { binding_id: bindingId, phase: 'challenge', verdict: 'challenge' } },
+          { table: 'attestations', label: 'Defend votes',    filter: { binding_id: bindingId, phase: 'challenge', verdict: 'defend' } },
+        ],
+        threshold: tier && peers ? deprecateThreshold(tier, peers) : null,
+        thresholdLabel: 'Deprecate threshold (not reached)',
+        filterTerm: eviTerm,
+      } : null;
+    case 'ratified':
+      return nodeHash ? {
+        kind: 'ratified',
+        outcomeLabel: 'Ratified into the taxonomy',
+        question: 'How many peers endorsed this proposal?',
+        query: { table: 'attestations', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
+        threshold: tier && peers ? bundleThreshold(tier, peers) : null,
+        thresholdLabel: 'Bundle threshold',
+        thresholdNote: 'Proposer counts as endorsement #1.',
+        filterTerm: nodeHash,
+      } : null;
+    case 'retired':
+      return nodeHash ? {
+        kind: 'retired',
+        outcomeLabel: 'Retired off the canon',
+        question: 'How many peers voted to retire?',
+        query: { table: 'gov_votes', filter: { subject: nodeHash, verdict: 'retire' } },
+        threshold: peers ? RETIRE_THRESHOLD(peers) : null,
+        thresholdLabel: 'Retire threshold (ceil 2n/3)',
+        filterTerm: nodeHash,
+      } : null;
+    default:
+      return null;
+  }
+}
+
+export function getRegistryDerivation(row, peers) {
+  if (!row) return null;
+  const subject = (row.subjectAddr || '').toLowerCase();
+  if (!subject) return null;
+  switch (row.action) {
+    case 'verified':
+      return {
+        kind: 'verified',
+        outcomeLabel: 'Verified as a peer',
+        question: 'How many peers endorsed this nominee?',
+        query: { table: 'nominee_votes', filter: { nominee_addr: subject, verdict: 'endorse' } },
+        threshold: peers ? NOMINEE_THRESHOLD(peers) : null,
+        thresholdLabel: 'Nominee threshold (ceil n/2)',
+        thresholdNote: 'Nominator counts as endorsement #1.',
+        filterTerm: subject,
+      };
+    case 'revoked':
+      return {
+        kind: 'revoked',
+        outcomeLabel: 'Revoked from the peer set',
+        question: 'How many peers voted to discard?',
+        query: { table: 'revocation_votes', filter: { subject_addr: subject, verdict: 'discard' } },
+        threshold: peers ? REVOKE_THRESHOLD(peers) : null,
+        thresholdLabel: 'Revoke threshold (ceil n/2)',
+        filterTerm: subject,
+      };
+    case 'cancelled':
+      return {
+        kind: 'cancelled',
+        outcomeLabel: 'Revocation cancelled by keep dissents',
+        question: 'How many peers signed a keep dissent?',
+        query: { table: 'revocation_votes', filter: { subject_addr: subject, verdict: 'keep' } },
+        threshold: null,
+        thresholdLabel: 'Cancelled once discards can no longer reach the revoke threshold',
+        filterTerm: subject,
+      };
+    default:
+      return null;
+  }
+}
+
+// One supabase head-count per query in the descriptor. Returns an array of
+// { label, count } so the panel can render multi-side tallies (lapsed,
+// reaffirmed) uniformly with single-side ones (canonized, revoked, ...).
+export async function fetchDerivationTally(descriptor) {
+  if (!descriptor) return null;
+  const queries = descriptor.queries || (descriptor.query ? [descriptor.query] : []);
+  const out = [];
+  for (const q of queries) {
+    if (!q?.table) continue;
+    let req = supabase.from(q.table).select('*', { count: 'exact', head: true });
+    for (const [k, v] of Object.entries(q.filter || {})) req = req.eq(k, v);
+    const { count, error } = await req;
+    out.push({ label: q.label || 'Signed peers', count: error ? null : (count ?? 0), error: error?.message || null });
+  }
+  return out;
+}
+
 // ── Per-evidence vote history hook ───────────────────────────────────────────
 //
 // Every signed peer vote on one piece of evidence (across all its topic
@@ -1536,12 +1713,24 @@ export function usePeerRegistryLog(pageSize = REGISTRY_PAGE, query = '', kind = 
   // loaded on-chain window; once the chain stream is exhausted, show them all.
   const frontier = hasMore && chain.length ? chain[chain.length - 1].ts : null;
   const shownKeeps = frontier ? keeps.filter(x => x.ts && x.ts >= frontier) : keeps;
-  // Nominee graduation fires both NomineeVerified + PeerAdded in the same tx
-  // (PeerGovernance._checkNominee calls core.gAddPeer then emits NomineeVerified).
-  // Suppress the PeerAdded twin so the log shows a single "Verified" line; owner-
-  // seeded peers still surface as "Seeded" since their tx carries no Verified row.
+  // Two contract-side foldings keep "consensus + downstream peer-set mutation"
+  // tx-pairs from showing as two rows:
+  //   • Nominee graduation: _checkNominee calls gAddPeer then emits NomineeVerified
+  //     → suppress the PeerAdded twin; show one "Verified" row.
+  //   • Successful revocation: voteRevoke calls gRemovePeer then emits PeerRevoked
+  //     → suppress the PeerRemoved twin; show one "Revoked" row.
+  // Owner-seeded peers still surface as "Seeded" (no NomineeVerified twin);
+  // orphan PeerRemoved rows (no PeerRevoked twin) are inactivity-prune outcomes
+  // and are relabelled "Inactivity" so the action is read at a glance.
   const verifiedTx = new Set(chain.filter(r => r.action === 'verified' && r.txHash).map(r => r.txHash));
-  const chainShown = chain.filter(r => !(r.action === 'seeded' && r.txHash && verifiedTx.has(r.txHash)));
+  const revokedTx  = new Set(chain.filter(r => r.action === 'revoked'  && r.txHash).map(r => r.txHash));
+  const chainShown = chain
+    .filter(r => {
+      if (r.action === 'seeded'  && r.txHash && verifiedTx.has(r.txHash)) return false;
+      if (r.action === 'removed' && r.txHash && revokedTx.has(r.txHash))  return false;
+      return true;
+    })
+    .map(r => r.action === 'removed' ? { ...r, action: 'inactivity' } : r);
   const log = [...chainShown, ...shownKeeps].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
   const total = chainCount === null ? null : chainCount + keeps.length - (chain.length - chainShown.length);
 
