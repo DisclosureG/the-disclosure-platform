@@ -347,7 +347,7 @@ export function DerivationPanel({ descriptor, precomputed, onLinkback, handleMap
         ? (Array.isArray(descriptor.signers) ? descriptor.signers : [descriptor.signers])
         : [];
       const groups = await Promise.all(
-        rawSources.map(async (s) => ({ label: s.label || 'Signed peers', signers: await fetchSigners(s, c?.payload) })),
+        rawSources.map(async (s) => ({ label: s.label || 'Signed peers', signers: await fetchSigners(s, c?.payload, descriptor.moment) })),
       );
       if (cancelled) return;
       setTally(t);

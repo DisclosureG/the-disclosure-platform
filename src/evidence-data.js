@@ -1359,7 +1359,14 @@ export function getVoteLogDerivation(row) {
         moment: { txHash, events: ['BindingCanonized'] },
         signers: [
           { label: 'Review approvers',          events: ['ReviewVoteCast'], match: { 'payload->>binding_hash': bindingHash, 'payload->>approve': 'true' }, peerFrom: 'peer_addr' },
-          { label: 'Founding-bundle endorsers', events: ['NodeEndorsed'],   matchFromChainPayload: 'node_hash',                                            peerFrom: 'payload.endorser' },
+          {
+            label: 'Founding-bundle endorsers',
+            events: ['NodeEndorsed'],
+            // BindingCanonized payload has no node_hash; the parent pillar's
+            // hash is in PillarRatified / TopicRatified in the same tx.
+            matchFromSiblingTxEvent: { events: ['PillarRatified', 'TopicRatified'], readField: 'node_hash', appliedTo: 'payload->>node_hash' },
+            peerFrom: 'payload.endorser',
+          },
         ],
         filterTerm: eviTerm,
       } : null;
@@ -1601,7 +1608,7 @@ export async function fetchChainCount(descriptor) {
 //   { table: 'gov_votes', match: { subject: X }, peerFrom: 'peer_addr', handleFrom: 'peer_handle', sigFrom: 'eip712_sig' }
 // `matchFromChainPayload` keys the query off a field on the sibling chain event
 // (used for ratified, where the parent pillar's node_hash isn't on the row).
-export async function fetchSigners(source, chainPayload = null) {
+export async function fetchSigners(source, chainPayload = null, moment = null) {
   if (!source) return [];
   // Off-chain table path (currently only used by `retired` via gov_votes).
   if (source.table) {
@@ -1627,17 +1634,36 @@ export async function fetchSigners(source, chainPayload = null) {
     }
     return out;
   }
+  // Resolve a filter value that lives on a SIBLING chain event in the same tx
+  // (used by canonized's founding-bundle group: the parent pillar's node_hash
+  // is in PillarRatified/TopicRatified, not in BindingCanonized). The events
+  // list is treated as a priority order — the first one present in the tx wins.
+  // This matters when a bundled pillar+topic fire together: peers signed the
+  // PILLAR's hash, so PillarRatified must be preferred over TopicRatified.
+  let siblingFilter = null;
+  if (source.matchFromSiblingTxEvent && moment?.txHash) {
+    for (const eventName of source.matchFromSiblingTxEvent.events) {
+      const sibling = await fetchNetworkEventByTx(moment.txHash, [eventName]);
+      const value = sibling?.payload?.[source.matchFromSiblingTxEvent.readField];
+      if (value) {
+        siblingFilter = { field: source.matchFromSiblingTxEvent.appliedTo, value };
+        break;
+      }
+    }
+    if (!siblingFilter) return [];
+  }
   // chain_events path.
   let req = supabase
     .from('chain_events')
     .select('peer_addr, payload, tx_hash, block_number, log_index, occurred_at')
     .in('event_name', source.events);
   for (const [k, v] of Object.entries(source.match || {})) req = req.eq(k, v);
-  if (source.matchFromChainPayload && chainPayload?.[source.matchFromChainPayload]) {
-    req = req.eq(`payload->>${source.matchFromChainPayload}`, chainPayload[source.matchFromChainPayload]);
-  } else if (source.matchFromChainPayload && !chainPayload?.[source.matchFromChainPayload]) {
-    // We need a value to filter by — bail out rather than return all events.
-    return [];
+  if (siblingFilter) {
+    req = req.eq(siblingFilter.field, siblingFilter.value);
+  } else if (source.matchFromChainPayload) {
+    const v = chainPayload?.[source.matchFromChainPayload];
+    if (!v) return [];
+    req = req.eq(`payload->>${source.matchFromChainPayload}`, v);
   }
   req = req.order('block_number', { ascending: true }).order('log_index', { ascending: true });
   const { data, error } = await req;
