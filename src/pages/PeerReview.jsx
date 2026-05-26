@@ -1900,7 +1900,7 @@ function RegistryLogRow({ r, handleMap }) {
       <span className="peer-cell">
         {actorName
           ? <><Jazz addr={r.actorAddr} size={22} />{actorName}<CopyChip value={r.actorAddr} label="actor address" /></>
-          : <span style={{ color: 'var(--ink-faint)' }}>Genesis Peer</span>}
+          : <span style={{ color: 'var(--ink-faint)' }}>Network</span>}
       </span>
       <span className="detail">
         {note

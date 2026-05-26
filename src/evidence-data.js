@@ -1427,8 +1427,14 @@ export function usePeerRegistryLog(pageSize = REGISTRY_PAGE, query = '', kind = 
   // loaded on-chain window; once the chain stream is exhausted, show them all.
   const frontier = hasMore && chain.length ? chain[chain.length - 1].ts : null;
   const shownKeeps = frontier ? keeps.filter(x => x.ts && x.ts >= frontier) : keeps;
-  const log = [...chain, ...shownKeeps].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
-  const total = chainCount === null ? null : chainCount + keeps.length;
+  // Nominee graduation fires both NomineeVerified + PeerAdded in the same tx
+  // (PeerGovernance._checkNominee calls core.gAddPeer then emits NomineeVerified).
+  // Suppress the PeerAdded twin so the log shows a single "Verified" line; owner-
+  // seeded peers still surface as "Seeded" since their tx carries no Verified row.
+  const verifiedTx = new Set(chain.filter(r => r.action === 'verified' && r.txHash).map(r => r.txHash));
+  const chainShown = chain.filter(r => !(r.action === 'seeded' && r.txHash && verifiedTx.has(r.txHash)));
+  const log = [...chainShown, ...shownKeeps].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+  const total = chainCount === null ? null : chainCount + keeps.length - (chain.length - chainShown.length);
 
   return { log, loading, hasMore, loadMore, total };
 }
