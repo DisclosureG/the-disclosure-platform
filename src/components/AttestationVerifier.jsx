@@ -659,16 +659,21 @@ function VerifierModal({ a, onClose, handle, onLinkback, handleMap }) {
             )}
           </ProofStep>
 
-          {/* STEP 3 — Evidence + source integrity */}
-          <ProofStep
-            n={3}
-            title="What it was cast on"
-            proves="That the source link and content shown are exactly what was committed on-chain for this evidence."
-            state={contentState}
-            chip={contentChip}
-          >
-            <ContentProofBody a={a} onStatus={setContentStatus} />
-          </ProofStep>
+          {/* STEP 3 — Evidence + source integrity. Hidden when the row has no
+              evidence (taxonomy pillar/topic ratifications and node retirements
+              fire on a node, not on a piece of evidence — there's nothing to
+              bind a source link to). */}
+          {a.evidence_id && (
+            <ProofStep
+              n={3}
+              title="What it was cast on"
+              proves="That the source link and content shown are exactly what was committed on-chain for this evidence."
+              state={contentState}
+              chip={contentChip}
+            >
+              <ContentProofBody a={a} onStatus={setContentStatus} />
+            </ProofStep>
+          )}
 
         </div>
       </div>
