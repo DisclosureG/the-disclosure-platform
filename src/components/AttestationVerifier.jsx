@@ -350,6 +350,12 @@ export function DerivationPanel({ descriptor, precomputed, onLinkback }) {
               <span className="v"><b>{moment.threshold}</b>{moment.peers != null ? ` of ${moment.peers}` : ''} — the value the contract used at the time</span>
             </div>
           )}
+          {descriptor.thresholdFormula && (
+            <div className="av-row">
+              <span className="k">Contract formula</span>
+              <span className="v" style={{ fontFamily: 'var(--mono)', opacity: 0.85 }}>{descriptor.thresholdFormula}</span>
+            </div>
+          )}
           {descriptor.thresholdNote && (
             <div className="av-row"><span className="k">Note</span><span className="v" style={{ opacity: 0.8 }}>{descriptor.thresholdNote}</span></div>
           )}

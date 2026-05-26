@@ -1321,6 +1321,15 @@ const NOMINEE_THRESHOLD = (peers) => Math.max(1, Math.floor(peers / 3) + 1);  //
 const REVOKE_THRESHOLD  = (peers) => Math.max(1, Math.ceil(peers / 2));       // revokeThreshold = ceil(peers/2)
 const RETIRE_THRESHOLD  = (peers) => Math.max(1, Math.ceil((2 * peers) / 3)); // retireThreshold = ceil(2 peers/3)
 
+// On-chain percentage tables, surfaced in the panel's "Contract formula" row
+// so the math the contract ran is visible to the user. (See
+// _canonizeThresholdAt / _deprecateThresholdAt in EvidenceConsensus.sol.)
+const TIER_CANONIZE_PCT  = { 1: 60, 2: 55, 3: 51 };
+const TIER_DEPRECATE_PCT = { 1: 65, 2: 60, 3: 55 };
+const fmtCanonizeFormula  = (t) => t ? `ceil(peers × ${TIER_CANONIZE_PCT[t]}%) — tier ${t}`  : 'ceil(peers × tier_pct%) — tier 1: 60% · tier 2: 55% · tier 3: 51%';
+const fmtDeprecateFormula = (t) => t ? `ceil(peers × ${TIER_DEPRECATE_PCT[t]}%) — tier ${t}` : 'ceil(peers × tier_pct%) — tier 1: 65% · tier 2: 60% · tier 3: 55%';
+const fmtBundleFormula    = (t) => `max(floor(peers / 2) + 1, ${fmtCanonizeFormula(t)})`;
+
 export function getVoteLogDerivation(row) {
   if (!row || row.peer_handle !== 'Network') return null;
   const tier      = Number(row.evidence_tier ?? 0) || null;
@@ -1344,6 +1353,7 @@ export function getVoteLogDerivation(row) {
         chainCount: { events: ['BindingCanonized'], countField: 'approve_count', label: 'On-chain consensus count (approves / founding-bundle endorses)' },
         thresholdFn: (peers) => tier && peers ? canonizeThreshold(tier, peers) : null,
         thresholdLabel: 'Canonize threshold',
+        thresholdFormula: fmtCanonizeFormula(tier),
         thresholdNote: 'Canonization happens via review approves OR via founding-bundle endorses on the parent taxonomy node — the chain reuses `approve_count` for both paths.',
         moment: { txHash, events: ['BindingCanonized'] },
         filterTerm: eviTerm,
@@ -1356,6 +1366,7 @@ export function getVoteLogDerivation(row) {
         chainCount: { events: ['BindingExpelled'], countField: 'reject_count', label: 'On-chain rejects' },
         thresholdFn: (peers) => peers ? expelThreshold(peers) : null,
         thresholdLabel: 'Expel threshold',
+        thresholdFormula: 'ceil(peers × 25%)',
         moment: { txHash, events: ['BindingExpelled'] },
         filterTerm: eviTerm,
       } : null;
@@ -1371,6 +1382,7 @@ export function getVoteLogDerivation(row) {
           ],
           thresholdFn: (peers) => tier && peers ? canonizeThreshold(tier, peers) : null,
           thresholdLabel: 'Canonize threshold (not reached)',
+          thresholdFormula: fmtCanonizeFormula(tier),
           moment: { txHash, events: ['BindingLapsed'] },
           filterTerm: eviTerm,
         };
@@ -1383,6 +1395,7 @@ export function getVoteLogDerivation(row) {
           query: { table: 'attestations', label: 'Endorses cast', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
           thresholdFn: (peers) => tier && peers ? bundleThreshold(tier, peers) : null,
           thresholdLabel: 'Bundle threshold (not reached)',
+          thresholdFormula: fmtBundleFormula(tier),
           moment: { txHash, events: ['ProposalLapsed'] },
           filterTerm: row.topic_id || row.pillar_id || nodeHash,
         };
@@ -1396,6 +1409,7 @@ export function getVoteLogDerivation(row) {
         chainCount: { events: ['BindingDeprecated'], countField: 'challenge_votes', label: 'On-chain deprecate votes' },
         thresholdFn: (peers) => tier && peers ? deprecateThreshold(tier, peers) : null,
         thresholdLabel: 'Deprecate threshold',
+        thresholdFormula: fmtDeprecateFormula(tier),
         moment: { txHash, events: ['BindingDeprecated'] },
         filterTerm: eviTerm,
       } : null;
@@ -1410,6 +1424,7 @@ export function getVoteLogDerivation(row) {
         chainCount: { events: ['BindingReaffirmed'], countField: 'defense_votes', label: 'On-chain defend votes' },
         thresholdFn: (peers) => tier && peers ? deprecateThreshold(tier, peers) : null,
         thresholdLabel: 'Deprecate threshold (not reached)',
+        thresholdFormula: fmtDeprecateFormula(tier),
         moment: { txHash, events: ['BindingReaffirmed'] },
         filterTerm: eviTerm,
       } : null;
@@ -1419,16 +1434,17 @@ export function getVoteLogDerivation(row) {
       // that triggered ratification) has the authoritative count + threshold
       // straight from the contract. For a BUNDLED topic the NodeEndorsed is
       // for the parent pillar's node_hash — that's still the right count
-      // since the bundle ratifies on one shared endorsement gate. Using
-      // chainCount avoids the bug where filtering attestations by the topic's
-      // own node_hash returns 0 for bundled topics (peers signed the parent's
-      // hash, not the topic's).
+      // since the bundle ratifies on one shared endorsement gate.
       return nodeHash ? {
         kind: 'ratified',
         outcomeLabel: 'Ratified into the taxonomy',
         question: 'How many peers endorsed this proposal?',
         chainCount: { events: ['NodeEndorsed'], countField: 'endorsements', thresholdField: 'threshold', label: 'On-chain endorsements' },
         thresholdLabel: 'Bundle threshold',
+        // Founding-evidence tier isn't on the row (the chain event has no
+        // evidence_id), so we show the generic bundle formula with the tier
+        // table; the actual value above comes from the chain payload anyway.
+        thresholdFormula: fmtBundleFormula(null),
         moment: { txHash, events: ['PillarRatified', 'TopicRatified'] },
         // Slug-based linkback so the log search lands on rows whose pillar /
         // topic title matches — node_hash hex isn't surfaced in the log.
@@ -1442,7 +1458,8 @@ export function getVoteLogDerivation(row) {
         outcomeLabel: 'Retired off the canon',
         question: 'How many peers voted to retire?',
         chainCount: { events: ['NodeRetireVoteCast'], countField: 'votes', thresholdField: 'threshold', label: 'On-chain retire votes' },
-        thresholdLabel: 'Retire threshold (ceil 2 peers/3)',
+        thresholdLabel: 'Retire threshold',
+        thresholdFormula: 'ceil(2 × peers / 3)',
         moment: { txHash, events: ['NodeRetired'] },
         filterTerm: row.topic_id || row.pillar_id || nodeHash,
       } : null;
@@ -1486,7 +1503,8 @@ export function getRegistryDerivation(row) {
         question: 'How many peers endorsed this nominee?',
         chainCount: { events: ['PeerEndorsed'], countField: 'endorsements', thresholdField: 'threshold', label: 'On-chain endorsements' },
         thresholdFn: (peers) => peers != null ? NOMINEE_THRESHOLD(peers) : null,
-        thresholdLabel: 'Nominee threshold (peers/3 + 1)',
+        thresholdLabel: 'Nominee threshold',
+        thresholdFormula: 'floor(peers / 3) + 1',
         // NomineeVerified.payload.active_peer_count is the POST-add value;
         // the threshold check inside the same tx used the PRE-add count.
         moment: { ...moment, peersAdjust: -1 },
@@ -1499,7 +1517,8 @@ export function getRegistryDerivation(row) {
         question: 'How many peers voted to discard?',
         chainCount: { events: ['RevocationVoteCast'], countField: 'votes', thresholdField: 'threshold', label: 'On-chain discard votes' },
         thresholdFn: (peers) => peers != null ? REVOKE_THRESHOLD(peers) : null,
-        thresholdLabel: 'Revoke threshold (ceil peers/2)',
+        thresholdLabel: 'Revoke threshold',
+        thresholdFormula: 'ceil(peers / 2)',
         // PeerRevoked.payload.active_peer_count is POST-removal; the threshold
         // check inside the same tx used the PRE-removal count.
         moment: { ...moment, peersAdjust: 1 },
