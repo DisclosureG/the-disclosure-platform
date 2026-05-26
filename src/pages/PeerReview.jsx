@@ -1792,7 +1792,7 @@ function LogRow({ r, tax, onOpen, handleMap, onLinkback }) {
           )
           : <span style={{ color: 'var(--ink-faint)' }}>—</span>}
       </span>
-      <span className="tx"><AttestationVerifier a={r} handle={peerName} onLinkback={onLinkback} /></span>
+      <span className="tx"><AttestationVerifier a={r} handle={peerName} onLinkback={onLinkback} handleMap={handleMap} /></span>
       {note && showNote && (
         <div className="pr-log-note">
           <span className="pr-log-note-label">Deliberation note</span>
@@ -2002,7 +2002,7 @@ function RegistryLogRow({ r, handleMap, onLinkback }) {
           )
           : <span style={{ color: 'var(--ink-faint)' }}>—</span>}
       </span>
-      <span className="tx"><RegistryProofVerifier r={r} actorName={actorName} actionLabel={act.label} onLinkback={onLinkback} /></span>
+      <span className="tx"><RegistryProofVerifier r={r} actorName={actorName} actionLabel={act.label} onLinkback={onLinkback} handleMap={handleMap} /></span>
       {note && showNote && (
         <div className="pr-log-note">
           <span className="pr-log-note-label">Deliberation note</span>

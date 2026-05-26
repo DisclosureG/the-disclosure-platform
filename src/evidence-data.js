@@ -1332,20 +1332,21 @@ const fmtBundleFormula    = (t) => `max(floor(peers / 2) + 1, ${fmtCanonizeFormu
 
 export function getVoteLogDerivation(row) {
   if (!row || row.peer_handle !== 'Network') return null;
-  const tier      = Number(row.evidence_tier ?? 0) || null;
-  const bindingId = row.binding_id || null;
-  const nodeHash  = row.node_hash || null;
-  const eviTerm   = row.evidence_id_text || row.evidence_id || null;
-  const txHash    = row.tx_hash || null;
+  const tier        = Number(row.evidence_tier ?? 0) || null;
+  const bindingId   = row.binding_id || null;
+  const bindingHash = row.binding_hash || null;  // bytes32, lowercased — keyed in chain_events payloads
+  const nodeHash    = row.node_hash || null;
+  const eviTerm     = row.evidence_id_text || row.evidence_id || null;
+  const txHash      = row.tx_hash || null;
   if (!txHash) return null;
   switch (row.verdict) {
     case 'canonized':
       // BindingCanonized.payload.approve_count is reused by the contract for
       // both paths: under review it's the approve tally; under the founding-
       // bundle path it's the node endorsements count (see EvidenceConsensus.sol
-      // line 939 — `approveCount: endorsements` for the founding mint). So the
-      // chain count is the authoritative canonization count regardless of path;
-      // the label below names both for honesty.
+      // line 939 — `approveCount: endorsements` for the founding mint). Signers
+      // are queried for BOTH paths; only one will return rows (founding bindings
+      // can't be reviewed; cross-listings via fileBinding go through review).
       return bindingId ? {
         kind: 'canonized',
         outcomeLabel: 'Approved into the canon',
@@ -1356,6 +1357,10 @@ export function getVoteLogDerivation(row) {
         thresholdFormula: fmtCanonizeFormula(tier),
         thresholdNote: 'Canonization happens via review approves OR via founding-bundle endorses on the parent taxonomy node — the chain reuses `approve_count` for both paths.',
         moment: { txHash, events: ['BindingCanonized'] },
+        signers: [
+          { label: 'Review approvers',          events: ['ReviewVoteCast'], match: { 'payload->>binding_hash': bindingHash, 'payload->>approve': 'true' }, peerFrom: 'peer_addr' },
+          { label: 'Founding-bundle endorsers', events: ['NodeEndorsed'],   matchFromChainPayload: 'node_hash',                                            peerFrom: 'payload.endorser' },
+        ],
         filterTerm: eviTerm,
       } : null;
     case 'expelled':
@@ -1368,6 +1373,7 @@ export function getVoteLogDerivation(row) {
         thresholdLabel: 'Expel threshold',
         thresholdFormula: 'ceil(peers × 25%)',
         moment: { txHash, events: ['BindingExpelled'] },
+        signers: { events: ['ReviewVoteCast'], match: { 'payload->>binding_hash': bindingHash, 'payload->>approve': 'false' }, peerFrom: 'peer_addr' },
         filterTerm: eviTerm,
       } : null;
     case 'lapsed':
@@ -1376,14 +1382,14 @@ export function getVoteLogDerivation(row) {
           kind: 'review-lapsed',
           outcomeLabel: 'Lapsed at review (no consensus)',
           question: 'Why did this binding lapse?',
-          queries: [
-            { table: 'attestations', label: 'Approves cast', filter: { binding_id: bindingId, phase: 'review', verdict: 'approve' } },
-            { table: 'attestations', label: 'Rejects cast', filter: { binding_id: bindingId, phase: 'review', verdict: 'reject' } },
-          ],
           thresholdFn: (peers) => tier && peers ? canonizeThreshold(tier, peers) : null,
           thresholdLabel: 'Canonize threshold (not reached)',
           thresholdFormula: fmtCanonizeFormula(tier),
           moment: { txHash, events: ['BindingLapsed'] },
+          signers: [
+            { label: 'Approvers (cast)', events: ['ReviewVoteCast'], match: { 'payload->>binding_hash': bindingHash, 'payload->>approve': 'true' },  peerFrom: 'peer_addr' },
+            { label: 'Rejecters (cast)', events: ['ReviewVoteCast'], match: { 'payload->>binding_hash': bindingHash, 'payload->>approve': 'false' }, peerFrom: 'peer_addr' },
+          ],
           filterTerm: eviTerm,
         };
       }
@@ -1392,11 +1398,11 @@ export function getVoteLogDerivation(row) {
           kind: 'taxonomy-lapsed',
           outcomeLabel: 'Proposal lapsed (no ratification)',
           question: 'How many peers endorsed before the window closed?',
-          query: { table: 'attestations', label: 'Endorses cast', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
           thresholdFn: (peers) => tier && peers ? bundleThreshold(tier, peers) : null,
           thresholdLabel: 'Bundle threshold (not reached)',
           thresholdFormula: fmtBundleFormula(tier),
           moment: { txHash, events: ['ProposalLapsed'] },
+          signers: { events: ['NodeEndorsed'], match: { 'payload->>node_hash': nodeHash }, peerFrom: 'payload.endorser' },
           filterTerm: row.topic_id || row.pillar_id || nodeHash,
         };
       }
@@ -1411,21 +1417,25 @@ export function getVoteLogDerivation(row) {
         thresholdLabel: 'Deprecate threshold',
         thresholdFormula: fmtDeprecateFormula(tier),
         moment: { txHash, events: ['BindingDeprecated'] },
+        signers: { events: ['ChallengeVoteCast'], match: { 'payload->>binding_hash': bindingHash, 'payload->>support_challenge': 'true' }, peerFrom: 'peer_addr' },
         filterTerm: eviTerm,
       } : null;
     case 'reaffirmed':
-      // chainCount holds defend votes (the side that won). Keep only the
-      // challenge-side off-chain count so the panel shows the failed attack tally.
+      // chainCount holds defend votes (the side that won). Show signers from
+      // both sides: challengers who failed AND defenders who carried the day.
       return bindingId ? {
         kind: 'reaffirmed',
         outcomeLabel: 'Reaffirmed against the challenge',
         question: 'Why did the challenge fail?',
-        query: { table: 'attestations', label: 'Challenge votes (failed)', filter: { binding_id: bindingId, phase: 'challenge', verdict: 'challenge' } },
         chainCount: { events: ['BindingReaffirmed'], countField: 'defense_votes', label: 'On-chain defend votes' },
         thresholdFn: (peers) => tier && peers ? deprecateThreshold(tier, peers) : null,
         thresholdLabel: 'Deprecate threshold (not reached)',
         thresholdFormula: fmtDeprecateFormula(tier),
         moment: { txHash, events: ['BindingReaffirmed'] },
+        signers: [
+          { label: 'Defenders',  events: ['ChallengeVoteCast'], match: { 'payload->>binding_hash': bindingHash, 'payload->>support_challenge': 'false' }, peerFrom: 'peer_addr' },
+          { label: 'Challengers (failed)', events: ['ChallengeVoteCast'], match: { 'payload->>binding_hash': bindingHash, 'payload->>support_challenge': 'true' },  peerFrom: 'peer_addr' },
+        ],
         filterTerm: eviTerm,
       } : null;
     case 'ratified':
@@ -1434,33 +1444,35 @@ export function getVoteLogDerivation(row) {
       // that triggered ratification) has the authoritative count + threshold
       // straight from the contract. For a BUNDLED topic the NodeEndorsed is
       // for the parent pillar's node_hash — that's still the right count
-      // since the bundle ratifies on one shared endorsement gate.
+      // since the bundle ratifies on one shared endorsement gate. Signers are
+      // queried via `matchFromChainPayload: 'node_hash'` so the panel reads
+      // the parent's hash from the same chain event and queries by that.
       return nodeHash ? {
         kind: 'ratified',
         outcomeLabel: 'Ratified into the taxonomy',
         question: 'How many peers endorsed this proposal?',
         chainCount: { events: ['NodeEndorsed'], countField: 'endorsements', thresholdField: 'threshold', label: 'On-chain endorsements' },
         thresholdLabel: 'Bundle threshold',
-        // Founding-evidence tier isn't on the row (the chain event has no
-        // evidence_id), so we show the generic bundle formula with the tier
-        // table; the actual value above comes from the chain payload anyway.
         thresholdFormula: fmtBundleFormula(null),
         moment: { txHash, events: ['PillarRatified', 'TopicRatified'] },
-        // Slug-based linkback so the log search lands on rows whose pillar /
-        // topic title matches — node_hash hex isn't surfaced in the log.
+        signers: { events: ['NodeEndorsed'], matchFromChainPayload: 'node_hash', peerFrom: 'payload.endorser' },
         filterTerm: row.topic_id || row.pillar_id || nodeHash,
       } : null;
     case 'retired':
-      // NodeRetireVoteCast carries votes + threshold in the same tx that emits
-      // NodeRetired; read it instead of recomputing from formulas.
+      // NodeRetireVoteCast isn't currently indexed into chain_events (the
+      // indexer's ABI list doesn't include it), so chainCount returns null and
+      // the signers source falls back to the gov_votes off-chain mirror (which
+      // gov-note writes after sig-verifying each retire vote — reliable).
       return nodeHash ? {
         kind: 'retired',
         outcomeLabel: 'Retired off the canon',
         question: 'How many peers voted to retire?',
         chainCount: { events: ['NodeRetireVoteCast'], countField: 'votes', thresholdField: 'threshold', label: 'On-chain retire votes' },
+        thresholdFn: (peers) => peers ? RETIRE_THRESHOLD(peers) : null,
         thresholdLabel: 'Retire threshold',
         thresholdFormula: 'ceil(2 × peers / 3)',
         moment: { txHash, events: ['NodeRetired'] },
+        signers: { table: 'gov_votes', match: { subject: nodeHash, verdict: 'retire' }, peerFrom: 'peer_addr', handleFrom: 'peer_handle', sigFrom: 'eip712_sig' },
         filterTerm: row.topic_id || row.pillar_id || nodeHash,
       } : null;
     default:
@@ -1505,9 +1517,8 @@ export function getRegistryDerivation(row) {
         thresholdFn: (peers) => peers != null ? NOMINEE_THRESHOLD(peers) : null,
         thresholdLabel: 'Nominee threshold',
         thresholdFormula: 'floor(peers / 3) + 1',
-        // NomineeVerified.payload.active_peer_count is the POST-add value;
-        // the threshold check inside the same tx used the PRE-add count.
         moment: { ...moment, peersAdjust: -1 },
+        signers: { events: ['PeerEndorsed'], match: { peer_addr: subject }, peerFrom: 'payload.endorser' },
         filterTerm: subject,
       };
     case 'revoked':
@@ -1519,9 +1530,8 @@ export function getRegistryDerivation(row) {
         thresholdFn: (peers) => peers != null ? REVOKE_THRESHOLD(peers) : null,
         thresholdLabel: 'Revoke threshold',
         thresholdFormula: 'ceil(peers / 2)',
-        // PeerRevoked.payload.active_peer_count is POST-removal; the threshold
-        // check inside the same tx used the PRE-removal count.
         moment: { ...moment, peersAdjust: 1 },
+        signers: { events: ['RevocationVoteCast'], match: { peer_addr: subject }, peerFrom: 'payload.voter' },
         filterTerm: subject,
       };
     // 'cancelled' is NOT a derivable consensus outcome: RevocationCancelled
@@ -1579,7 +1589,81 @@ export async function fetchChainCount(descriptor) {
     threshold: tf && row.payload?.[tf] != null ? Number(row.payload[tf]) : null,
     eventName: row.event_name,
     label:     descriptor.chainCount.label || 'On-chain count',
+    payload:   row.payload || null,  // full payload exposed so signers can match by e.g. parent node_hash
   };
+}
+
+// Resolve the actual peer addresses that participated in the consensus, going
+// through chain_events as the source of truth (off-chain mirrors can have
+// gaps). `source` shape:
+//   { events: ['ReviewVoteCast'], match: { 'payload->>binding_hash': X }, peerFrom: 'peer_addr' }
+//   or for outcomes that read from an off-chain table:
+//   { table: 'gov_votes', match: { subject: X }, peerFrom: 'peer_addr', handleFrom: 'peer_handle', sigFrom: 'eip712_sig' }
+// `matchFromChainPayload` keys the query off a field on the sibling chain event
+// (used for ratified, where the parent pillar's node_hash isn't on the row).
+export async function fetchSigners(source, chainPayload = null) {
+  if (!source) return [];
+  // Off-chain table path (currently only used by `retired` via gov_votes).
+  if (source.table) {
+    let req = supabase.from(source.table).select('*');
+    for (const [k, v] of Object.entries(source.match || {})) req = req.eq(k, v);
+    req = req.order('created_at', { ascending: true });
+    const { data, error } = await req;
+    if (error) return [];
+    const seen = new Set();
+    const out = [];
+    for (const row of data || []) {
+      const addr = row[source.peerFrom];
+      if (!addr) continue;
+      const k = String(addr).toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({
+        addr,
+        handle: source.handleFrom ? (row[source.handleFrom] || null) : null,
+        sig:    source.sigFrom    ? (row[source.sigFrom]    || null) : null,
+        txHash: row.tx_hash || null,
+      });
+    }
+    return out;
+  }
+  // chain_events path.
+  let req = supabase
+    .from('chain_events')
+    .select('peer_addr, payload, tx_hash, block_number, log_index, occurred_at')
+    .in('event_name', source.events);
+  for (const [k, v] of Object.entries(source.match || {})) req = req.eq(k, v);
+  if (source.matchFromChainPayload && chainPayload?.[source.matchFromChainPayload]) {
+    req = req.eq(`payload->>${source.matchFromChainPayload}`, chainPayload[source.matchFromChainPayload]);
+  } else if (source.matchFromChainPayload && !chainPayload?.[source.matchFromChainPayload]) {
+    // We need a value to filter by — bail out rather than return all events.
+    return [];
+  }
+  req = req.order('block_number', { ascending: true }).order('log_index', { ascending: true });
+  const { data, error } = await req;
+  if (error) return [];
+  const peerOf = (row) => {
+    if (source.peerFrom === 'peer_addr') return row.peer_addr;
+    if (source.peerFrom?.startsWith('payload.')) return row.payload?.[source.peerFrom.slice(8)];
+    return null;
+  };
+  const seen = new Set();
+  const out = [];
+  for (const row of data || []) {
+    const addr = peerOf(row);
+    if (!addr) continue;
+    const k = String(addr).toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({
+      addr,
+      handle: null,
+      sig:    row.payload?.sig || null,  // ReviewVoteCast / ChallengeVoteCast carry the EIP-712 sig in payload
+      txHash: row.tx_hash,
+      blockNumber: row.block_number,
+    });
+  }
+  return out;
 }
 
 // Find a chain_events row by tx hash + one of the candidate event_name values.

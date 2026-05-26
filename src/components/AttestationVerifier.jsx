@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { verifyTypedData } from 'ethers';
 import { ATTESTATION_DOMAIN, ATTESTATION_TYPES, VOTE_TYPES, CONSENSUS_CHAIN_ID } from '../lib/wallet-constants';
 import { recoverAttestationSigner, computeContentHash } from '../lib/wallet';
-import { getVoteLogDerivation, fetchDerivationTally, fetchNetworkEventByTx, fetchChainCount, peerCountAtBlock } from '../evidence-data';
+import { getVoteLogDerivation, fetchDerivationTally, fetchNetworkEventByTx, fetchChainCount, fetchSigners, peerCountAtBlock } from '../evidence-data';
 
 const explorerBase = CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com';
 const SHORT = (a) => (a ? `${a.slice(0, 10)}…${a.slice(-8)}` : '');
@@ -259,56 +259,125 @@ async function resolveMomentPeers(moment) {
   return { peers: null, blockNumber: null };
 }
 
-export function DerivationPanel({ descriptor, precomputed, onLinkback }) {
+function SignersList({ groups, handleMap }) {
+  if (!groups || groups.length === 0) return null;
+  return (
+    <div className="av-signers">
+      {groups.map((g) => (
+        <div key={g.label} className="av-signers-group">
+          <div className="av-signers-head">
+            <span className="av-signers-label">{g.label}</span>
+            <span className="av-signers-count">{g.signers.length}</span>
+          </div>
+          {g.signers.length === 0 ? (
+            <p className="av-signers-empty">No peer votes recorded for this side.</p>
+          ) : (
+            <ul className="av-signers-list">
+              {g.signers.map((s) => {
+                const name = s.handle || handleMap?.[s.addr.toLowerCase()] || SHORT(s.addr);
+                return (
+                  <li key={s.addr} className="av-signers-row">
+                    <span className="av-signers-name">{name}</span>
+                    <span className="av-signers-addr mono">{SHORT(s.addr)}</span>
+                    {s.txHash && (
+                      <a
+                        className="av-signers-tx"
+                        href={`${explorerBase}/tx/${s.txHash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="View this peer's vote tx on BscScan"
+                      >tx ↗</a>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function DerivationPanel({ descriptor, precomputed, onLinkback, handleMap }) {
   const [tally, setTally] = useState(null);
-  const [moment, setMoment] = useState(null); // { peers, blockNumber, threshold }
-  const [chain, setChain] = useState(null);   // { count, threshold, label } from chain_events payload
-  const [state, setState] = useState(precomputed ? 'ok' : 'loading');
+  const [moment, setMoment] = useState(null);   // { peers, blockNumber, threshold }
+  const [chain, setChain] = useState(null);     // { count, threshold, payload } from chain_events payload
+  const [signerGroups, setSignerGroups] = useState([]);
+  const [state, setState] = useState('loading');
 
   useEffect(() => {
-    if (precomputed || !descriptor) return;
     let cancelled = false;
     setState('loading');
-    Promise.all([
-      fetchDerivationTally(descriptor),
-      resolveMomentPeers(descriptor.moment),
-      fetchChainCount(descriptor),
-    ])
-      .then(([t, m, c]) => {
+    (async () => {
+      // Taxonomy-reject precomputed path: signers are the off-chain signed
+      // dissents (attestations with phase='taxonomy', verdict='reject' for this
+      // founding binding's node_hash), since there's no on-chain reject event
+      // for the chain_events query to read.
+      if (precomputed) {
+        const signers = precomputed.filterTerm
+          ? await fetchSigners({
+              table: 'attestations',
+              match: { node_hash: precomputed.filterTerm, phase: 'taxonomy', verdict: 'reject' },
+              peerFrom: 'peer_addr',
+              handleFrom: 'peer_handle',
+              sigFrom: 'eip712_sig',
+            })
+          : [];
         if (cancelled) return;
-        // Threshold preference: chain payload's thresholdField (the exact value
-        // the contract used) → descriptor.thresholdFn(moment-peers) fallback.
-        const fnThreshold = descriptor.thresholdFn ? descriptor.thresholdFn(m.peers) : null;
-        const threshold = c?.threshold != null ? c.threshold : fnThreshold;
-        setTally(t);
-        setChain(c);
-        setMoment({ ...m, threshold });
+        setSignerGroups([{ label: 'Signed dissenters', signers }]);
         setState('ok');
-      })
-      .catch(() => { if (!cancelled) setState('error'); });
+        return;
+      }
+      if (!descriptor) { setState('ok'); return; }
+      const [t, m, c] = await Promise.all([
+        fetchDerivationTally(descriptor),
+        resolveMomentPeers(descriptor.moment),
+        fetchChainCount(descriptor),
+      ]);
+      if (cancelled) return;
+      // Threshold preference: chain payload's thresholdField (the exact value
+      // the contract used) → descriptor.thresholdFn(moment-peers) fallback.
+      const fnThreshold = descriptor.thresholdFn ? descriptor.thresholdFn(m.peers) : null;
+      const threshold = c?.threshold != null ? c.threshold : fnThreshold;
+      // Signers: query each source (chain_events / off-chain mirror) and group
+      // by label. Pass the chain event payload along so sources that need
+      // `matchFromChainPayload` (ratified — parent pillar node_hash) can read it.
+      const rawSources = descriptor.signers
+        ? (Array.isArray(descriptor.signers) ? descriptor.signers : [descriptor.signers])
+        : [];
+      const groups = await Promise.all(
+        rawSources.map(async (s) => ({ label: s.label || 'Signed peers', signers: await fetchSigners(s, c?.payload) })),
+      );
+      if (cancelled) return;
+      setTally(t);
+      setChain(c);
+      setMoment({ ...m, threshold });
+      setSignerGroups(groups);
+      setState('ok');
+    })().catch(() => { if (!cancelled) setState('error'); });
     return () => { cancelled = true; };
   }, [descriptor, precomputed]);
 
   if (precomputed) {
     return (
-      <div className="av-kv">
-        <div className="av-row"><span className="k">Signed dissents</span><span className="v"><b>{precomputed.dissents}</b> peers signed a reject on this proposal</span></div>
-        {precomputed.peers != null && <div className="av-row"><span className="k">Active peers (at the time)</span><span className="v">{precomputed.peers}</span></div>}
-        {precomputed.need != null && <div className="av-row"><span className="k">Endorses needed to ratify</span><span className="v">{precomputed.need}</span></div>}
-        {precomputed.peers != null && precomputed.need != null && (
-          <div className="av-row"><span className="k">Eligible endorsers left</span><span className="v">{Math.max(0, precomputed.peers - precomputed.dissents)} — below the {precomputed.need} threshold</span></div>
-        )}
-        <p className="av-verdict">
-          Once dissents exceed <code>peers − threshold</code>, fewer than the required number of peers
-          remain available to endorse — ratification becomes impossible regardless of how many of them
-          later vote yes. This row marks that crossing.
-        </p>
-        {onLinkback && precomputed.filterTerm && (
-          <button type="button" className="av-btn" onClick={() => onLinkback(precomputed.filterTerm)}>
-            View the {precomputed.dissents} signed dissents →
-          </button>
-        )}
-      </div>
+      <>
+        <div className="av-kv">
+          <div className="av-row"><span className="k">Signed dissents</span><span className="v"><b>{precomputed.dissents}</b> peers signed a reject on this proposal</span></div>
+          {precomputed.peers != null && <div className="av-row"><span className="k">Active peers (at the time)</span><span className="v">{precomputed.peers}</span></div>}
+          {precomputed.need != null && <div className="av-row"><span className="k">Endorses needed to ratify</span><span className="v">{precomputed.need}</span></div>}
+          {precomputed.peers != null && precomputed.need != null && (
+            <div className="av-row"><span className="k">Eligible endorsers left</span><span className="v">{Math.max(0, precomputed.peers - precomputed.dissents)} — below the {precomputed.need} threshold</span></div>
+          )}
+          <p className="av-verdict">
+            Once dissents exceed <code>peers − threshold</code>, fewer than the required number of peers
+            remain available to endorse — ratification becomes impossible regardless of how many of them
+            later vote yes. This row marks that crossing.
+          </p>
+        </div>
+        {state === 'loading' && <p className="av-step-note">Loading signed dissents…</p>}
+        <SignersList groups={signerGroups} handleMap={handleMap} />
+      </>
     );
   }
 
@@ -363,19 +432,15 @@ export function DerivationPanel({ descriptor, precomputed, onLinkback }) {
       )}
       <p className="av-verdict">
         The on-chain {descriptor.outcomeLabel.toLowerCase()} is the contract's projection of the
-        signed peer votes above. Each one is its own row in this log with an EIP-712 signature you
-        can recover in your own browser.
+        signed peer votes below — each name is read from a chain_events row whose payload identified
+        them as a voter at this gate, so the list is exactly the peers the contract counted.
       </p>
-      {onLinkback && descriptor.filterTerm && (
-        <button type="button" className="av-btn" onClick={() => onLinkback(descriptor.filterTerm)}>
-          View the contributing signed votes →
-        </button>
-      )}
+      {state === 'ok' && <SignersList groups={signerGroups} handleMap={handleMap} />}
     </>
   );
 }
 
-function VerifierModal({ a, onClose, handle, onLinkback }) {
+function VerifierModal({ a, onClose, handle, onLinkback, handleMap }) {
   const [status, setStatus] = useState('idle');   // step 1 recovery
   const [recovered, setRecovered] = useState(null);
   const [error, setError] = useState('');
@@ -499,6 +564,7 @@ function VerifierModal({ a, onClose, handle, onLinkback }) {
                 descriptor={descriptor}
                 precomputed={precomputed}
                 onLinkback={onLinkback}
+                handleMap={handleMap}
               />
             ) : sig ? (
               <>
@@ -616,7 +682,7 @@ function VerifierModal({ a, onClose, handle, onLinkback }) {
 // row whose Vote-digest fields aren't surfaced (or any sig-less gap row) reads
 // "On-chain ✓" and leans on the tx proof, never claiming a signature it can't
 // replay.
-export default function AttestationVerifier({ a, handle, onLinkback }) {
+export default function AttestationVerifier({ a, handle, onLinkback, handleMap }) {
   const [open, setOpen] = useState(false);
   const hasSig = canRecoverRow(a);
   const isNetwork = (!a.peer_addr && a.peer_handle === 'Network') || !!a.derived;
@@ -633,7 +699,7 @@ export default function AttestationVerifier({ a, handle, onLinkback }) {
         <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M12 2l7 3v6c0 4.5-3 8.5-7 9-4-.5-7-4.5-7-9V5l7-3z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
         <span className="sig">{isNetwork ? 'Derived ✓' : hasSig ? 'EIP-712 ✓' : 'On-chain ✓'}</span>
       </button>
-      {open && <VerifierModal a={a} onClose={() => setOpen(false)} handle={handle} onLinkback={onLinkback} />}
+      {open && <VerifierModal a={a} onClose={() => setOpen(false)} handle={handle} onLinkback={onLinkback} handleMap={handleMap} />}
     </>
   );
 }

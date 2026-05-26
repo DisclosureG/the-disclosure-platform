@@ -946,6 +946,42 @@ p { margin: 0 0 1em; }
 .av-trigger.is-derived { color: var(--ink-soft); border-style: dashed; }
 .av-trigger.is-derived .sig { color: var(--ink-soft); }
 
+/* Inline signers list — the peers the chain_events payload identified as
+   participating in this consensus. One group per signer source (so split
+   outcomes like review-lapsed render Approvers and Rejecters separately). */
+.av-signers { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+.av-signers-group {
+  border-left: 2px solid color-mix(in oklab, var(--accent) 35%, transparent);
+  padding-left: 12px;
+}
+.av-signers-head {
+  display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
+}
+.av-signers-label {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.av-signers-count {
+  font-family: var(--mono); font-size: 11px; color: var(--ink-soft);
+  padding: 1px 6px; border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+}
+.av-signers-empty { margin: 0; font-size: 12px; color: var(--ink-faint); font-style: italic; }
+.av-signers-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.av-signers-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 0; font-size: 12.5px; color: var(--ink-soft);
+}
+.av-signers-name { color: var(--ink); }
+.av-signers-addr { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
+.av-signers-tx {
+  font-family: var(--mono); font-size: 10.5px; color: var(--accent);
+  padding: 1px 6px; border-radius: var(--r-pill);
+  border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
+  margin-left: auto;
+}
+.av-signers-tx:hover { background: color-mix(in oklab, var(--accent) 12%, transparent); }
+
 .av-nosig {
   display: flex; flex-direction: column; gap: 8px;
   padding: 14px 16px; border-radius: var(--r-s);
