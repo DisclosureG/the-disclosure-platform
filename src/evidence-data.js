@@ -1327,13 +1327,28 @@ export function getVoteLogDerivation(row) {
   if (!txHash) return null;
   switch (row.verdict) {
     case 'canonized':
+      // Two paths produce BindingCanonized:
+      //   • normal review — peers cast `castReviewVote(approve=true)` until
+      //     approves reach canonizeThreshold(tier, peers);
+      //   • founding-bundle taxonomy — a peer proposes a pillar/topic bundled
+      //     with founding evidence, peers endorse the node, and at ratification
+      //     the founding (evidence, topic) binding is canonized ATOMICALLY with
+      //     the node — no review votes are ever cast on it.
+      // Both paths are honest consensus, and only one of the two tallies will
+      // be non-zero for any given binding (founding bindings can't be reviewed;
+      // cross-listings via fileBinding go through review). Show both so the
+      // panel reads correctly regardless of which path produced the canon.
       return bindingId ? {
         kind: 'canonized',
         outcomeLabel: 'Approved into the canon',
-        question: 'How many peers approved this binding?',
-        query: { table: 'attestations', filter: { binding_id: bindingId, phase: 'review', verdict: 'approve' } },
+        question: 'How was this binding canonized?',
+        queries: [
+          { table: 'attestations', label: 'Review approves',           filter: { binding_id: bindingId, phase: 'review',   verdict: 'approve' } },
+          { table: 'attestations', label: 'Founding-bundle endorses',  filter: { binding_id: bindingId, phase: 'taxonomy', verdict: 'endorse' } },
+        ],
         thresholdFn: (peers) => tier && peers ? canonizeThreshold(tier, peers) : null,
         thresholdLabel: 'Canonize threshold',
+        thresholdNote: 'A binding canonizes either via review approves (normal path) or via taxonomy endorses on its founding node (atomic with node ratification). Only one path applies per binding.',
         moment: { txHash, events: ['BindingCanonized'] },
         filterTerm: eviTerm,
       } : null;
