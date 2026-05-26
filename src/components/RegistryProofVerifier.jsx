@@ -66,7 +66,7 @@ function proofMessage(r) {
   return { scheme: 'peervote', domain: PEER_GOVERNANCE_DOMAIN, types: PEER_VOTE_TYPES, primaryType: 'PeerVote', message };
 }
 
-function RegistryVerifierModal({ r, actorName, actionLabel, onClose, peers, onLinkback }) {
+function RegistryVerifierModal({ r, actorName, actionLabel, onClose, onLinkback }) {
   const [status, setStatus] = useState('idle');
   const [recovered, setRecovered] = useState(null);
   const [error, setError] = useState('');
@@ -88,7 +88,7 @@ function RegistryVerifierModal({ r, actorName, actionLabel, onClose, peers, onLi
   // endorsements / revocation discards / keep dissents), so step 1 swaps the
   // signer-recovery body for a DerivationPanel showing the tally + threshold +
   // a linkback that filters the log to the contributing signatures.
-  const descriptor = getRegistryDerivation(r, peers);
+  const descriptor = getRegistryDerivation(r);
   const isConsensus = !!descriptor;
 
   const verify = async () => {
@@ -149,7 +149,7 @@ function RegistryVerifierModal({ r, actorName, actionLabel, onClose, peers, onLi
             chip={authChip}
           >
             {isConsensus ? (
-              <DerivationPanel descriptor={descriptor} peers={peers} onLinkback={onLinkback} />
+              <DerivationPanel descriptor={descriptor} onLinkback={onLinkback} />
             ) : sig ? (
               <>
                 <div className="av-verify">
@@ -250,10 +250,10 @@ function RegistryVerifierModal({ r, actorName, actionLabel, onClose, peers, onLi
 // Inline proof control for one registry-log row. "EIP-712 ✓" when the row's
 // signature is recoverable in-browser; "On-chain ✓" for a sig-less act that still
 // has a tx; a plain dash when there's neither.
-export default function RegistryProofVerifier({ r, actorName, actionLabel, peers, onLinkback }) {
+export default function RegistryProofVerifier({ r, actorName, actionLabel, onLinkback }) {
   const [open, setOpen] = useState(false);
   const recoverable = !!proofMessage(r);
-  const isConsensus = !!getRegistryDerivation(r, peers);
+  const isConsensus = !!getRegistryDerivation(r);
   if (!recoverable && !r.txHash) return <span style={{ color: 'var(--ink-faint)' }}>—</span>;
   return (
     <>
@@ -268,7 +268,7 @@ export default function RegistryProofVerifier({ r, actorName, actionLabel, peers
         <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M12 2l7 3v6c0 4.5-3 8.5-7 9-4-.5-7-4.5-7-9V5l7-3z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
         <span className="sig">{isConsensus ? 'Derived ✓' : recoverable ? 'EIP-712 ✓' : 'On-chain ✓'}</span>
       </button>
-      {open && <RegistryVerifierModal r={r} actorName={actorName} actionLabel={actionLabel} onClose={() => setOpen(false)} peers={peers} onLinkback={onLinkback} />}
+      {open && <RegistryVerifierModal r={r} actorName={actorName} actionLabel={actionLabel} onClose={() => setOpen(false)} onLinkback={onLinkback} />}
     </>
   );
 }

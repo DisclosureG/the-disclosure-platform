@@ -1505,7 +1505,7 @@ function PeersTab({ me, peerCount, onNominate, onSeed, reloadSignal, setToast, o
       <RegistryViewToggle view={view} onChange={setView} />
 
       {view === 'history' ? (
-        <RegistryLog peers={peerCount} />
+        <RegistryLog />
       ) : (
         <>
           <div className="pr-tab-head">
@@ -1698,7 +1698,7 @@ function ColorKeyHint() {
 // One row of the vote history. Holds local state for the optional deliberation
 // note: a peer may attach a note when voting, so the reveal toggle only renders
 // when one exists, expanding a full-width panel beneath the row.
-function LogRow({ r, tax, onOpen, handleMap, peers, onLinkback }) {
+function LogRow({ r, tax, onOpen, handleMap, onLinkback }) {
   const [showNote, setShowNote] = useState(false);
   const note = (r.note || '').trim();
   // Network outcome rows (binding canonized/expelled/lapsed/deprecated/reaffirmed,
@@ -1792,7 +1792,7 @@ function LogRow({ r, tax, onOpen, handleMap, peers, onLinkback }) {
           )
           : <span style={{ color: 'var(--ink-faint)' }}>—</span>}
       </span>
-      <span className="tx"><AttestationVerifier a={r} handle={peerName} peers={peers} onLinkback={onLinkback} /></span>
+      <span className="tx"><AttestationVerifier a={r} handle={peerName} onLinkback={onLinkback} /></span>
       {note && showNote && (
         <div className="pr-log-note">
           <span className="pr-log-note-label">Deliberation note</span>
@@ -1925,7 +1925,7 @@ function LogTab({ initialQuery = '', peerCount }) {
 
       <div className="pr-log">
         <div className="pr-log-row is-head"><span>When</span><span>Verdict</span><ColorKeyHint /><span>Evidence</span><span>Peer</span><span>Note</span><span>Proof</span></div>
-        {shown.map(r => <LogRow key={r.id} r={r} tax={tax} onOpen={openPreview} handleMap={handleMap} peers={peerCount} onLinkback={(term) => { setQ(term); setDebounced(term); }} />)}
+        {shown.map(r => <LogRow key={r.id} r={r} tax={tax} onOpen={openPreview} handleMap={handleMap} onLinkback={(term) => { setQ(term); setDebounced(term); }} />)}
         {!loading && shown.length === 0 && <div className="pr-log-row"><span style={{ gridColumn: '1 / -1', color: 'var(--ink-faint)' }}>No attestations match.</span></div>}
       </div>
       <div className="pr-log-foot">
@@ -1961,7 +1961,7 @@ const REG_ACTION = {
   inactivity: { label: 'Inactivity', cls: 'reject'    },  // PeerRemoved with no PeerRevoked twin — pruneInactivePeer
 };
 
-function RegistryLogRow({ r, handleMap, peers, onLinkback }) {
+function RegistryLogRow({ r, handleMap, onLinkback }) {
   const [showNote, setShowNote] = useState(false);
   const subjName  = r.subjectHandle || handleMap[r.subjectAddr?.toLowerCase()] || SHORT(r.subjectAddr);
   const actorName = r.actorAddr ? (handleMap[r.actorAddr.toLowerCase()] || SHORT(r.actorAddr)) : null;
@@ -2002,7 +2002,7 @@ function RegistryLogRow({ r, handleMap, peers, onLinkback }) {
           )
           : <span style={{ color: 'var(--ink-faint)' }}>—</span>}
       </span>
-      <span className="tx"><RegistryProofVerifier r={r} actorName={actorName} actionLabel={act.label} peers={peers} onLinkback={onLinkback} /></span>
+      <span className="tx"><RegistryProofVerifier r={r} actorName={actorName} actionLabel={act.label} onLinkback={onLinkback} /></span>
       {note && showNote && (
         <div className="pr-log-note">
           <span className="pr-log-note-label">Deliberation note</span>
@@ -2013,7 +2013,7 @@ function RegistryLogRow({ r, handleMap, peers, onLinkback }) {
   );
 }
 
-function RegistryLog({ peers }) {
+function RegistryLog() {
   const [q, setQ] = useState('');
   const [debounced, setDebounced] = useState('');
   const [kind, setKind] = useState('');
@@ -2045,7 +2045,7 @@ function RegistryLog({ peers }) {
 
       <div className="pr-log is-registry">
         <div className="pr-log-row is-registry is-head"><span>When</span><span>Action</span><span>Peer</span><span>By</span><span>Note</span><span>Proof</span></div>
-        {log.map(r => <RegistryLogRow key={r.id} r={r} handleMap={handleMap} peers={peers} onLinkback={onLinkback} />)}
+        {log.map(r => <RegistryLogRow key={r.id} r={r} handleMap={handleMap} onLinkback={onLinkback} />)}
         {!loading && log.length === 0 && <div className="pr-log-row"><span style={{ gridColumn: '1 / -1', color: 'var(--ink-faint)' }}>No registry votes match.</span></div>}
       </div>
       <div className="pr-log-foot">

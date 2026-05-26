@@ -1302,24 +1302,29 @@ export function useDerivedConsensusRejects(activePeers, query = '', verdict = ''
 //
 // Every "Network" outcome row in the vote log (binding / taxonomy / challenge
 // lifecycle) and in the peer registry log (verified / revoked / cancelled) is
-// the contract's projection of underlying signed peer votes. These descriptors
-// map each outcome type to the query that produces its tally + the threshold
-// that was crossed, so the proof modal can render "X of N peers signed Y, ≥
-// threshold Z" — the on-chain consensus, derived from data anyone can re-query.
-//
+// the contract's projection of underlying signed peer votes. A descriptor maps
+// the outcome to:
+//   • the queries that re-count the underlying signed votes (`queries`),
+//   • a `thresholdFn(peers)` that derives the threshold from the active peer
+//     count *at the moment of the event* (not the live count),
+//   • a `moment` hint (block_number, txHash + event_name, or a pre-baked
+//     payload) so the panel can resolve that historical peer count from the
+//     chain_events mirror.
 // Returns null for non-consensus Network rows (review timeouts, inactivity
 // prunes, owner seeds) and for any signed-peer row.
 
-const NOMINEE_THRESHOLD       = (peers) => Math.max(1, Math.ceil(peers / 2));
-const REVOKE_THRESHOLD        = (peers) => Math.max(1, Math.ceil(peers / 2));
-const RETIRE_THRESHOLD        = (peers) => Math.max(1, Math.ceil((2 * peers) / 3));
+const NOMINEE_THRESHOLD = (peers) => Math.max(1, Math.ceil(peers / 2));
+const REVOKE_THRESHOLD  = (peers) => Math.max(1, Math.ceil(peers / 2));
+const RETIRE_THRESHOLD  = (peers) => Math.max(1, Math.ceil((2 * peers) / 3));
 
-export function getVoteLogDerivation(row, peers) {
+export function getVoteLogDerivation(row) {
   if (!row || row.peer_handle !== 'Network') return null;
   const tier      = Number(row.evidence_tier ?? 0) || null;
   const bindingId = row.binding_id || null;
   const nodeHash  = row.node_hash || null;
   const eviTerm   = row.evidence_id_text || row.evidence_id || null;
+  const txHash    = row.tx_hash || null;
+  if (!txHash) return null;
   switch (row.verdict) {
     case 'canonized':
       return bindingId ? {
@@ -1327,8 +1332,9 @@ export function getVoteLogDerivation(row, peers) {
         outcomeLabel: 'Approved into the canon',
         question: 'How many peers approved this binding?',
         query: { table: 'attestations', filter: { binding_id: bindingId, phase: 'review', verdict: 'approve' } },
-        threshold: tier && peers ? canonizeThreshold(tier, peers) : null,
+        thresholdFn: (peers) => tier && peers ? canonizeThreshold(tier, peers) : null,
         thresholdLabel: 'Canonize threshold',
+        moment: { txHash, events: ['BindingCanonized'] },
         filterTerm: eviTerm,
       } : null;
     case 'expelled':
@@ -1337,8 +1343,9 @@ export function getVoteLogDerivation(row, peers) {
         outcomeLabel: 'Expelled at review',
         question: 'How many peers rejected this binding?',
         query: { table: 'attestations', filter: { binding_id: bindingId, phase: 'review', verdict: 'reject' } },
-        threshold: peers ? expelThreshold(peers) : null,
+        thresholdFn: (peers) => peers ? expelThreshold(peers) : null,
         thresholdLabel: 'Expel threshold',
+        moment: { txHash, events: ['BindingExpelled'] },
         filterTerm: eviTerm,
       } : null;
     case 'lapsed':
@@ -1351,8 +1358,9 @@ export function getVoteLogDerivation(row, peers) {
             { table: 'attestations', label: 'Approves', filter: { binding_id: bindingId, phase: 'review', verdict: 'approve' } },
             { table: 'attestations', label: 'Rejects',  filter: { binding_id: bindingId, phase: 'review', verdict: 'reject' } },
           ],
-          threshold: tier && peers ? canonizeThreshold(tier, peers) : null,
+          thresholdFn: (peers) => tier && peers ? canonizeThreshold(tier, peers) : null,
           thresholdLabel: 'Canonize threshold (not reached)',
+          moment: { txHash, events: ['BindingLapsed'] },
           filterTerm: eviTerm,
         };
       }
@@ -1362,8 +1370,9 @@ export function getVoteLogDerivation(row, peers) {
           outcomeLabel: 'Proposal lapsed (no ratification)',
           question: 'How many peers endorsed before the window closed?',
           query: { table: 'attestations', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
-          threshold: tier && peers ? bundleThreshold(tier, peers) : null,
+          thresholdFn: (peers) => tier && peers ? bundleThreshold(tier, peers) : null,
           thresholdLabel: 'Bundle threshold (not reached)',
+          moment: { txHash, events: ['ProposalLapsed'] },
           filterTerm: nodeHash,
         };
       }
@@ -1374,8 +1383,9 @@ export function getVoteLogDerivation(row, peers) {
         outcomeLabel: 'Deprecated at challenge',
         question: 'How many peers voted to deprecate?',
         query: { table: 'attestations', filter: { binding_id: bindingId, phase: 'challenge', verdict: 'challenge' } },
-        threshold: tier && peers ? deprecateThreshold(tier, peers) : null,
+        thresholdFn: (peers) => tier && peers ? deprecateThreshold(tier, peers) : null,
         thresholdLabel: 'Deprecate threshold',
+        moment: { txHash, events: ['BindingDeprecated'] },
         filterTerm: eviTerm,
       } : null;
     case 'reaffirmed':
@@ -1387,8 +1397,9 @@ export function getVoteLogDerivation(row, peers) {
           { table: 'attestations', label: 'Challenge votes', filter: { binding_id: bindingId, phase: 'challenge', verdict: 'challenge' } },
           { table: 'attestations', label: 'Defend votes',    filter: { binding_id: bindingId, phase: 'challenge', verdict: 'defend' } },
         ],
-        threshold: tier && peers ? deprecateThreshold(tier, peers) : null,
+        thresholdFn: (peers) => tier && peers ? deprecateThreshold(tier, peers) : null,
         thresholdLabel: 'Deprecate threshold (not reached)',
+        moment: { txHash, events: ['BindingReaffirmed'] },
         filterTerm: eviTerm,
       } : null;
     case 'ratified':
@@ -1397,9 +1408,10 @@ export function getVoteLogDerivation(row, peers) {
         outcomeLabel: 'Ratified into the taxonomy',
         question: 'How many peers endorsed this proposal?',
         query: { table: 'attestations', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
-        threshold: tier && peers ? bundleThreshold(tier, peers) : null,
+        thresholdFn: (peers) => tier && peers ? bundleThreshold(tier, peers) : null,
         thresholdLabel: 'Bundle threshold',
         thresholdNote: 'Proposer counts as endorsement #1.',
+        moment: { txHash, events: ['PillarRatified', 'TopicRatified'] },
         filterTerm: nodeHash,
       } : null;
     case 'retired':
@@ -1408,8 +1420,9 @@ export function getVoteLogDerivation(row, peers) {
         outcomeLabel: 'Retired off the canon',
         question: 'How many peers voted to retire?',
         query: { table: 'gov_votes', filter: { subject: nodeHash, verdict: 'retire' } },
-        threshold: peers ? RETIRE_THRESHOLD(peers) : null,
+        thresholdFn: (peers) => peers ? RETIRE_THRESHOLD(peers) : null,
         thresholdLabel: 'Retire threshold (ceil 2n/3)',
+        moment: { txHash, events: ['NodeRetired'] },
         filterTerm: nodeHash,
       } : null;
     default:
@@ -1417,10 +1430,19 @@ export function getVoteLogDerivation(row, peers) {
   }
 }
 
-export function getRegistryDerivation(row, peers) {
+export function getRegistryDerivation(row) {
   if (!row) return null;
   const subject = (row.subjectAddr || '').toLowerCase();
   if (!subject) return null;
+  // Registry-log rows already carry block_number + the raw event payload from
+  // normalizeRegistryEvent — peer-set mutation events (NomineeVerified /
+  // PeerRevoked) include active_peer_count directly, so the moment-peers
+  // resolution is instant; RevocationCancelled has no count in payload and
+  // falls back to a block-number lookup.
+  const moment = {
+    blockNumber: row.blockNumber ?? null,
+    payload:     row.payload ?? null,
+  };
   switch (row.action) {
     case 'verified':
       return {
@@ -1428,9 +1450,10 @@ export function getRegistryDerivation(row, peers) {
         outcomeLabel: 'Verified as a peer',
         question: 'How many peers endorsed this nominee?',
         query: { table: 'nominee_votes', filter: { nominee_addr: subject, verdict: 'endorse' } },
-        threshold: peers ? NOMINEE_THRESHOLD(peers) : null,
+        thresholdFn: (peers) => peers ? NOMINEE_THRESHOLD(peers) : null,
         thresholdLabel: 'Nominee threshold (ceil n/2)',
         thresholdNote: 'Nominator counts as endorsement #1.',
+        moment,
         filterTerm: subject,
       };
     case 'revoked':
@@ -1439,8 +1462,9 @@ export function getRegistryDerivation(row, peers) {
         outcomeLabel: 'Revoked from the peer set',
         question: 'How many peers voted to discard?',
         query: { table: 'revocation_votes', filter: { subject_addr: subject, verdict: 'discard' } },
-        threshold: peers ? REVOKE_THRESHOLD(peers) : null,
+        thresholdFn: (peers) => peers ? REVOKE_THRESHOLD(peers) : null,
         thresholdLabel: 'Revoke threshold (ceil n/2)',
+        moment,
         filterTerm: subject,
       };
     case 'cancelled':
@@ -1449,8 +1473,9 @@ export function getRegistryDerivation(row, peers) {
         outcomeLabel: 'Revocation cancelled by keep dissents',
         question: 'How many peers signed a keep dissent?',
         query: { table: 'revocation_votes', filter: { subject_addr: subject, verdict: 'keep' } },
-        threshold: null,
+        thresholdFn: () => null,
         thresholdLabel: 'Cancelled once discards can no longer reach the revoke threshold',
+        moment,
         filterTerm: subject,
       };
     default:
@@ -1473,6 +1498,39 @@ export async function fetchDerivationTally(descriptor) {
     out.push({ label: q.label || 'Signed peers', count: error ? null : (count ?? 0), error: error?.message || null });
   }
   return out;
+}
+
+// Find a chain_events row by tx hash + one of the candidate event_name values.
+// Used by the DerivationPanel to recover the moment of a vote_log_view Network
+// row (which exposes tx_hash but not block_number or payload).
+export async function fetchNetworkEventByTx(txHash, eventNames) {
+  if (!txHash || !eventNames?.length) return null;
+  const { data } = await supabase
+    .from('chain_events')
+    .select('block_number, log_index, event_name, payload')
+    .eq('tx_hash', txHash)
+    .in('event_name', eventNames)
+    .order('log_index', { ascending: false })
+    .limit(1);
+  return (data && data[0]) || null;
+}
+
+// active_peer_count "at the time" of `blockNumber` — i.e. the value emitted by
+// the most recent peer-set mutation (PeerAdded / PeerRemoved) at or before that
+// block. Mirrors the chain's own activePeerCount() reading at that point in
+// history, without needing an archive RPC.
+export async function peerCountAtBlock(blockNumber) {
+  if (blockNumber == null) return null;
+  const { data } = await supabase
+    .from('chain_events')
+    .select('payload, block_number, log_index')
+    .in('event_name', ['PeerAdded', 'PeerRemoved'])
+    .lte('block_number', blockNumber)
+    .order('block_number', { ascending: false })
+    .order('log_index',    { ascending: false })
+    .limit(1);
+  const p = data?.[0]?.payload || null;
+  return p?.active_peer_count ?? null;
 }
 
 // ── Per-evidence vote history hook ───────────────────────────────────────────
@@ -1538,7 +1596,11 @@ const REGISTRY_ALL_EVENTS = [
 function normalizeRegistryEvent(r) {
   const p  = r.payload || {};
   const ts = r.occurred_at || r.inserted_at;
-  const base = { id: `ev:${r.id}`, ts, source: 'chain', txHash: r.tx_hash, subjectAddr: r.peer_addr || null, subjectHandle: null, actorAddr: null, count: null, threshold: null };
+  // payload + blockNumber are preserved verbatim so the DerivationPanel can
+  // read the moment-in-time active_peer_count (PeerAdded / PeerRemoved /
+  // NomineeVerified / PeerRevoked all carry it) instead of recomputing the
+  // threshold from the *current* peer count.
+  const base = { id: `ev:${r.id}`, ts, source: 'chain', txHash: r.tx_hash, blockNumber: r.block_number ?? null, payload: p, subjectAddr: r.peer_addr || null, subjectHandle: null, actorAddr: null, count: null, threshold: null };
   switch (r.event_name) {
     case 'PeerNominated':       return { ...base, action: 'nominate',  actorAddr: p.nominated_by || null, subjectHandle: p.handle || null, count: 1, threshold: p.threshold ?? null };
     case 'PeerEndorsed':        return { ...base, action: 'endorse',   actorAddr: p.endorser || null, count: p.endorsements ?? null, threshold: p.threshold ?? null };

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { verifyTypedData } from 'ethers';
 import { ATTESTATION_DOMAIN, ATTESTATION_TYPES, VOTE_TYPES, CONSENSUS_CHAIN_ID } from '../lib/wallet-constants';
 import { recoverAttestationSigner, computeContentHash } from '../lib/wallet';
-import { getVoteLogDerivation, fetchDerivationTally } from '../evidence-data';
+import { getVoteLogDerivation, fetchDerivationTally, fetchNetworkEventByTx, peerCountAtBlock } from '../evidence-data';
 
 const explorerBase = CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com';
 const SHORT = (a) => (a ? `${a.slice(0, 10)}…${a.slice(-8)}` : '');
@@ -223,17 +223,58 @@ function ContentProofBody({ a, onStatus }) {
 // `onLinkback` (optional) — when present, the panel renders a "View signed
 // votes" button that calls back with the descriptor's filterTerm so the host
 // log can filter to the contributing rows.
-export function DerivationPanel({ descriptor, precomputed, peers, onLinkback }) {
+// Resolve the moment-in-time active_peer_count for a descriptor's moment hint.
+// Preferred sources, in order:
+//   1) the registry row's own payload (NomineeVerified / PeerRevoked / PeerAdded /
+//      PeerRemoved emit active_peer_count directly),
+//   2) the chain_events row matched by tx_hash (looked up for vote_log_view
+//      Network rows that don't carry the payload),
+//   3) the most recent peer-set mutation at or before the moment's block.
+// This gives the panel the same threshold the contract used at the time —
+// independent of how the peer set has shifted since.
+async function resolveMomentPeers(moment) {
+  if (!moment) return { peers: null, blockNumber: null };
+  const payloadPeers = moment.payload?.active_peer_count;
+  if (payloadPeers != null) return { peers: Number(payloadPeers), blockNumber: moment.blockNumber ?? null };
+  if (moment.txHash) {
+    const ev = await fetchNetworkEventByTx(moment.txHash, moment.events || []);
+    const evPeers = ev?.payload?.active_peer_count;
+    const blockNumber = ev?.block_number ?? moment.blockNumber ?? null;
+    if (evPeers != null) return { peers: Number(evPeers), blockNumber };
+    if (blockNumber != null) {
+      const peers = await peerCountAtBlock(blockNumber);
+      return { peers, blockNumber };
+    }
+    return { peers: null, blockNumber };
+  }
+  if (moment.blockNumber != null) {
+    const peers = await peerCountAtBlock(moment.blockNumber);
+    return { peers, blockNumber: moment.blockNumber };
+  }
+  return { peers: null, blockNumber: null };
+}
+
+export function DerivationPanel({ descriptor, precomputed, onLinkback }) {
   const [tally, setTally] = useState(null);
-  const [tallyState, setTallyState] = useState(precomputed ? 'ok' : 'loading');
+  const [moment, setMoment] = useState(null); // { peers, blockNumber, threshold }
+  const [state, setState] = useState(precomputed ? 'ok' : 'loading');
 
   useEffect(() => {
     if (precomputed || !descriptor) return;
     let cancelled = false;
-    setTallyState('loading');
-    fetchDerivationTally(descriptor)
-      .then(t => { if (!cancelled) { setTally(t); setTallyState('ok'); } })
-      .catch(() => { if (!cancelled) setTallyState('error'); });
+    setState('loading');
+    Promise.all([
+      fetchDerivationTally(descriptor),
+      resolveMomentPeers(descriptor.moment),
+    ])
+      .then(([t, m]) => {
+        if (cancelled) return;
+        const threshold = descriptor.thresholdFn ? descriptor.thresholdFn(m.peers) : null;
+        setTally(t);
+        setMoment({ ...m, threshold });
+        setState('ok');
+      })
+      .catch(() => { if (!cancelled) setState('error'); });
     return () => { cancelled = true; };
   }, [descriptor, precomputed]);
 
@@ -241,7 +282,7 @@ export function DerivationPanel({ descriptor, precomputed, peers, onLinkback }) 
     return (
       <div className="av-kv">
         <div className="av-row"><span className="k">Signed dissents</span><span className="v"><b>{precomputed.dissents}</b> peers signed a reject on this proposal</span></div>
-        {precomputed.peers != null && <div className="av-row"><span className="k">Active peers</span><span className="v">{precomputed.peers}</span></div>}
+        {precomputed.peers != null && <div className="av-row"><span className="k">Active peers (at the time)</span><span className="v">{precomputed.peers}</span></div>}
         {precomputed.need != null && <div className="av-row"><span className="k">Endorses needed to ratify</span><span className="v">{precomputed.need}</span></div>}
         {precomputed.peers != null && precomputed.need != null && (
           <div className="av-row"><span className="k">Eligible endorsers left</span><span className="v">{Math.max(0, precomputed.peers - precomputed.dissents)} — below the {precomputed.need} threshold</span></div>
@@ -273,9 +314,9 @@ export function DerivationPanel({ descriptor, precomputed, peers, onLinkback }) 
   return (
     <>
       <p className="av-step-note">{descriptor.question}</p>
-      {tallyState === 'loading' && <p className="av-step-note">Counting signed peer votes…</p>}
-      {tallyState === 'error' && <p className="av-err">Could not load the tally.</p>}
-      {tallyState === 'ok' && (tally || []).length > 0 && (
+      {state === 'loading' && <p className="av-step-note">Counting signed peer votes…</p>}
+      {state === 'error'   && <p className="av-err">Could not load the tally.</p>}
+      {state === 'ok' && (tally || []).length > 0 && (
         <div className="av-kv">
           {(tally || []).map(t => (
             <div key={t.label} className="av-row">
@@ -283,8 +324,11 @@ export function DerivationPanel({ descriptor, precomputed, peers, onLinkback }) 
               <span className="v"><b>{t.count ?? '—'}</b> signed</span>
             </div>
           ))}
-          {descriptor.threshold != null && (
-            <div className="av-row"><span className="k">{descriptor.thresholdLabel}</span><span className="v">{descriptor.threshold}{peers ? ` of ${peers} active peers` : ''}</span></div>
+          {moment?.peers != null && (
+            <div className="av-row"><span className="k">Active peers (at the time)</span><span className="v">{moment.peers}</span></div>
+          )}
+          {moment?.threshold != null && (
+            <div className="av-row"><span className="k">{descriptor.thresholdLabel}</span><span className="v"><b>{moment.threshold}</b>{moment.peers ? ` of ${moment.peers}` : ''} — the value the contract used at the time</span></div>
           )}
           {descriptor.thresholdNote && (
             <div className="av-row"><span className="k">Note</span><span className="v" style={{ opacity: 0.8 }}>{descriptor.thresholdNote}</span></div>
@@ -305,7 +349,7 @@ export function DerivationPanel({ descriptor, precomputed, peers, onLinkback }) 
   );
 }
 
-function VerifierModal({ a, onClose, handle, peers, onLinkback }) {
+function VerifierModal({ a, onClose, handle, onLinkback }) {
   const [status, setStatus] = useState('idle');   // step 1 recovery
   const [recovered, setRecovered] = useState(null);
   const [error, setError] = useState('');
@@ -323,7 +367,7 @@ function VerifierModal({ a, onClose, handle, peers, onLinkback }) {
   // / retired) OR the off-chain consensus-reject projection. For these the
   // step 1 body renders a DerivationPanel instead of signature recovery.
   const isNetwork = (!a.peer_addr && a.peer_handle === 'Network') || isDerived;
-  const descriptor = isNetwork && !isDerived ? getVoteLogDerivation(a, peers) : null;
+  const descriptor = isNetwork && !isDerived ? getVoteLogDerivation(a) : null;
   const precomputed = isDerived ? {
     dissents: a.derived_dissents,
     peers: a.derived_peers,
@@ -428,7 +472,6 @@ function VerifierModal({ a, onClose, handle, peers, onLinkback }) {
               <DerivationPanel
                 descriptor={descriptor}
                 precomputed={precomputed}
-                peers={peers}
                 onLinkback={onLinkback}
               />
             ) : sig ? (
@@ -547,7 +590,7 @@ function VerifierModal({ a, onClose, handle, peers, onLinkback }) {
 // row whose Vote-digest fields aren't surfaced (or any sig-less gap row) reads
 // "On-chain ✓" and leans on the tx proof, never claiming a signature it can't
 // replay.
-export default function AttestationVerifier({ a, handle, peers, onLinkback }) {
+export default function AttestationVerifier({ a, handle, onLinkback }) {
   const [open, setOpen] = useState(false);
   const hasSig = canRecoverRow(a);
   const isNetwork = (!a.peer_addr && a.peer_handle === 'Network') || !!a.derived;
@@ -564,7 +607,7 @@ export default function AttestationVerifier({ a, handle, peers, onLinkback }) {
         <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M12 2l7 3v6c0 4.5-3 8.5-7 9-4-.5-7-4.5-7-9V5l7-3z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
         <span className="sig">{isNetwork ? 'Derived ✓' : hasSig ? 'EIP-712 ✓' : 'On-chain ✓'}</span>
       </button>
-      {open && <VerifierModal a={a} onClose={() => setOpen(false)} handle={handle} peers={peers} onLinkback={onLinkback} />}
+      {open && <VerifierModal a={a} onClose={() => setOpen(false)} handle={handle} onLinkback={onLinkback} />}
     </>
   );
 }
