@@ -335,23 +335,12 @@ export function DerivationPanel({ descriptor, precomputed, onLinkback }) {
               <span className="v"><b>{chain.count}</b> — read from the chain event payload (authoritative)</span>
             </div>
           )}
-          {(tally || []).map(t => {
-            // Flag a gap when the off-chain mirror has fewer signatures than
-            // the chain count — the chain is truth, the mirror is the set of
-            // EIP-712 signatures the platform also captured for in-browser
-            // verification. Gaps happen when the verify-attestation edge fn
-            // failed for a vote but the on-chain tx still landed.
-            const gap = chain?.count != null && t.count != null && t.count < chain.count;
-            return (
-              <div key={t.label} className="av-row">
-                <span className="k">{t.label}</span>
-                <span className="v">
-                  <b>{t.count ?? '—'}</b> signed
-                  {gap && <em style={{ opacity: 0.75, fontStyle: 'normal' }}> — {chain.count - t.count} signature(s) not archived off-chain; the chain event is authoritative</em>}
-                </span>
-              </div>
-            );
-          })}
+          {(tally || []).map(t => (
+            <div key={t.label} className="av-row">
+              <span className="k">{t.label}</span>
+              <span className="v"><b>{t.count ?? '—'}</b> signed</span>
+            </div>
+          ))}
           {moment?.peers != null && (
             <div className="av-row"><span className="k">Active peers (at the time)</span><span className="v">{moment.peers}</span></div>
           )}

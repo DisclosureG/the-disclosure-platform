@@ -1332,28 +1332,19 @@ export function getVoteLogDerivation(row) {
   switch (row.verdict) {
     case 'canonized':
       // Two paths produce BindingCanonized:
-      //   • normal review — peers cast `castReviewVote(approve=true)` until
-      //     approves reach canonizeThreshold(tier, peers);
-      //   • founding-bundle taxonomy — a peer proposes a pillar/topic bundled
-      //     with founding evidence, peers endorse the node, and at ratification
-      //     the founding (evidence, topic) binding is canonized ATOMICALLY with
-      //     the node — no review votes are ever cast on it.
-      // Both paths are honest consensus, and only one of the two tallies will
-      // be non-zero for any given binding (founding bindings can't be reviewed;
-      // cross-listings via fileBinding go through review). Show both so the
-      // panel reads correctly regardless of which path produced the canon.
+      //   • normal review — chainCount.approve_count holds the count;
+      //   • founding-bundle taxonomy — atomic with node ratification, no review
+      //     votes are cast (chain approve_count is 0). Keep ONLY the founding
+      //     query so the panel still shows which path produced the canon.
       return bindingId ? {
         kind: 'canonized',
         outcomeLabel: 'Approved into the canon',
         question: 'How was this binding canonized?',
-        queries: [
-          { table: 'attestations', label: 'Review approves',           filter: { binding_id: bindingId, phase: 'review',   verdict: 'approve' } },
-          { table: 'attestations', label: 'Founding-bundle endorses',  filter: { binding_id: bindingId, phase: 'taxonomy', verdict: 'endorse' } },
-        ],
-        chainCount: { events: ['BindingCanonized'], countField: 'approve_count', label: 'On-chain approves (review path)' },
+        query: { table: 'attestations', label: 'Founding-bundle endorses', filter: { binding_id: bindingId, phase: 'taxonomy', verdict: 'endorse' } },
+        chainCount: { events: ['BindingCanonized'], countField: 'approve_count', label: 'On-chain review approves' },
         thresholdFn: (peers) => tier && peers ? canonizeThreshold(tier, peers) : null,
         thresholdLabel: 'Canonize threshold',
-        thresholdNote: 'A binding canonizes either via review approves (normal path) or via taxonomy endorses on its founding node (atomic with node ratification). Only one path applies per binding.',
+        thresholdNote: 'Canonization happens via review approves OR via the founding-bundle node endorses — exactly one path applies per binding.',
         moment: { txHash, events: ['BindingCanonized'] },
         filterTerm: eviTerm,
       } : null;
@@ -1362,7 +1353,6 @@ export function getVoteLogDerivation(row) {
         kind: 'expelled',
         outcomeLabel: 'Expelled at review',
         question: 'How many peers rejected this binding?',
-        query: { table: 'attestations', filter: { binding_id: bindingId, phase: 'review', verdict: 'reject' } },
         chainCount: { events: ['BindingExpelled'], countField: 'reject_count', label: 'On-chain rejects' },
         thresholdFn: (peers) => peers ? expelThreshold(peers) : null,
         thresholdLabel: 'Expel threshold',
@@ -1376,8 +1366,8 @@ export function getVoteLogDerivation(row) {
           outcomeLabel: 'Lapsed at review (no consensus)',
           question: 'Why did this binding lapse?',
           queries: [
-            { table: 'attestations', label: 'Approves', filter: { binding_id: bindingId, phase: 'review', verdict: 'approve' } },
-            { table: 'attestations', label: 'Rejects',  filter: { binding_id: bindingId, phase: 'review', verdict: 'reject' } },
+            { table: 'attestations', label: 'Approves cast', filter: { binding_id: bindingId, phase: 'review', verdict: 'approve' } },
+            { table: 'attestations', label: 'Rejects cast', filter: { binding_id: bindingId, phase: 'review', verdict: 'reject' } },
           ],
           thresholdFn: (peers) => tier && peers ? canonizeThreshold(tier, peers) : null,
           thresholdLabel: 'Canonize threshold (not reached)',
@@ -1390,7 +1380,7 @@ export function getVoteLogDerivation(row) {
           kind: 'taxonomy-lapsed',
           outcomeLabel: 'Proposal lapsed (no ratification)',
           question: 'How many peers endorsed before the window closed?',
-          query: { table: 'attestations', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
+          query: { table: 'attestations', label: 'Endorses cast', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
           thresholdFn: (peers) => tier && peers ? bundleThreshold(tier, peers) : null,
           thresholdLabel: 'Bundle threshold (not reached)',
           moment: { txHash, events: ['ProposalLapsed'] },
@@ -1403,7 +1393,6 @@ export function getVoteLogDerivation(row) {
         kind: 'deprecated',
         outcomeLabel: 'Deprecated at challenge',
         question: 'How many peers voted to deprecate?',
-        query: { table: 'attestations', filter: { binding_id: bindingId, phase: 'challenge', verdict: 'challenge' } },
         chainCount: { events: ['BindingDeprecated'], countField: 'challenge_votes', label: 'On-chain deprecate votes' },
         thresholdFn: (peers) => tier && peers ? deprecateThreshold(tier, peers) : null,
         thresholdLabel: 'Deprecate threshold',
@@ -1411,14 +1400,13 @@ export function getVoteLogDerivation(row) {
         filterTerm: eviTerm,
       } : null;
     case 'reaffirmed':
+      // chainCount holds defend votes (the side that won). Keep only the
+      // challenge-side off-chain count so the panel shows the failed attack tally.
       return bindingId ? {
         kind: 'reaffirmed',
         outcomeLabel: 'Reaffirmed against the challenge',
         question: 'Why did the challenge fail?',
-        queries: [
-          { table: 'attestations', label: 'Challenge votes', filter: { binding_id: bindingId, phase: 'challenge', verdict: 'challenge' } },
-          { table: 'attestations', label: 'Defend votes',    filter: { binding_id: bindingId, phase: 'challenge', verdict: 'defend' } },
-        ],
+        query: { table: 'attestations', label: 'Challenge votes (failed)', filter: { binding_id: bindingId, phase: 'challenge', verdict: 'challenge' } },
         chainCount: { events: ['BindingReaffirmed'], countField: 'defense_votes', label: 'On-chain defend votes' },
         thresholdFn: (peers) => tier && peers ? deprecateThreshold(tier, peers) : null,
         thresholdLabel: 'Deprecate threshold (not reached)',
@@ -1426,15 +1414,14 @@ export function getVoteLogDerivation(row) {
         filterTerm: eviTerm,
       } : null;
     case 'ratified':
-      // Proposer is NOT a separate endorsement: nominateNode mints round and the
-      // proposer signs it; further peers endorse to reach bundleThreshold. The
-      // endorsements counter starts at 0 and only PeerEndorsed events increment
-      // it. (Same model as the nominee flow — see PeerGovernance.sol.)
+      // Taxonomy ratification: no on-chain count in the PillarRatified /
+      // TopicRatified payload, so the count below comes from off-chain
+      // attestations (these go through the verify-attestation edge fn).
       return nodeHash ? {
         kind: 'ratified',
         outcomeLabel: 'Ratified into the taxonomy',
         question: 'How many peers endorsed this proposal?',
-        query: { table: 'attestations', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
+        query: { table: 'attestations', label: 'Endorses', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
         thresholdFn: (peers) => tier && peers ? bundleThreshold(tier, peers) : null,
         thresholdLabel: 'Bundle threshold',
         moment: { txHash, events: ['PillarRatified', 'TopicRatified'] },
@@ -1445,7 +1432,7 @@ export function getVoteLogDerivation(row) {
         kind: 'retired',
         outcomeLabel: 'Retired off the canon',
         question: 'How many peers voted to retire?',
-        query: { table: 'gov_votes', filter: { subject: nodeHash, verdict: 'retire' } },
+        query: { table: 'gov_votes', label: 'Retire votes', filter: { subject: nodeHash, verdict: 'retire' } },
         thresholdFn: (peers) => peers ? RETIRE_THRESHOLD(peers) : null,
         thresholdLabel: 'Retire threshold (ceil 2 peers/3)',
         moment: { txHash, events: ['NodeRetired'] },
@@ -1489,7 +1476,6 @@ export function getRegistryDerivation(row) {
         kind: 'verified',
         outcomeLabel: 'Verified as a peer',
         question: 'How many peers endorsed this nominee?',
-        query: { table: 'nominee_votes', filter: { nominee_addr: subject, verdict: 'endorse' } },
         chainCount: { events: ['PeerEndorsed'], countField: 'endorsements', thresholdField: 'threshold', label: 'On-chain endorsements' },
         thresholdFn: (peers) => peers != null ? NOMINEE_THRESHOLD(peers) : null,
         thresholdLabel: 'Nominee threshold (peers/3 + 1)',
@@ -1503,7 +1489,6 @@ export function getRegistryDerivation(row) {
         kind: 'revoked',
         outcomeLabel: 'Revoked from the peer set',
         question: 'How many peers voted to discard?',
-        query: { table: 'revocation_votes', filter: { subject_addr: subject, verdict: 'discard' } },
         chainCount: { events: ['RevocationVoteCast'], countField: 'votes', thresholdField: 'threshold', label: 'On-chain discard votes' },
         thresholdFn: (peers) => peers != null ? REVOKE_THRESHOLD(peers) : null,
         thresholdLabel: 'Revoke threshold (ceil peers/2)',
@@ -1513,11 +1498,13 @@ export function getRegistryDerivation(row) {
         filterTerm: subject,
       };
     case 'cancelled':
+      // Keep dissents are off-chain only — RevocationCancelled emits no count,
+      // so the only count we have is the signed keep votes table.
       return {
         kind: 'cancelled',
         outcomeLabel: 'Revocation cancelled by keep dissents',
         question: 'How many peers signed a keep dissent?',
-        query: { table: 'revocation_votes', filter: { subject_addr: subject, verdict: 'keep' } },
+        query: { table: 'revocation_votes', label: 'Keep dissents', filter: { subject_addr: subject, verdict: 'keep' } },
         thresholdFn: () => null,
         thresholdLabel: 'Cancelled once discards can no longer reach the revoke threshold',
         moment,
