@@ -1955,7 +1955,7 @@ const REG_ACTION = {
   motion:     { label: 'Motion',     cls: 'challenge' },
   discard:    { label: 'Discard',    cls: 'reject'    },
   keep:       { label: 'Keep',       cls: 'defend'    },
-  cancelled:  { label: 'Cancelled',  cls: 'defend'    },
+  cancelled:  { label: 'Timeout',    cls: 'defend'    },  // RevocationCancelled — cancelStaleRevocation GC after window expires without enough discards
   revoked:    { label: 'Revoked',    cls: 'reject'    },
   seeded:     { label: 'Seeded',     cls: 'endorse'   },  // PeerAdded with no NomineeVerified twin — owner seed
   inactivity: { label: 'Inactivity', cls: 'reject'    },  // PeerRemoved with no PeerRevoked twin — pruneInactivePeer

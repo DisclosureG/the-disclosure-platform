@@ -1505,19 +1505,12 @@ export function getRegistryDerivation(row) {
         moment: { ...moment, peersAdjust: 1 },
         filterTerm: subject,
       };
-    case 'cancelled':
-      // Keep dissents are off-chain only — RevocationCancelled emits no count,
-      // so the only count we have is the signed keep votes table.
-      return {
-        kind: 'cancelled',
-        outcomeLabel: 'Revocation cancelled by keep dissents',
-        question: 'How many peers signed a keep dissent?',
-        query: { table: 'revocation_votes', label: 'Keep dissents', filter: { subject_addr: subject, verdict: 'keep' } },
-        thresholdFn: () => null,
-        thresholdLabel: 'Cancelled once discards can no longer reach the revoke threshold',
-        moment,
-        filterTerm: subject,
-      };
+    // 'cancelled' is NOT a derivable consensus outcome: RevocationCancelled
+    // fires from `cancelStaleRevocation`, a permissionless GC after the revoke
+    // window expires WITHOUT discards reaching threshold. Keep votes have no
+    // on-chain effect — they're an off-chain attestation surface only. So this
+    // row stays "On-chain ✓" (timeout-GC, no tally to derive), same treatment
+    // as NomineeLapsed and Inactivity.
     default:
       return null;
   }
