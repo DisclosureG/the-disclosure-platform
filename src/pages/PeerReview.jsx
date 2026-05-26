@@ -2816,7 +2816,7 @@ function ObserverWorkspace({ wallet, peerCount, setToast }) {
 
       <SystemHealthStrip />
 
-      {tab === 'log'   && <LogTab key={logQuery} initialQuery={logQuery} />}
+      {tab === 'log'   && <LogTab key={logQuery} initialQuery={logQuery} peerCount={peerCount} />}
       {tab === 'peers' && <PeersTab me={null} peerCount={peerCount} onNominate={() => {}} setToast={setToast} onPeerHistory={seePeerHistory} />}
     </div>
   );

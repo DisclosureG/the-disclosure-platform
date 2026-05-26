@@ -212,7 +212,7 @@ function VoteRow({ v, isNew, onOpen, handleMap }) {
           : <span style={{ color: 'var(--ink-faint)' }}>—</span>}
       </span>
       <span className="proof" role="cell">
-        <AttestationVerifier a={v} handle={peerName} />
+        <AttestationVerifier a={v} handle={peerName} handleMap={handleMap} />
       </span>
       {note && showNote && (
         <div className="h-vote-note">

@@ -47,7 +47,7 @@ function WhoVotedRow({ v, handleMap }) {
           <span className="ev-vote-none">—</span>
         )}
       </span>
-      <span className="ev-vote-proof"><AttestationVerifier a={v} handle={peerName} /></span>
+      <span className="ev-vote-proof"><AttestationVerifier a={v} handle={peerName} handleMap={handleMap} /></span>
       {note && showNote && (
         <div className="ev-vote-note">
           <span className="ev-vote-note-label">Deliberation note</span>

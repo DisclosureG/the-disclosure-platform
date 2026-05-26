@@ -751,7 +751,7 @@ function VoteHistoryRow({ v, handleMap }) {
           <span className="ev-vote-none">—</span>
         )}
       </span>
-      <span className="ev-vote-proof"><AttestationVerifier a={v} handle={peerName} /></span>
+      <span className="ev-vote-proof"><AttestationVerifier a={v} handle={peerName} handleMap={handleMap} /></span>
       {note && showNote && (
         <div className="ev-vote-note">
           <span className="ev-vote-note-label">Deliberation note</span>
@@ -1218,7 +1218,7 @@ function SubmitModal({ open, onClose, walletPeer, pillars }) {
             <div className="ev-form-row">
               <label htmlFor="f-type">Type</label>
               <select id="f-type" value={form.type} onChange={handle('type')} disabled={locked}>
-                {['Paper','Book','Podcast','Documentary','Video','Declassified','Testimony','Lecture','Study','Method','Witness','Art','Photograph','Document'].map(t =>
+                {['Paper','Book','Podcast','Documentary','Video','Declassified','Testimony','Lecture','Study','Method','Investigation','Witness','Art','Photograph','Document'].map(t =>
                   <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
