@@ -1313,9 +1313,13 @@ export function useDerivedConsensusRejects(activePeers, query = '', verdict = ''
 // Returns null for non-consensus Network rows (review timeouts, inactivity
 // prunes, owner seeds) and for any signed-peer row.
 
-const NOMINEE_THRESHOLD = (peers) => Math.max(1, Math.ceil(peers / 2));
-const REVOKE_THRESHOLD  = (peers) => Math.max(1, Math.ceil(peers / 2));
-const RETIRE_THRESHOLD  = (peers) => Math.max(1, Math.ceil((2 * peers) / 3));
+// Mirror the on-chain threshold helpers from PeerGovernance.sol /
+// EvidenceConsensus.sol — these are the formulas the contract used at the
+// moment, so the panel's "what threshold did the contract need to cross" line
+// matches what actually happened on-chain.
+const NOMINEE_THRESHOLD = (peers) => Math.max(1, Math.floor(peers / 3) + 1);  // nomineeThreshold = peers/3 + 1
+const REVOKE_THRESHOLD  = (peers) => Math.max(1, Math.ceil(peers / 2));       // revokeThreshold = ceil(peers/2)
+const RETIRE_THRESHOLD  = (peers) => Math.max(1, Math.ceil((2 * peers) / 3)); // retireThreshold = ceil(2 peers/3)
 
 export function getVoteLogDerivation(row) {
   if (!row || row.peer_handle !== 'Network') return null;
@@ -1346,6 +1350,7 @@ export function getVoteLogDerivation(row) {
           { table: 'attestations', label: 'Review approves',           filter: { binding_id: bindingId, phase: 'review',   verdict: 'approve' } },
           { table: 'attestations', label: 'Founding-bundle endorses',  filter: { binding_id: bindingId, phase: 'taxonomy', verdict: 'endorse' } },
         ],
+        chainCount: { events: ['BindingCanonized'], countField: 'approve_count', label: 'On-chain approves (review path)' },
         thresholdFn: (peers) => tier && peers ? canonizeThreshold(tier, peers) : null,
         thresholdLabel: 'Canonize threshold',
         thresholdNote: 'A binding canonizes either via review approves (normal path) or via taxonomy endorses on its founding node (atomic with node ratification). Only one path applies per binding.',
@@ -1358,6 +1363,7 @@ export function getVoteLogDerivation(row) {
         outcomeLabel: 'Expelled at review',
         question: 'How many peers rejected this binding?',
         query: { table: 'attestations', filter: { binding_id: bindingId, phase: 'review', verdict: 'reject' } },
+        chainCount: { events: ['BindingExpelled'], countField: 'reject_count', label: 'On-chain rejects' },
         thresholdFn: (peers) => peers ? expelThreshold(peers) : null,
         thresholdLabel: 'Expel threshold',
         moment: { txHash, events: ['BindingExpelled'] },
@@ -1398,6 +1404,7 @@ export function getVoteLogDerivation(row) {
         outcomeLabel: 'Deprecated at challenge',
         question: 'How many peers voted to deprecate?',
         query: { table: 'attestations', filter: { binding_id: bindingId, phase: 'challenge', verdict: 'challenge' } },
+        chainCount: { events: ['BindingDeprecated'], countField: 'challenge_votes', label: 'On-chain deprecate votes' },
         thresholdFn: (peers) => tier && peers ? deprecateThreshold(tier, peers) : null,
         thresholdLabel: 'Deprecate threshold',
         moment: { txHash, events: ['BindingDeprecated'] },
@@ -1412,12 +1419,17 @@ export function getVoteLogDerivation(row) {
           { table: 'attestations', label: 'Challenge votes', filter: { binding_id: bindingId, phase: 'challenge', verdict: 'challenge' } },
           { table: 'attestations', label: 'Defend votes',    filter: { binding_id: bindingId, phase: 'challenge', verdict: 'defend' } },
         ],
+        chainCount: { events: ['BindingReaffirmed'], countField: 'defense_votes', label: 'On-chain defend votes' },
         thresholdFn: (peers) => tier && peers ? deprecateThreshold(tier, peers) : null,
         thresholdLabel: 'Deprecate threshold (not reached)',
         moment: { txHash, events: ['BindingReaffirmed'] },
         filterTerm: eviTerm,
       } : null;
     case 'ratified':
+      // Proposer is NOT a separate endorsement: nominateNode mints round and the
+      // proposer signs it; further peers endorse to reach bundleThreshold. The
+      // endorsements counter starts at 0 and only PeerEndorsed events increment
+      // it. (Same model as the nominee flow — see PeerGovernance.sol.)
       return nodeHash ? {
         kind: 'ratified',
         outcomeLabel: 'Ratified into the taxonomy',
@@ -1425,7 +1437,6 @@ export function getVoteLogDerivation(row) {
         query: { table: 'attestations', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
         thresholdFn: (peers) => tier && peers ? bundleThreshold(tier, peers) : null,
         thresholdLabel: 'Bundle threshold',
-        thresholdNote: 'Proposer counts as endorsement #1.',
         moment: { txHash, events: ['PillarRatified', 'TopicRatified'] },
         filterTerm: nodeHash,
       } : null;
@@ -1436,7 +1447,7 @@ export function getVoteLogDerivation(row) {
         question: 'How many peers voted to retire?',
         query: { table: 'gov_votes', filter: { subject: nodeHash, verdict: 'retire' } },
         thresholdFn: (peers) => peers ? RETIRE_THRESHOLD(peers) : null,
-        thresholdLabel: 'Retire threshold (ceil 2n/3)',
+        thresholdLabel: 'Retire threshold (ceil 2 peers/3)',
         moment: { txHash, events: ['NodeRetired'] },
         filterTerm: nodeHash,
       } : null;
@@ -1458,6 +1469,19 @@ export function getRegistryDerivation(row) {
     blockNumber: row.blockNumber ?? null,
     payload:     row.payload ?? null,
   };
+  // Nominee verification and revocation BOTH fire their sibling vote event
+  // (PeerEndorsed / RevocationVoteCast) in the same tx that triggers the
+  // outcome. Those vote events carry the FINAL count + threshold in their
+  // payload — the contract's own truth at that block. Reading them via
+  // chainCount avoids two real risks:
+  //   • the off-chain `nominee_votes` / `revocation_votes` mirror can have
+  //     gaps (the edge fn writes them best-effort; the chain is authoritative);
+  //   • the live peer count has shifted since, so recomputing the threshold
+  //     from peers-now would lie about what the contract required.
+  // The off-chain row count is still shown alongside, labelled as the
+  // independently-verifiable signature mirror.
+  // (Per PeerGovernance.sol: the nominator is NOT counted as endorsement #1 —
+  // nomineeEndorsements starts at 0 and only PeerEndorsed events increment it.)
   switch (row.action) {
     case 'verified':
       return {
@@ -1465,10 +1489,12 @@ export function getRegistryDerivation(row) {
         outcomeLabel: 'Verified as a peer',
         question: 'How many peers endorsed this nominee?',
         query: { table: 'nominee_votes', filter: { nominee_addr: subject, verdict: 'endorse' } },
-        thresholdFn: (peers) => peers ? NOMINEE_THRESHOLD(peers) : null,
-        thresholdLabel: 'Nominee threshold (ceil n/2)',
-        thresholdNote: 'Nominator counts as endorsement #1.',
-        moment,
+        chainCount: { events: ['PeerEndorsed'], countField: 'endorsements', thresholdField: 'threshold', label: 'On-chain endorsements' },
+        thresholdFn: (peers) => peers != null ? NOMINEE_THRESHOLD(peers) : null,
+        thresholdLabel: 'Nominee threshold (peers/3 + 1)',
+        // NomineeVerified.payload.active_peer_count is the POST-add value;
+        // the threshold check inside the same tx used the PRE-add count.
+        moment: { ...moment, peersAdjust: -1 },
         filterTerm: subject,
       };
     case 'revoked':
@@ -1477,9 +1503,12 @@ export function getRegistryDerivation(row) {
         outcomeLabel: 'Revoked from the peer set',
         question: 'How many peers voted to discard?',
         query: { table: 'revocation_votes', filter: { subject_addr: subject, verdict: 'discard' } },
-        thresholdFn: (peers) => peers ? REVOKE_THRESHOLD(peers) : null,
-        thresholdLabel: 'Revoke threshold (ceil n/2)',
-        moment,
+        chainCount: { events: ['RevocationVoteCast'], countField: 'votes', thresholdField: 'threshold', label: 'On-chain discard votes' },
+        thresholdFn: (peers) => peers != null ? REVOKE_THRESHOLD(peers) : null,
+        thresholdLabel: 'Revoke threshold (ceil peers/2)',
+        // PeerRevoked.payload.active_peer_count is POST-removal; the threshold
+        // check inside the same tx used the PRE-removal count.
+        moment: { ...moment, peersAdjust: 1 },
         filterTerm: subject,
       };
     case 'cancelled':
@@ -1513,6 +1542,36 @@ export async function fetchDerivationTally(descriptor) {
     out.push({ label: q.label || 'Signed peers', count: error ? null : (count ?? 0), error: error?.message || null });
   }
   return out;
+}
+
+// Read the contract-authoritative count + threshold from the sibling vote
+// event the consensus tx emitted (PeerEndorsed for nominee verify,
+// RevocationVoteCast for revoke, BindingCanonized's own payload for canonize,
+// etc.). The chain payload is the source of truth at the moment — the
+// off-chain mirror tables can have write gaps, and the live peer count has
+// shifted since, so neither of those is a safe substitute.
+//
+// Picks the highest-log_index match in the tx so the LAST vote in a sequence
+// (the threshold-crossing one) is what we read.
+export async function fetchChainCount(descriptor) {
+  if (!descriptor?.chainCount?.events?.length || !descriptor.moment?.txHash) return null;
+  const { data } = await supabase
+    .from('chain_events')
+    .select('event_name, payload, log_index')
+    .eq('tx_hash', descriptor.moment.txHash)
+    .in('event_name', descriptor.chainCount.events)
+    .order('log_index', { ascending: false })
+    .limit(1);
+  const row = data?.[0];
+  if (!row) return null;
+  const cf = descriptor.chainCount.countField;
+  const tf = descriptor.chainCount.thresholdField;
+  return {
+    count:     cf && row.payload?.[cf] != null ? Number(row.payload[cf]) : null,
+    threshold: tf && row.payload?.[tf] != null ? Number(row.payload[tf]) : null,
+    eventName: row.event_name,
+    label:     descriptor.chainCount.label || 'On-chain count',
+  };
 }
 
 // Find a chain_events row by tx hash + one of the candidate event_name values.

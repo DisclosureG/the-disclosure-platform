@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { verifyTypedData } from 'ethers';
 import { ATTESTATION_DOMAIN, ATTESTATION_TYPES, VOTE_TYPES, CONSENSUS_CHAIN_ID } from '../lib/wallet-constants';
 import { recoverAttestationSigner, computeContentHash } from '../lib/wallet';
-import { getVoteLogDerivation, fetchDerivationTally, fetchNetworkEventByTx, peerCountAtBlock } from '../evidence-data';
+import { getVoteLogDerivation, fetchDerivationTally, fetchNetworkEventByTx, fetchChainCount, peerCountAtBlock } from '../evidence-data';
 
 const explorerBase = CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https://testnet.bscscan.com';
 const SHORT = (a) => (a ? `${a.slice(0, 10)}…${a.slice(-8)}` : '');
@@ -234,22 +234,27 @@ function ContentProofBody({ a, onStatus }) {
 // independent of how the peer set has shifted since.
 async function resolveMomentPeers(moment) {
   if (!moment) return { peers: null, blockNumber: null };
+  // Peer-set mutation events (NomineeVerified / PeerRevoked) emit the *post*-
+  // mutation activePeerCount — but the threshold check inside the same tx
+  // used the *pre*-mutation count. `peersAdjust` (set by the descriptor)
+  // moves the displayed/threshold-input value back to that contract-used value.
+  const adjust = (n) => n == null ? n : Math.max(0, n + (moment.peersAdjust || 0));
   const payloadPeers = moment.payload?.active_peer_count;
-  if (payloadPeers != null) return { peers: Number(payloadPeers), blockNumber: moment.blockNumber ?? null };
+  if (payloadPeers != null) return { peers: adjust(Number(payloadPeers)), blockNumber: moment.blockNumber ?? null };
   if (moment.txHash) {
     const ev = await fetchNetworkEventByTx(moment.txHash, moment.events || []);
     const evPeers = ev?.payload?.active_peer_count;
     const blockNumber = ev?.block_number ?? moment.blockNumber ?? null;
-    if (evPeers != null) return { peers: Number(evPeers), blockNumber };
+    if (evPeers != null) return { peers: adjust(Number(evPeers)), blockNumber };
     if (blockNumber != null) {
       const peers = await peerCountAtBlock(blockNumber);
-      return { peers, blockNumber };
+      return { peers: adjust(peers), blockNumber };
     }
     return { peers: null, blockNumber };
   }
   if (moment.blockNumber != null) {
     const peers = await peerCountAtBlock(moment.blockNumber);
-    return { peers, blockNumber: moment.blockNumber };
+    return { peers: adjust(peers), blockNumber: moment.blockNumber };
   }
   return { peers: null, blockNumber: null };
 }
@@ -257,6 +262,7 @@ async function resolveMomentPeers(moment) {
 export function DerivationPanel({ descriptor, precomputed, onLinkback }) {
   const [tally, setTally] = useState(null);
   const [moment, setMoment] = useState(null); // { peers, blockNumber, threshold }
+  const [chain, setChain] = useState(null);   // { count, threshold, label } from chain_events payload
   const [state, setState] = useState(precomputed ? 'ok' : 'loading');
 
   useEffect(() => {
@@ -266,11 +272,16 @@ export function DerivationPanel({ descriptor, precomputed, onLinkback }) {
     Promise.all([
       fetchDerivationTally(descriptor),
       resolveMomentPeers(descriptor.moment),
+      fetchChainCount(descriptor),
     ])
-      .then(([t, m]) => {
+      .then(([t, m, c]) => {
         if (cancelled) return;
-        const threshold = descriptor.thresholdFn ? descriptor.thresholdFn(m.peers) : null;
+        // Threshold preference: chain payload's thresholdField (the exact value
+        // the contract used) → descriptor.thresholdFn(moment-peers) fallback.
+        const fnThreshold = descriptor.thresholdFn ? descriptor.thresholdFn(m.peers) : null;
+        const threshold = c?.threshold != null ? c.threshold : fnThreshold;
         setTally(t);
+        setChain(c);
         setMoment({ ...m, threshold });
         setState('ok');
       })
@@ -316,19 +327,39 @@ export function DerivationPanel({ descriptor, precomputed, onLinkback }) {
       <p className="av-step-note">{descriptor.question}</p>
       {state === 'loading' && <p className="av-step-note">Counting signed peer votes…</p>}
       {state === 'error'   && <p className="av-err">Could not load the tally.</p>}
-      {state === 'ok' && (tally || []).length > 0 && (
+      {state === 'ok' && (
         <div className="av-kv">
-          {(tally || []).map(t => (
-            <div key={t.label} className="av-row">
-              <span className="k">{t.label}</span>
-              <span className="v"><b>{t.count ?? '—'}</b> signed</span>
+          {chain?.count != null && (
+            <div className="av-row">
+              <span className="k">{chain.label}</span>
+              <span className="v"><b>{chain.count}</b> — read from the chain event payload (authoritative)</span>
             </div>
-          ))}
+          )}
+          {(tally || []).map(t => {
+            // Flag a gap when the off-chain mirror has fewer signatures than
+            // the chain count — the chain is truth, the mirror is the set of
+            // EIP-712 signatures the platform also captured for in-browser
+            // verification. Gaps happen when the verify-attestation edge fn
+            // failed for a vote but the on-chain tx still landed.
+            const gap = chain?.count != null && t.count != null && t.count < chain.count;
+            return (
+              <div key={t.label} className="av-row">
+                <span className="k">{t.label}</span>
+                <span className="v">
+                  <b>{t.count ?? '—'}</b> signed
+                  {gap && <em style={{ opacity: 0.75, fontStyle: 'normal' }}> — {chain.count - t.count} signature(s) not archived off-chain; the chain event is authoritative</em>}
+                </span>
+              </div>
+            );
+          })}
           {moment?.peers != null && (
             <div className="av-row"><span className="k">Active peers (at the time)</span><span className="v">{moment.peers}</span></div>
           )}
           {moment?.threshold != null && (
-            <div className="av-row"><span className="k">{descriptor.thresholdLabel}</span><span className="v"><b>{moment.threshold}</b>{moment.peers ? ` of ${moment.peers}` : ''} — the value the contract used at the time</span></div>
+            <div className="av-row">
+              <span className="k">{descriptor.thresholdLabel}</span>
+              <span className="v"><b>{moment.threshold}</b>{moment.peers != null ? ` of ${moment.peers}` : ''} — the value the contract used at the time</span>
+            </div>
           )}
           {descriptor.thresholdNote && (
             <div className="av-row"><span className="k">Note</span><span className="v" style={{ opacity: 0.8 }}>{descriptor.thresholdNote}</span></div>
