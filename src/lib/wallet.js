@@ -64,6 +64,7 @@ export const getNomineeThreshold            = (...a) => impl().then(m => m.getNo
 export const getRevokeThreshold             = (...a) => impl().then(m => m.getRevokeThreshold(...a));
 export const isNomineeAddress               = (...a) => impl().then(m => m.isNomineeAddress(...a));
 export const getNomineeEndorsements         = (...a) => impl().then(m => m.getNomineeEndorsements(...a));
+export const getNomineeRound                 = (...a) => impl().then(m => m.getNomineeRound(...a));
 export const hasEndorsedNominee             = (...a) => impl().then(m => m.hasEndorsedNominee(...a));
 export const getNomineeHandle               = (...a) => impl().then(m => m.getNomineeHandle(...a));
 export const isRevocationActive             = (...a) => impl().then(m => m.isRevocationActive(...a));
@@ -75,6 +76,8 @@ export const getBoostCooldownRemaining       = (...a) => impl().then(m => m.getB
 export const isNominationsOpen              = (...a) => impl().then(m => m.isNominationsOpen(...a));
 export const getSeedPhaseK                  = (...a) => impl().then(m => m.getSeedPhaseK(...a));
 export const getOwner                       = (...a) => impl().then(m => m.getOwner(...a));
+export const getForceRenounceActive         = (...a) => impl().then(m => m.getForceRenounceActive(...a));
+export const getForceRenounceVotes          = (...a) => impl().then(m => m.getForceRenounceVotes(...a));
 
 export const getTaxonomyThreshold           = (...a) => impl().then(m => m.getTaxonomyThreshold(...a));
 export const getRetireThreshold             = (...a) => impl().then(m => m.getRetireThreshold(...a));

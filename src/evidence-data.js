@@ -9,13 +9,18 @@ import { supabase } from './lib/supabase';
 // instead of refetching.  ensureTaxonomy() is idempotent; useTaxonomy() exposes
 // the live, reshaped tree to React.
 
-let _taxonomy = { pillars: [], topics: [], pillarMap: {}, topicMap: {}, loaded: false };
+let _taxonomy = { pillars: [], topics: [], pillarMap: {}, topicMap: {}, proposedPillarMap: {}, proposedTopicMap: {}, loaded: false };
 let _taxonomyPromise = null;
 
 async function loadTaxonomy() {
-  const [{ data: pillars }, { data: topics }] = await Promise.all([
+  // Proposed (not-yet-ratified) nodes are loaded alongside the ratified set so
+  // surfaces like the vote history can resolve a proposal's pillar/topic title
+  // (and flag it as not-yet-existing) before it ratifies.
+  const [{ data: pillars }, { data: topics }, { data: proposedPillars }, { data: proposedTopics }] = await Promise.all([
     supabase.from('pillars').select('*').eq('status', 'ratified').order('ord', { ascending: true }),
     supabase.from('topics').select('*').eq('status', 'ratified').order('ord', { ascending: true }),
+    supabase.from('pillars').select('id, title').eq('status', 'proposed'),
+    supabase.from('topics').select('id, title, pillar_id').eq('status', 'proposed'),
   ]);
   const pillarRows = pillars || [];
   const topicRows  = topics  || [];
@@ -30,6 +35,8 @@ async function loadTaxonomy() {
     topics:    topicRows,
     pillarMap: Object.fromEntries(shaped.map(p => [p.id, p])),
     topicMap:  Object.fromEntries(topicRows.map(t => [t.id, t])),
+    proposedPillarMap: Object.fromEntries((proposedPillars || []).map(p => [p.id, p])),
+    proposedTopicMap:  Object.fromEntries((proposedTopics  || []).map(t => [t.id, t])),
     loaded:    true,
   };
   return _taxonomy;
@@ -248,9 +255,12 @@ export function useEvidence(searchQuery = '', tier = 'all', topic = 'all') {
     const trimmed = searchQuery.trim();
     let q = supabase
       .from('bindings')
-      .select(BINDING_SELECT.replace('evidence:evidence_id(', 'evidence:evidence_id!inner('),
+      .select(BINDING_SELECT.replace('evidence:evidence_id(', 'evidence:evidence_id!inner(') + ', topic:topic_id!inner(status)',
               counted ? { count: 'exact' } : undefined)
-      .in('status', VISIBLE_STATUSES);
+      .in('status', VISIBLE_STATUSES)
+      // Exclude bindings under a RETIRED topic/pillar — the archive only shows
+      // (and counts) evidence under the live canon taxonomy.
+      .eq('topic.status', 'ratified');
     q = applyTextSearch(q, trimmed, 'evidence.search_text');
     if (tier !== 'all')  q = q.eq('evidence.tier', parseInt(tier, 10));
     if (topic !== 'all') q = q.eq('topic_id', topic);
@@ -429,12 +439,15 @@ export function useTierCounts() {
     let cancelled = false;
     // Counts are over canon BINDINGS (one evidence can count under several
     // topics); deprecated bindings are excluded (COUNTED_STATUSES). Tier lives
-    // on the joined evidence, so we inner-join and filter on evidence.tier.
+    // on the joined evidence, so we inner-join and filter on evidence.tier. The
+    // topic inner-join with status='ratified' drops any binding whose topic (or,
+    // transitively, pillar) was RETIRED — counts only ever reflect the live canon.
     const fetchCounts = () => {
       const base = () => supabase
         .from('bindings')
-        .select('evidence:evidence_id!inner(tier)', { count: 'exact', head: true })
-        .in('status', COUNTED_STATUSES);
+        .select('evidence:evidence_id!inner(tier),topic:topic_id!inner(status)', { count: 'exact', head: true })
+        .in('status', COUNTED_STATUSES)
+        .eq('topic.status', 'ratified');
       Promise.all([
         base(),
         base().eq('evidence.tier', 1),
@@ -474,9 +487,15 @@ export function useBindingCounts() {
     const fetchCounts = () => {
       const base = () => supabase.from('bindings').select('*', { count: 'exact', head: true });
       Promise.all([
+        // pending stays unfiltered — it includes founding evidence of PROPOSED
+        // nodes (topic not yet ratified), which is legitimately in review.
         base().eq('status', 'pending'),
         base().eq('status', 'contested'),
-        base().in('status', CANON_STATUSES),
+        // archived is the canon count: drop bindings under a retired topic/pillar.
+        supabase.from('bindings')
+          .select('topic:topic_id!inner(status)', { count: 'exact', head: true })
+          .in('status', CANON_STATUSES)
+          .eq('topic.status', 'ratified'),
       ]).then(([p, c, a]) => {
         if (cancelled) return;
         setCounts({ pending: p.count ?? 0, contested: c.count ?? 0, archived: a.count ?? 0 });
@@ -501,31 +520,46 @@ export function useBindingCounts() {
 // ── Peer handle map — addr → handle for display fallback ─────────────────────
 //
 // A peer's handle is canonical on-chain; it is snapshotted into
-// attestations.peer_handle only on the signed write path. When the indexer
-// backfills a gap row (vote mined on-chain but the off-chain signed write was
-// lost), the row carries no handle and the feed would show a bare address. This
-// builds an addr→handle map from every attestation that DID capture a handle, so
-// the same peer's known handle can stand in. Pure off-chain, no wallet/RPC, so it
-// works for logged-out visitors on the home feed.
+// attestations.peer_handle on the signed write path, and emitted in the
+// PeerNominated / NomineeVerified / PeerAdded chain events. When a row carries
+// no handle (a freshly-nominated peer who hasn't attested yet, or an indexer
+// gap row) the feed would show a bare address. This builds an addr→handle map
+// from both sources — attestations first, then handle-carrying chain events
+// for any address the attestation set didn't cover — so the same peer's known
+// handle can stand in. Pure off-chain, no wallet/RPC, so it works for
+// logged-out visitors on the home feed.
 export function usePeerHandleMap() {
   const [map, setMap] = useState({});
   useEffect(() => {
     let cancelled = false;
-    supabase
-      .from('attestation_log_view')
-      .select('peer_addr, peer_handle')
-      .not('peer_handle', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(2000)
-      .then(({ data }) => {
-        if (cancelled || !data) return;
-        const m = {};
-        for (const r of data) {
-          const a = r.peer_addr?.toLowerCase();
-          if (a && r.peer_handle && !m[a]) m[a] = r.peer_handle;
-        }
-        setMap(m);
-      });
+    Promise.all([
+      supabase
+        .from('attestation_log_view')
+        .select('peer_addr, peer_handle')
+        .not('peer_handle', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(2000),
+      supabase
+        .from('chain_events')
+        .select('peer_addr, payload')
+        .in('event_name', ['PeerNominated', 'NomineeVerified', 'PeerAdded'])
+        .order('block_number', { ascending: false })
+        .order('log_index', { ascending: false })
+        .limit(2000),
+    ]).then(([att, ce]) => {
+      if (cancelled) return;
+      const m = {};
+      for (const r of att.data || []) {
+        const a = r.peer_addr?.toLowerCase();
+        if (a && r.peer_handle && !m[a]) m[a] = r.peer_handle;
+      }
+      for (const r of ce.data || []) {
+        const a = r.peer_addr?.toLowerCase();
+        const h = r.payload?.handle;
+        if (a && h && !m[a]) m[a] = h;
+      }
+      setMap(m);
+    });
     return () => { cancelled = true; };
   }, []);
   return map;
@@ -545,7 +579,10 @@ export function useRecentVotes(limit = 6) {
     const refetch = () =>
       supabase
         .from('attestation_log_view')
-        .select('id, created_at, peer_handle, peer_addr, phase, verdict, evidence_title, evidence_id, binding_id, pillar_id, topic_id, tx_hash, note, eip712_sig, evidence_source, evidence_year, evidence_excerpt, evidence_link, evidence_tier, content_hash, submission_tx_hash')
+        // select('*') so each row carries the Vote-digest fields the proof modal
+        // needs (round / note_hash / binding_hash / node_hash). An explicit list
+        // silently drifts from AttestationVerifier and breaks signer recovery.
+        .select('*')
         .order('created_at', { ascending: false })
         .limit(limit)
         .then(({ data }) => { if (!cancelled) setVotes(data || []); });
@@ -1063,14 +1100,14 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
   const termsKey = terms.join(' ');
   const v = ['approve', 'reject', 'challenge', 'defend'].includes(verdict) ? verdict : '';
 
-  // We query the `attestation_log_view` (migration 20260517010000, extended
-  // 20260519000000) which flattens evidence.search_text + evidence.title +
-  // evidence_id::text onto each attestation row. PostgREST `or=(...)` doesn't
-  // accept dotted paths to embedded resources, so the view lets a single
-  // per-term OR filter cover handle, address, the full evidence searchable
-  // surface (title + source + excerpt + body + quote + tags), and the UUID
-  // (full or prefix copied from an archive card).
-  const FROM_VIEW = 'attestation_log_view';
+  // We query the unified `vote_log_view` — `attestation_log_view` (review /
+  // challenge / taxonomy endorse·reject) UNION the node/owner governance votes
+  // (taxonomy retire + force-renounce) from `gov_votes`, so every public vote
+  // shows in one feed (peer-registry membership votes stay in their own log).
+  // The view flattens evidence.search_text + title + evidence_id::text onto each
+  // row so a single per-term OR filter covers handle, address, the evidence
+  // searchable surface, and the UUID (gov rows match on handle/address).
+  const FROM_VIEW = 'vote_log_view';
 
   const applyFilters = (req) => {
     // 'endorse' (taxonomy) is the same act as 'approve' (review) — surface them
@@ -1182,6 +1219,220 @@ export function useEvidenceVotes(evidenceId) {
   return { votes, loading };
 }
 
+// ── Peer registry voting log ─────────────────────────────────────────────────
+//
+// The registry analogue of the evidence vote history (useAttestationLog): every
+// governance vote and lifecycle event on the named peer set — nominee
+// endorsements, revocation discard votes, and the motions/outcomes that bracket
+// them — as one searchable, paginated stream, newest first. On-chain acts come
+// from `chain_events`; the off-chain signed "keep" dissents (which have no
+// on-chain call) are merged in from `revocation_votes`. Searchable by subject or
+// actor address, handle, or tx hash; `kind` narrows to a vote class
+// (endorse · discard · keep).
+const REGISTRY_PAGE = 30;
+// Vote-class → the chain events that make up that class. "Endorse" folds in the
+// nomination (the nominator's founding endorsement); "discard" folds in the
+// motion (the act that opens the discard vote). The keep class has no chain
+// event — it lives purely in revocation_votes.
+const REGISTRY_KIND_EVENTS = {
+  endorse: ['PeerNominated', 'PeerEndorsed'],
+  discard: ['RevocationMotioned', 'RevocationVoteCast'],
+};
+// The full registry stream (unfiltered): votes + the lifecycle outcomes that
+// resolve them, so the log reads as a complete record of the peer set's history.
+const REGISTRY_ALL_EVENTS = [
+  'PeerNominated', 'PeerEndorsed', 'NomineeVerified', 'NomineeLapsed',
+  'RevocationMotioned', 'RevocationVoteCast', 'RevocationCancelled',
+  'PeerRevoked', 'PeerAdded', 'PeerRemoved',
+];
+
+// chain_events row → normalized registry-log row. `subjectAddr` is the peer the
+// action concerns (the nominee / the peer under revocation); `actorAddr` is who
+// cast it (endorser / voter / nominator / motioner), null for network outcomes.
+function normalizeRegistryEvent(r) {
+  const p  = r.payload || {};
+  const ts = r.occurred_at || r.inserted_at;
+  const base = { id: `ev:${r.id}`, ts, source: 'chain', txHash: r.tx_hash, subjectAddr: r.peer_addr || null, subjectHandle: null, actorAddr: null, count: null, threshold: null };
+  switch (r.event_name) {
+    case 'PeerNominated':       return { ...base, action: 'nominate',  actorAddr: p.nominated_by || null, subjectHandle: p.handle || null, count: 1, threshold: p.threshold ?? null };
+    case 'PeerEndorsed':        return { ...base, action: 'endorse',   actorAddr: p.endorser || null, count: p.endorsements ?? null, threshold: p.threshold ?? null };
+    case 'NomineeVerified':     return { ...base, action: 'verified',  subjectHandle: p.handle || null };
+    case 'NomineeLapsed':       return { ...base, action: 'lapsed' };
+    case 'RevocationMotioned':  return { ...base, action: 'motion',    actorAddr: p.by || null, threshold: p.threshold ?? null };
+    case 'RevocationVoteCast':  return { ...base, action: 'discard',   actorAddr: p.voter || null, count: p.votes ?? null, threshold: p.threshold ?? null };
+    case 'RevocationCancelled': return { ...base, action: 'cancelled' };
+    case 'PeerRevoked':         return { ...base, action: 'revoked' };
+    case 'PeerAdded':           return { ...base, action: 'seeded',    subjectHandle: p.handle || null };
+    case 'PeerRemoved':         return { ...base, action: 'removed' };
+    default:                    return { ...base, action: r.event_name };
+  }
+}
+
+export function usePeerRegistryLog(pageSize = REGISTRY_PAGE, query = '', kind = '') {
+  const [chain, setChain]     = useState([]);
+  const [keeps, setKeeps]     = useState([]);
+  const [page, setPage]       = useState(0);
+  const [chainCount, setChainCount] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Same sanitize + per-term AND-of-ORs search semantics as useAttestationLog.
+  const terms = query.trim().replace(/[,()*"%\\]/g, '').split(/\s+/).filter(Boolean);
+  const termsKey = terms.join(' ');
+  const k = ['endorse', 'discard', 'keep'].includes(kind) ? kind : '';
+  const events = k === 'keep' ? [] : (REGISTRY_KIND_EVENTS[k] || REGISTRY_ALL_EVENTS);
+  const eventsKey = events.join(',');
+  const includeKeeps = k === '' || k === 'keep';
+
+  // Search across the subject (peer_addr), every actor address carried in the
+  // jsonb payload, the snapshotted handle, and the tx hash. PostgREST supports
+  // json arrow operators inside or(), so a single per-term OR covers them all.
+  const applyChain = (req) => {
+    req = req.in('event_name', events);
+    for (const t of terms) {
+      req = req.or(
+        `peer_addr.ilike.%${t}%,tx_hash.ilike.%${t}%,payload->>endorser.ilike.%${t}%,payload->>voter.ilike.%${t}%,payload->>nominated_by.ilike.%${t}%,payload->>by.ilike.%${t}%,payload->>handle.ilike.%${t}%`,
+      );
+    }
+    return req;
+  };
+
+  const fetchChainPage = (pageIdx) => {
+    if (!events.length) return Promise.resolve({ data: [], count: 0 });
+    return applyChain(
+      supabase
+        .from('chain_events')
+        .select('*', { count: 'estimated' })
+        .order('block_number', { ascending: false })
+        .order('log_index', { ascending: false }),
+    ).range(pageIdx * pageSize, pageIdx * pageSize + pageSize - 1);
+  };
+
+  // Keeps are low-cardinality (bounded by peers × revocation rounds), so the
+  // matching set is loaded in one shot rather than paginated.
+  const fetchKeeps = () => {
+    if (!includeKeeps) return Promise.resolve({ data: [] });
+    let req = supabase
+      .from('revocation_votes')
+      .select('*')
+      .eq('verdict', 'keep')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    for (const t of terms) req = req.or(`subject_addr.ilike.%${t}%,voter_addr.ilike.%${t}%`);
+    return req;
+  };
+
+  const normalizeKeep = (kp) => ({
+    id: `keep:${kp.id}`, ts: kp.created_at, source: 'offchain', action: 'keep',
+    subjectAddr: kp.subject_addr, subjectHandle: null, actorAddr: kp.voter_addr,
+    sig: kp.eip712_sig, round: kp.round, note: kp.note, count: null, threshold: null,
+  });
+
+  // The on-chain vote events carry no note (the note text lives off-chain), so
+  // attach each endorse/discard/motion row's deliberation note + signature from
+  // its off-chain record (nominee_votes / revocation_votes), joined by
+  // (subject, actor). A peer votes once per round, so the latest match wins.
+  const attachNotes = async (rows) => {
+    const endorseRows  = rows.filter(r => r.action === 'endorse' && r.subjectAddr && r.actorAddr);
+    const nominateRows = rows.filter(r => r.action === 'nominate' && r.subjectAddr && r.actorAddr);
+    const discardRows  = rows.filter(r => (r.action === 'discard' || r.action === 'motion') && r.subjectAddr && r.actorAddr);
+    const map = {};
+    if (endorseRows.length) {
+      const { data } = await supabase
+        .from('nominee_votes')
+        .select('nominee_addr, voter_addr, note, eip712_sig, round, created_at')
+        .eq('verdict', 'endorse')
+        .in('nominee_addr', [...new Set(endorseRows.map(r => r.subjectAddr.toLowerCase()))])
+        .in('voter_addr',   [...new Set(endorseRows.map(r => r.actorAddr.toLowerCase()))])
+        .order('created_at', { ascending: false });
+      for (const n of data || []) {
+        const key = `n:${n.nominee_addr}:${n.voter_addr}`;
+        if (!(key in map)) map[key] = { note: n.note, sig: n.eip712_sig, round: n.round };
+      }
+    }
+    if (nominateRows.length) {
+      const { data } = await supabase
+        .from('nominee_votes')
+        .select('nominee_addr, voter_addr, note, eip712_sig, round, created_at')
+        .eq('verdict', 'nominate')
+        .in('nominee_addr', [...new Set(nominateRows.map(r => r.subjectAddr.toLowerCase()))])
+        .in('voter_addr',   [...new Set(nominateRows.map(r => r.actorAddr.toLowerCase()))])
+        .order('created_at', { ascending: false });
+      for (const n of data || []) {
+        const key = `nm:${n.nominee_addr}:${n.voter_addr}`;
+        if (!(key in map)) map[key] = { note: n.note, sig: n.eip712_sig, round: n.round };
+      }
+    }
+    if (discardRows.length) {
+      const { data } = await supabase
+        .from('revocation_votes')
+        .select('subject_addr, voter_addr, note, eip712_sig, round, created_at')
+        .eq('verdict', 'discard')
+        .in('subject_addr', [...new Set(discardRows.map(r => r.subjectAddr.toLowerCase()))])
+        .in('voter_addr',   [...new Set(discardRows.map(r => r.actorAddr.toLowerCase()))])
+        .order('created_at', { ascending: false });
+      for (const d of data || []) {
+        const key = `d:${d.subject_addr}:${d.voter_addr}`;
+        if (!(key in map)) map[key] = { note: d.note, sig: d.eip712_sig, round: d.round };
+      }
+    }
+    return rows.map(r => {
+      const key = r.action === 'endorse' && r.subjectAddr && r.actorAddr
+        ? `n:${r.subjectAddr.toLowerCase()}:${r.actorAddr.toLowerCase()}`
+        : r.action === 'nominate' && r.subjectAddr && r.actorAddr
+          ? `nm:${r.subjectAddr.toLowerCase()}:${r.actorAddr.toLowerCase()}`
+        : (r.action === 'discard' || r.action === 'motion') && r.subjectAddr && r.actorAddr
+          ? `d:${r.subjectAddr.toLowerCase()}:${r.actorAddr.toLowerCase()}`
+          : null;
+      const hit = key ? map[key] : null;
+      return hit ? { ...r, note: hit.note, sig: hit.sig, round: hit.round } : r;
+    });
+  };
+
+  const loadChainRows = async (pageIdx) => {
+    const { data, count } = await fetchChainPage(pageIdx);
+    const rows = await attachNotes((data || []).map(normalizeRegistryEvent));
+    return { rows, count };
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setPage(0); setChainCount(null);
+    Promise.all([loadChainRows(0), fetchKeeps()]).then(([c, kp]) => {
+      if (cancelled) return;
+      setChain(c.rows);
+      setKeeps((kp.data || []).map(normalizeKeep));
+      setChainCount(c.count ?? null);
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  // applyChain/fetchKeeps close over terms/k; pageSize is a dep too.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageSize, termsKey, k, eventsKey]);
+
+  const loadMore = () => {
+    const next = page + 1;
+    setPage(next);
+    setLoading(true);
+    loadChainRows(next).then(({ rows }) => {
+      setChain(prev => [...prev, ...rows]);
+      setLoading(false);
+    });
+  };
+
+  const hasMore = chainCount === null
+    ? chain.length === (page + 1) * pageSize
+    : chain.length < chainCount;
+
+  // Hold keeps behind the chain-pagination frontier so they don't leak past the
+  // loaded on-chain window; once the chain stream is exhausted, show them all.
+  const frontier = hasMore && chain.length ? chain[chain.length - 1].ts : null;
+  const shownKeeps = frontier ? keeps.filter(x => x.ts && x.ts >= frontier) : keeps;
+  const log = [...chain, ...shownKeeps].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+  const total = chainCount === null ? null : chainCount + keeps.length;
+
+  return { log, loading, hasMore, loadMore, total };
+}
+
 // ── Reviews-signed count hook ────────────────────────────────────────────────
 //
 // Lifetime count of attestations signed by a given peer address. Unlike the
@@ -1282,13 +1533,17 @@ export async function castReviewVote(binding, verdict, peerAddr, peerHandle, not
 //   topicId    — the founding topic slug (signed in the EIP-712 message)
 //   bindingId  — the founding binding uuid (the attestation row's target)
 //
-export async function endorseNodeSupabase({ nodeHash, evidenceId, topicId, bindingId, peerAddr, peerHandle, note, sig, txHash = null }) {
+export async function endorseNodeSupabase({ nodeHash, evidenceId, topicId, bindingId, peerAddr, peerHandle, note, sig, txHash = null, round = null, noteHash = null }) {
   await withRetry(() => insertAttestation({
     evidence_id: evidenceId, topic_id: topicId, binding_id: bindingId,
     node_hash: nodeHash,
     peer_addr: peerAddr, peer_handle: peerHandle,
     phase: 'taxonomy', verdict: 'endorse', note: note || null,
     eip712_sig: sig || null, tx_hash: txHash || null,
+    // Vote-reconstruction surface: the on-chain endorse signs a Vote(phase 2,
+    // bindingId = node_hash, round, noteHash). Sent so verify-attestation can
+    // recover the SAME Vote. Absent in dev mode (legacy Attestation fallback).
+    round: round ?? null, note_hash: noteHash ?? null,
     action: 'endorse_node',
   }));
 }
@@ -1342,6 +1597,67 @@ export async function fetchMyTaxonomyRejects(peerAddr) {
 export async function castRevocationKeep({ subjectAddr, voterAddr, round, note, sig }) {
   const { data, error } = await supabase.functions.invoke('revocation-vote', {
     body: { subject_addr: subjectAddr, peer_addr: voterAddr, round, verdict: 'keep', note: note || null, eip712_sig: sig },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(String(data.error));
+  return data;
+}
+
+// Record the off-chain NOTE for a discard vote (motion / voteRevoke). The discard
+// itself is cast + EIP-712-verified on-chain; this persists the deliberation note
+// + the same PeerVote signature the chain recovered, gated on `hasVotedRevoke`.
+// Best-effort: the on-chain vote stands even if this note write fails.
+export async function castRevocationDiscard({ subjectAddr, voterAddr, round, note, sig }) {
+  const { data, error } = await supabase.functions.invoke('revocation-vote', {
+    body: { subject_addr: subjectAddr, peer_addr: voterAddr, round, verdict: 'discard', note: note || null, eip712_sig: sig },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(String(data.error));
+  return data;
+}
+
+// ── Nominee endorsement: off-chain signed note ───────────────────────────────
+//
+// The endorsement is cast + EIP-712-verified on-chain (PeerGovernance recovers
+// the voter from a PeerVote); this records its deliberation note + the same
+// signature via the nominee-vote edge function, gated on `hasEndorsed`. Mirrors
+// castRevocationDiscard. Best-effort — the on-chain endorsement stands regardless.
+export async function castNomineeEndorse({ nomineeAddr, voterAddr, round, note, sig }) {
+  const { data, error } = await supabase.functions.invoke('nominee-vote', {
+    body: { nominee_addr: nomineeAddr, peer_addr: voterAddr, round, note: note || null, eip712_sig: sig },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(String(data.error));
+  return data;
+}
+
+// ── Nominate: off-chain signed note for the NOMINATOR's own act ───────────────
+//
+// Nominating a peer is now an EIP-712 PeerVote (kind 2) recovered on-chain by
+// PeerGovernance. This records the nominator's deliberation note + the same
+// signature via the nominee-vote edge function (verdict 'nominate', gated on
+// gov.nomineeBy == voter). Best-effort — the on-chain nomination stands.
+export async function castNominate({ nomineeAddr, nominatorAddr, round, note, sig }) {
+  const { data, error } = await supabase.functions.invoke('nominee-vote', {
+    body: { nominee_addr: nomineeAddr, peer_addr: nominatorAddr, round, verdict: 'nominate', note: note || null, eip712_sig: sig },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(String(data.error));
+  return data;
+}
+
+// ── Governance note: off-chain note for a node/owner-scoped vote ─────────────
+//
+// Taxonomy RETIRE (motion/vote) and FORCE-RENOUNCE (motion/vote) are on-chain
+// EIP-712 `Vote`-signed; this records the deliberation note + the SAME signature
+// the chain recovered via the `gov-note` edge function (which re-verifies the
+// Vote and the matching on-chain event), so they surface in the shared vote
+// history. Best-effort — the on-chain vote stands regardless.
+//   kind: 'retire' | 'force_renounce'   verdict: 'retire' | 'renounce'
+//   subject: on-chain Vote bindingId (node id for retire; the sentinel for force-renounce)
+export async function castGovNote({ kind, subject, topicId = null, verdict, round, note, noteHash, sig, txHash = null, peerAddr, peerHandle = null }) {
+  const { data, error } = await supabase.functions.invoke('gov-note', {
+    body: { kind, subject, topic_id: topicId, verdict, round, note: note || null, note_hash: noteHash || null, eip712_sig: sig, tx_hash: txHash, peer_addr: peerAddr, peer_handle: peerHandle },
   });
   if (error) throw error;
   if (data?.error) throw new Error(String(data.error));

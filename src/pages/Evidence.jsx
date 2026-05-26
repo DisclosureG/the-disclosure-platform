@@ -408,16 +408,33 @@ function useBoost(walletAddr, exempt) {
       if (!exempt) setCooldownUntil(Date.now() + BOOST_COOLDOWN_MS);
     } catch (ex) {
       const rejected = ex?.code === 4001 || /reject|denied/i.test(ex?.message || '');
-      const already  = /already boosted/i.test(ex?.message || '');
-      const cooling  = /boost cooldown active/i.test(ex?.message || '');
-      setErr(rejected ? null : cooling ? 'Vote cooldown active — try again shortly.' : already ? 'You have already voted on this evidence.' : `Vote failed — ${ex?.message || 'unknown error'}`);
+      if (rejected) {
+        setErr(null);
+      } else {
+        // The contract is deployed with STRIP_REVERTS, so reverts carry no reason
+        // string — re-read the on-chain cooldown to tell a cooldown revert apart
+        // from the other require()s ("not queued" / "already boosted").
+        let secs = 0;
+        if (walletAddr) { try { secs = await getBoostCooldownRemaining(walletAddr); } catch { /* ignore */ } }
+        if (secs > 0) {
+          setCooldownUntil(Date.now() + secs * 1000);
+          setErr('cooldown');
+        } else {
+          setErr('Vote failed — you may have already voted, or this evidence is no longer in the queue.');
+        }
+      }
     } finally {
       setBusy(null);
     }
   };
 
   const votesFor = (e) => (e.queue_priority || 0) + (boosted[e.bindingId] || 0);
-  return { boost, busy, err, votesFor, cooldownLeft };
+  // 'cooldown' is a sentinel — render it as a live-ticking timer (cooldownLeft
+  // re-renders every second), and clear it once the window elapses.
+  const errText = err === 'cooldown'
+    ? (cooldownLeft > 0 ? `Vote cooldown active — try again in ${fmtCooldown(cooldownLeft)}` : null)
+    : err;
+  return { boost, busy, err: errText, votesFor, cooldownLeft };
 }
 
 const arrowSvg = (points) => (
@@ -475,7 +492,14 @@ function CardRail({ children, itemKey }) {
   // to right, then row 2 — instead of the grid's default column-major flow.
   const { cols, rows } = dims;
   const pageSize = cols * rows;
-  const placed = Children.toArray(children).map((child, i) => {
+  const childArr = Children.toArray(children);
+  // Collapse the second row when no page actually needs it, so a topic with
+  // only one row of cards doesn't render empty space below.
+  const usedRows = Math.min(rows, Math.max(1, childArr.reduce((max, _, i) => {
+    const within = i % pageSize;
+    return Math.max(max, Math.floor(within / cols) + 1);
+  }, 1)));
+  const placed = childArr.map((child, i) => {
     const within = i % pageSize;
     const c = within % cols;
     return cloneElement(child, {
@@ -492,7 +516,7 @@ function CardRail({ children, itemKey }) {
       <button className="ev-scroll-arrow is-prev" aria-label="Previous page" disabled={!canPrev} onClick={() => scroll(-1)}>
         {arrowSvg('15,6 9,12 15,18')}
       </button>
-      <div className="ev-grid" ref={gridRef} onScroll={onScroll}>
+      <div className="ev-grid" ref={gridRef} onScroll={onScroll} style={{ gridTemplateRows: `repeat(${usedRows}, 1fr)` }}>
         {placed}
       </div>
       <button className="ev-scroll-arrow is-next" aria-label="Next page" disabled={!canNext} onClick={() => scroll(1)}>

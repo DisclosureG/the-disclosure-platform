@@ -57,6 +57,89 @@ async function challengeVote(c, signer, id, topicId, support, noteHash = ZERO_HA
   return c.connect(signer).castChallengeVote(id, topicId, support, noteHash, sig);
 }
 
+// PeerGovernance membership votes are EIP-712 PeerVote-signed (kind 0 = nominee
+// endorse, 1 = revocation discard), bound to the subject's current round.
+async function signPeerVote(signer, govAddr, chainId, subject, kind, support, round, noteHash) {
+  const domain = { name: "PeerGovernance", version: "1", chainId, verifyingContract: govAddr };
+  const types = {
+    PeerVote: [
+      { name: "subject",  type: "address" },
+      { name: "kind",     type: "uint8"   },
+      { name: "support",  type: "bool"    },
+      { name: "round",    type: "uint32"  },
+      { name: "noteHash", type: "bytes32" },
+    ],
+  };
+  return signer.signTypedData(domain, types, { subject, kind, support, round, noteHash });
+}
+async function motionRevokeSigned(gov, signer, peer, noteHash = ZERO_HASH) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const round   = (await gov.revokeRound(peer)) + 1n;
+  const sig     = await signPeerVote(signer, await gov.getAddress(), chainId, peer, 1, true, round, noteHash);
+  return gov.connect(signer).motionRevoke(peer, noteHash, sig);
+}
+async function voteRevokeSigned(gov, signer, peer, noteHash = ZERO_HASH) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const round   = await gov.revokeRound(peer);
+  const sig     = await signPeerVote(signer, await gov.getAddress(), chainId, peer, 1, true, round, noteHash);
+  return gov.connect(signer).voteRevoke(peer, noteHash, sig);
+}
+
+// Taxonomy / retire / force-renounce / nominate vote-by-signature wrappers. They
+// reuse the core Vote typehash (phase 2 taxonomy, 3 retire, 4 force-renounce) and
+// the gov PeerVote (kind 2 nominate); a propose/motion signs the round it mints
+// (current + 1), an endorse/vote signs the current round.
+const VP_TAXONOMY = 2, VP_RETIRE = 3, VP_FORCE = 4, VK_NOMINATE = 2;
+const FORCE_RENOUNCE_ID = nodeId("force-renounce");
+async function proposePillarSigned(c, signer, id, metaHash, topicId, topicMetaHash, ev, tier, contentHash, noteHash = ZERO_HASH) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const round   = (await c.nodeRound(id)) + 1n;
+  const sig     = await signVote(signer, await c.getAddress(), chainId, id, VP_TAXONOMY, true, round, noteHash);
+  return c.connect(signer).proposePillar(id, metaHash, topicId, topicMetaHash, ev, tier, contentHash, noteHash, sig);
+}
+async function proposeTopicSigned(c, signer, id, parentPillar, metaHash, ev, tier, contentHash, noteHash = ZERO_HASH) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const round   = (await c.nodeRound(id)) + 1n;
+  const sig     = await signVote(signer, await c.getAddress(), chainId, id, VP_TAXONOMY, true, round, noteHash);
+  return c.connect(signer).proposeTopic(id, parentPillar, metaHash, ev, tier, contentHash, noteHash, sig);
+}
+async function endorseNodeSigned(c, signer, id, noteHash = ZERO_HASH) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const round   = await c.nodeRound(id);
+  const sig     = await signVote(signer, await c.getAddress(), chainId, id, VP_TAXONOMY, true, round, noteHash);
+  return c.connect(signer).endorseNode(id, noteHash, sig);
+}
+async function motionRetireSigned(c, signer, id, noteHash = ZERO_HASH) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const round   = (await c.retireRound(id)) + 1n;
+  const sig     = await signVote(signer, await c.getAddress(), chainId, id, VP_RETIRE, true, round, noteHash);
+  return c.connect(signer).motionRetireNode(id, noteHash, sig);
+}
+async function voteRetireSigned(c, signer, id, noteHash = ZERO_HASH) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const round   = await c.retireRound(id);
+  const sig     = await signVote(signer, await c.getAddress(), chainId, id, VP_RETIRE, true, round, noteHash);
+  return c.connect(signer).voteRetireNode(id, noteHash, sig);
+}
+async function motionForceRenounceSigned(c, signer, noteHash = ZERO_HASH) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const round   = (await c.forceRenounceRound()) + 1n;
+  const sig     = await signVote(signer, await c.getAddress(), chainId, FORCE_RENOUNCE_ID, VP_FORCE, true, round, noteHash);
+  return c.connect(signer).motionForceRenounce(noteHash, sig);
+}
+async function voteForceRenounceSigned(c, signer, noteHash = ZERO_HASH) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const round   = await c.forceRenounceRound();
+  const sig     = await signVote(signer, await c.getAddress(), chainId, FORCE_RENOUNCE_ID, VP_FORCE, true, round, noteHash);
+  return c.connect(signer).voteForceRenounce(noteHash, sig);
+}
+async function nominateSigned(gov, signer, nominee, handle, noteHash = ZERO_HASH) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const round   = (await gov.nomineeRound(nominee)) + 1n;
+  const sig     = await signPeerVote(signer, await gov.getAddress(), chainId, nominee, VK_NOMINATE, true, round, noteHash);
+  return gov.connect(signer).nominatePeer(nominee, handle, noteHash, sig);
+}
+
 // Deploy with `n` real (signable) genesis peers and a single ratified topic so
 // the review/challenge paths have somewhere to file evidence.  Returns the topic
 // id plus the signer set.  seedPhaseK lets a test grow the set via owner addPeer.
@@ -75,10 +158,10 @@ async function deployWithTopic(n, seedPhaseK = 0) {
 
   const PILLAR = nodeId("seed-pillar");
   const TOPIC  = nodeId("seed-topic");
-  await c.connect(peers[0]).proposePillar(PILLAR, ch("mp"), TOPIC, ch("mt"), evidenceId(90001), 2, ch("fe"));
+  await proposePillarSigned(c, peers[0], PILLAR, ch("mp"), TOPIC, ch("mt"), evidenceId(90001), 2, ch("fe"));
   let i = 1;
   while (Number((await c.getTaxonomyNode(PILLAR)).state) !== NodeState.Ratified) {
-    await c.connect(peers[i]).endorseNode(PILLAR);
+    await endorseNodeSigned(c, peers[i], PILLAR);
     i++;
   }
   return { c, gov, signers, peers, TOPIC };
@@ -94,17 +177,17 @@ describe("AUDIT FIX — proposePillar rejects a reserved topic id as its own id"
 
     const A_ID = nodeId("pillar-A");
     const FT   = nodeId("pillar-A-founding-topic");
-    await contract.connect(peers[0]).proposePillar(A_ID, ch("mA"), FT, ch("mFT"), evidenceId(1), 2, ch("cA"));
+    await proposePillarSigned(contract, peers[0], A_ID, ch("mA"), FT, ch("mFT"), evidenceId(1), 2, ch("cA"));
     expect(await contract.topicReserved(FT)).to.equal(true);
 
     // The loophole is now closed: a pillar cannot occupy the reserved topic id.
     await expect(
-      contract.connect(peers[0]).proposePillar(FT, ch("mB"), nodeId("b-child"), ch("mBc"), evidenceId(2), 2, ch("cB")),
+      proposePillarSigned(contract, peers[0], FT, ch("mB"), nodeId("b-child"), ch("mBc"), evidenceId(2), 2, ch("cB")),
     ).to.be.revertedWith("node exists");
 
     // The legitimate pillar still ratifies and materializes its child cleanly.
-    await contract.connect(peers[1]).endorseNode(A_ID);
-    await contract.connect(peers[2]).endorseNode(A_ID); // → 3 → ratifies (majority gate)
+    await endorseNodeSigned(contract, peers[1], A_ID);
+    await endorseNodeSigned(contract, peers[2], A_ID); // → 3 → ratifies (majority gate)
     const ft = await contract.getTaxonomyNode(FT);
     expect(ft.state).to.equal(NodeState.Ratified);
   });
@@ -126,14 +209,14 @@ describe("AUDIT FIX — nominations stay open after the owner renounces", () => 
     await contract.renounceOwnership();
     expect(await contract.owner()).to.equal(ethers.ZeroAddress);
 
-    await gov.connect(genesis[0]).motionRevoke(genesis[2].address);
-    await gov.connect(genesis[1]).voteRevoke(genesis[2].address); // n → 2 (< seedPhaseK)
+    await motionRevokeSigned(gov, genesis[0], genesis[2].address);
+    await voteRevokeSigned(gov, genesis[1], genesis[2].address); // n → 2 (< seedPhaseK)
     expect(await contract.activePeerCount()).to.equal(2n);
 
     // Previously this reverted ("seed phase: owner must seed peers first") with no
     // owner left to seed — a permanent liveness trap. Now the network can grow.
     expect(await gov.nominationsOpen()).to.equal(true);
-    await expect(gov.connect(genesis[0]).nominatePeer(signers[4].address, "T"))
+    await expect(nominateSigned(gov, genesis[0], signers[4].address, "T"))
       .to.emit(gov, "PeerNominated");
   });
 });
@@ -145,8 +228,8 @@ describe("HARDENING A — peers can evict a captured/paused owner", () => {
     await c.connect(peers[0]).pause();             // owner (peers[0]) bricks the network
     expect(await c.paused()).to.equal(true);
 
-    await c.connect(peers[1]).motionForceRenounce();          // vote #1 (works while paused)
-    await expect(c.connect(peers[2]).voteForceRenounce())     // vote #2 → reaches 2/3
+    await motionForceRenounceSigned(c, peers[1]);          // vote #1 (works while paused)
+    await expect(voteForceRenounceSigned(c, peers[2]))     // vote #2 → reaches 2/3
       .to.emit(c, "OwnershipTransferred").withArgs(peers[0].address, ethers.ZeroAddress)
       .and.to.emit(c, "Unpaused");
 
@@ -157,14 +240,14 @@ describe("HARDENING A — peers can evict a captured/paused owner", () => {
 
   it("a sub-threshold motion can be restarted after the window (no permanent block)", async () => {
     const { c, peers } = await deployWithTopic(4); // retireThreshold(4) = ceil(8/3) = 3
-    await c.connect(peers[1]).motionForceRenounce(); // 1 vote, 1 < 3 → stays open
+    await motionForceRenounceSigned(c, peers[1]); // 1 vote, 1 < 3 → stays open
     expect(await c.forceRenounceActive()).to.equal(true);
     expect(await c.forceRenounceVotes()).to.equal(1n);
 
     // Re-motioning before the window is rejected; after it, a fresh round starts.
-    await expect(c.connect(peers[2]).motionForceRenounce()).to.be.revertedWith("force-renounce active");
+    await expect(motionForceRenounceSigned(c, peers[2])).to.be.revertedWith("force-renounce active");
     await time.increase(PROPOSAL_WINDOW + 1);
-    await c.connect(peers[2]).motionForceRenounce(); // stale → restart, fresh round
+    await motionForceRenounceSigned(c, peers[2]); // stale → restart, fresh round
     expect(await c.forceRenounceVotes()).to.equal(1n);
   });
 
@@ -172,7 +255,7 @@ describe("HARDENING A — peers can evict a captured/paused owner", () => {
     const { c, peers } = await deployWithTopic(3);
     await c.connect(peers[0]).renounceOwnership();
     expect(await c.owner()).to.equal(ethers.ZeroAddress);
-    await expect(c.connect(peers[1]).motionForceRenounce()).to.be.revertedWith("no owner");
+    await expect(motionForceRenounceSigned(c, peers[1])).to.be.revertedWith("no owner");
   });
 });
 
@@ -182,14 +265,14 @@ describe("HARDENING D — taxonomy-proposal spam cap", () => {
     const { c, peers } = await deployWithTopic(4); // bundleThreshold(2)@4 = 3 → lone proposals stay pending
     const MAX = 8;
     for (let k = 0; k < MAX; k++) {
-      await c.connect(peers[0]).proposePillar(
+      await proposePillarSigned(c, peers[0], 
         nodeId("spam-" + k), ch("m" + k), nodeId("spam-ft-" + k), ch("ft" + k),
         evidenceId(1000 + k), 2, ch("c" + k),
       );
     }
     expect(await c.pendingProposals(peers[0].address)).to.equal(BigInt(MAX));
     // 9th proposal is blocked.
-    await expect(c.connect(peers[0]).proposePillar(
+    await expect(proposePillarSigned(c, peers[0], 
       nodeId("spam-9"), ch("m9"), nodeId("spam-ft-9"), ch("ft9"), evidenceId(1099), 2, ch("c9"),
     )).to.be.revertedWith("proposal cap reached");
 
@@ -197,19 +280,19 @@ describe("HARDENING D — taxonomy-proposal spam cap", () => {
     await time.increase(PROPOSAL_WINDOW + 1);
     await c.lapseProposal(nodeId("spam-0"));
     expect(await c.pendingProposals(peers[0].address)).to.equal(BigInt(MAX - 1));
-    await expect(c.connect(peers[0]).proposePillar(
+    await expect(proposePillarSigned(c, peers[0], 
       nodeId("spam-9"), ch("m9"), nodeId("spam-ft-9"), ch("ft9"), evidenceId(1099), 2, ch("c9"),
     )).to.emit(c, "PillarProposed");
   });
 
   it("frees a proposal slot when the node ratifies", async () => {
     const { c, peers } = await deployWithTopic(4); // gate = 3
-    await c.connect(peers[0]).proposePillar(
+    await proposePillarSigned(c, peers[0], 
       nodeId("rat"), ch("m"), nodeId("rat-ft"), ch("ft"), evidenceId(1200), 2, ch("c"),
     );
     expect(await c.pendingProposals(peers[0].address)).to.equal(1n);
-    await c.connect(peers[1]).endorseNode(nodeId("rat"));
-    await c.connect(peers[2]).endorseNode(nodeId("rat")); // → 3 → ratifies
+    await endorseNodeSigned(c, peers[1], nodeId("rat"));
+    await endorseNodeSigned(c, peers[2], nodeId("rat")); // → 3 → ratifies
     expect((await c.getTaxonomyNode(nodeId("rat"))).state).to.equal(NodeState.Ratified);
     expect(await c.pendingProposals(peers[0].address)).to.equal(0n);
   });
@@ -381,8 +464,8 @@ describe("AUDIT FIX F3 — a peer-set shrink lapses an unrejected binding, never
     for (let t = 9; t >= 5; t--) {
       const n = Number(await c.activePeerCount());
       const need = Math.floor(n / 2) + (n % 2); // ceil(n/2) = revokeThreshold
-      await gov.connect(peers[0]).motionRevoke(peers[t].address); // vote #1
-      for (let v = 1; v < need; v++) await gov.connect(peers[v]).voteRevoke(peers[t].address);
+      await motionRevokeSigned(gov, peers[0], peers[t].address); // vote #1
+      for (let v = 1; v < need; v++) await voteRevokeSigned(gov, peers[v], peers[t].address);
     }
     expect(await c.activePeerCount()).to.equal(5n);
 
@@ -407,19 +490,19 @@ describe("AUDIT FIX F2 — no ratified topic orphaned under a retired pillar", (
     const { c, peers, TOPIC } = await deployWithTopic(5); // retireThreshold(5) = 4
     const PILLAR = nodeId("seed-pillar");
     const T1 = nodeId("late-topic-fix");
-    await c.connect(peers[0]).proposeTopic(T1, PILLAR, ch("mt1"), evidenceId(4301), 2, ch("fe1"));
+    await proposeTopicSigned(c, peers[0], T1, PILLAR, ch("mt1"), evidenceId(4301), 2, ch("fe1"));
 
     // Retiring the founding topic (the pillar's only ratified topic) auto-retires
     // the pillar in the same tx — pillars are never retired directly.
-    await c.connect(peers[0]).motionRetireNode(TOPIC);
-    await c.connect(peers[1]).voteRetireNode(TOPIC);
-    await c.connect(peers[2]).voteRetireNode(TOPIC);
-    await c.connect(peers[3]).voteRetireNode(TOPIC); // 4 = retireThreshold(5)
+    await motionRetireSigned(c, peers[0], TOPIC);
+    await voteRetireSigned(c, peers[1], TOPIC);
+    await voteRetireSigned(c, peers[2], TOPIC);
+    await voteRetireSigned(c, peers[3], TOPIC); // 4 = retireThreshold(5)
     expect((await c.getTaxonomyNode(PILLAR)).state).to.equal(NodeState.Retired);
 
     // endorsing T1 past its gate must NOT ratify it now (parent is retired)
-    await c.connect(peers[1]).endorseNode(T1);
-    await c.connect(peers[2]).endorseNode(T1);
+    await endorseNodeSigned(c, peers[1], T1);
+    await endorseNodeSigned(c, peers[2], T1);
     expect((await c.getTaxonomyNode(T1)).state).to.equal(NodeState.Proposed);
     expect(await c.topicIds(PILLAR)).to.not.include(T1);
     expect((await c.getBinding(evidenceId(4301), T1)).state).to.equal(State.None);

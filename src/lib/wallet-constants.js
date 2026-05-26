@@ -55,12 +55,14 @@ export const CONSENSUS_ABI = [
   "function paused() view returns (bool)",
   "function forceRenounceActive() view returns (bool)",
   "function forceRenounceVotes() view returns (uint32)",
+  "function forceRenounceRound() view returns (uint32)",
   // Views — taxonomy
   "function taxonomyThreshold() view returns (uint256)",
   "function retireThreshold() view returns (uint256)",
   "function bundleThreshold(uint8 tier) view returns (uint256)",
   "function getTaxonomyNode(bytes32) view returns (tuple(uint8 kind, uint8 state, bytes32 parent, bytes32 metaHash, address proposedBy, uint48 proposedAt, uint32 endorsements))",
   "function hasEndorsedNode(bytes32, address) view returns (bool)",
+  "function nodeRound(bytes32) view returns (uint32)",
   "function getPillars() view returns (bytes32[] ids, bytes32[] metaHashes)",
   "function getTopics(bytes32 pillar) view returns (bytes32[] ids, bytes32[] metaHashes)",
   "function proposedNodeIds() view returns (bytes32[])",
@@ -68,23 +70,28 @@ export const CONSENSUS_ABI = [
   "function retireActive(bytes32) view returns (bool)",
   "function retireVotes(bytes32) view returns (uint32)",
   "function retireMotionAt(bytes32) view returns (uint48)",
+  "function retireRound(bytes32) view returns (uint32)",
   "function hasVotedRetire(bytes32 id, address voter) view returns (bool)",
   // Writes — peer registry (owner seed only; nominee/revocation live on governance)
   "function addPeer(address peer, string handle)",
   // Writes — peer liveness / garbage collection
   "function heartbeat()",
   "function pruneInactivePeer(address peer)",
-  // Writes — force-renounce (peer supermajority evicts a captured/paused owner)
-  "function motionForceRenounce()",
-  "function voteForceRenounce()",
-  // Writes — taxonomy (every node is bootstrapped with a founding evidence)
-  "function proposePillar(bytes32 id, bytes32 metaHash, bytes32 topicId, bytes32 topicMetaHash, bytes32 evidenceId, uint8 tier, bytes32 contentHash)",
-  "function proposeTopic(bytes32 id, bytes32 parentPillar, bytes32 metaHash, bytes32 evidenceId, uint8 tier, bytes32 contentHash)",
-  "function endorseNode(bytes32 id)",
+  // Writes — force-renounce (peer supermajority evicts a captured/paused owner).
+  // EIP-712 Vote-by-signature (phase 4, sentinel bindingId), recovered on-chain.
+  "function motionForceRenounce(bytes32 noteHash, bytes sig)",
+  "function voteForceRenounce(bytes32 noteHash, bytes sig)",
+  // Writes — taxonomy (every node is bootstrapped with a founding evidence).
+  // propose/endorse are EIP-712 Vote-by-signature (phase 2), recovered on-chain;
+  // the proposer is endorsement #1, so a propose signs the node's next round.
+  "function proposePillar(bytes32 id, bytes32 metaHash, bytes32 topicId, bytes32 topicMetaHash, bytes32 evidenceId, uint8 tier, bytes32 contentHash, bytes32 noteHash, bytes sig)",
+  "function proposeTopic(bytes32 id, bytes32 parentPillar, bytes32 metaHash, bytes32 evidenceId, uint8 tier, bytes32 contentHash, bytes32 noteHash, bytes sig)",
+  "function endorseNode(bytes32 id, bytes32 noteHash, bytes sig)",
   "function lapseProposal(bytes32 id)",
-  // Writes — taxonomy retirement
-  "function motionRetireNode(bytes32 id)",
-  "function voteRetireNode(bytes32 id)",
+  // Writes — taxonomy retirement. motion/vote are EIP-712 Vote-by-signature
+  // (phase 3), recovered on-chain.
+  "function motionRetireNode(bytes32 id, bytes32 noteHash, bytes sig)",
+  "function voteRetireNode(bytes32 id, bytes32 noteHash, bytes sig)",
   "function cancelStaleRetire(bytes32 id)",
   // Writes — evidence + (evidence × topic) bindings
   "function submitEvidence(bytes32 id, uint8 tier, bytes32 topicId, bytes32 contentHash)",
@@ -123,6 +130,7 @@ export const GOVERNANCE_ABI = [
   "function isNominated(address) view returns (bool)",
   "function nomineeHandle(address) view returns (string)",
   "function nomineeEndorsements(address) view returns (uint32)",
+  "function nomineeRound(address) view returns (uint32)",
   "function hasEndorsed(address,address) view returns (bool)",
   "function nomineeList() view returns (address[])",
   // Views — revocation
@@ -130,12 +138,15 @@ export const GOVERNANCE_ABI = [
   "function revokeVoteCount(address) view returns (uint32)",
   "function revokeRound(address) view returns (uint32)",
   "function hasVotedRevoke(address,address) view returns (bool)",
-  // Writes
-  "function nominatePeer(address nominee, string handle)",
-  "function endorseNominee(address)",
+  // Writes. Membership acts are EIP-712 PeerVote-signed: the contract recovers
+  // the voter from `sig` (bound to the subject + kind + round + noteHash).
+  // nominate (kind 2) is the nominator's own signed act; endorse (kind 0) and
+  // revoke (kind 1) are votes. lapse + cancelStale are permissionless GC.
+  "function nominatePeer(address nominee, string handle, bytes32 noteHash, bytes sig)",
+  "function endorseNominee(address nominee, bytes32 noteHash, bytes sig)",
   "function lapseNominee(address nominee)",
-  "function motionRevoke(address)",
-  "function voteRevoke(address)",
+  "function motionRevoke(address peer, bytes32 noteHash, bytes sig)",
+  "function voteRevoke(address peer, bytes32 noteHash, bytes sig)",
   "function cancelStaleRevocation(address peer)",
 ];
 
@@ -195,6 +206,49 @@ export const VOTE_TYPES = {
     { name: 'support',   type: 'bool'    },
     { name: 'round',     type: 'uint32'  },
     { name: 'noteHash',  type: 'bytes32' },
+  ],
+};
+
+// The single core `Vote` typehash authorises every on-chain peer act, keyed by
+// `phase`. 0/1 are the per-binding evidence votes; 2/3/4 reuse the same struct
+// for node- and owner-scoped governance (see EvidenceConsensus.sol). Must match
+// the contract's phase constants byte-for-byte.
+export const VOTE_PHASE = {
+  review:        0,
+  challenge:     1,
+  taxonomy:      2, // proposePillar / proposeTopic / endorseNode (bindingId = node id)
+  retire:        3, // motionRetireNode / voteRetireNode          (bindingId = node id)
+  forceRenounce: 4, // motionForceRenounce / voteForceRenounce    (bindingId = sentinel)
+};
+
+// Force-renounce has no subject node, so its Vote signs a fixed sentinel id =
+// keccak256("force-renounce"). Mirrors the contract's _FORCE_RENOUNCE_ID.
+export const FORCE_RENOUNCE_ID = 'force-renounce';
+
+// On-chain MEMBERSHIP vote authorization. Nominee endorsements + revocation
+// discard votes are recovered ON-CHAIN by PeerGovernance from this signature, so
+// the fields + order MUST match the contract's
+// `keccak256("PeerVote(address subject,uint8 kind,bool support,uint32 round,bytes32 noteHash)")`
+// byte-for-byte. The domain is the governance sidecar's own (name
+// "PeerGovernance", verifyingContract = the governance address), distinct from
+// the core's Attestation/Vote domain above. kind: 0 = nominee endorse, 1 =
+// revocation discard, 2 = nominate (the nominator's own signed act). `support`
+// is always true (the contract has no on-chain "reject nominee" / "keep" — keep
+// is an off-chain Attestation dissent).
+export const PEER_VOTE_KIND = { nominee: 0, revoke: 1, nominate: 2 };
+export const PEER_GOVERNANCE_DOMAIN = {
+  name:    'PeerGovernance',
+  version: '1',
+  chainId: CONSENSUS_CHAIN_ID,
+  ...(CONSENSUS_GOVERNANCE_ADDR ? { verifyingContract: CONSENSUS_GOVERNANCE_ADDR } : {}),
+};
+export const PEER_VOTE_TYPES = {
+  PeerVote: [
+    { name: 'subject',  type: 'address' },
+    { name: 'kind',     type: 'uint8'   },
+    { name: 'support',  type: 'bool'    },
+    { name: 'round',    type: 'uint32'  },
+    { name: 'noteHash', type: 'bytes32' },
   ],
 };
 

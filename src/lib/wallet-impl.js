@@ -14,7 +14,8 @@ import {
   CONSENSUS_LENS_ADDR, CONSENSUS_LENS_ABI,
   CONSENSUS_GOVERNANCE_ADDR, GOVERNANCE_ABI,
   MULTICALL3_ADDR, MULTICALL3_ABI,
-  ATTESTATION_DOMAIN, ATTESTATION_TYPES, VOTE_TYPES,
+  ATTESTATION_DOMAIN, ATTESTATION_TYPES, VOTE_TYPES, VOTE_PHASE, FORCE_RENOUNCE_ID,
+  PEER_GOVERNANCE_DOMAIN, PEER_VOTE_TYPES, PEER_VOTE_KIND,
 } from './wallet-constants';
 
 const TARGET_CHAIN_ID_HEX = '0x' + CONSENSUS_CHAIN_ID.toString(16);
@@ -214,6 +215,7 @@ export const getNomineeThreshold      = safe(async ()           => Number(await 
 export const getRevokeThreshold       = safe(async ()           => Number(await govContract().revokeThreshold()), 1);
 export const isNomineeAddress         = safe(async (addr)       => await govContract().isNominated(addr), false);
 export const getNomineeEndorsements   = safe(async (addr)       => Number(await govContract().nomineeEndorsements(addr)), 0);
+export const getNomineeRound           = safe(async (addr)       => Number(await govContract().nomineeRound(addr)), 0);
 export const hasEndorsedNominee       = safe(async (nom, from)  => await govContract().hasEndorsed(nom, from), false);
 export const getNomineeHandle         = safe(async (addr)       => await govContract().nomineeHandle(addr), '');
 export const isRevocationActive       = safe(async (addr)       => await govContract().revocationActive(addr), false);
@@ -225,6 +227,8 @@ export const getBoostCooldownRemaining     = safe(async (addr)  => Number(await 
 export const isNominationsOpen        = safe(async ()           => await govContract().nominationsOpen(), false);
 export const getSeedPhaseK            = safe(async ()           => Number(await readContract().seedPhaseK()), 0);
 export const getOwner                 = safe(async ()           => await readContract().owner(), null);
+export const getForceRenounceActive   = safe(async ()           => await readContract().forceRenounceActive(), false);
+export const getForceRenounceVotes    = safe(async ()           => Number(await readContract().forceRenounceVotes()), 0);
 
 export async function hasVotedOnChain(uuid, topicId, phase, addr) {
   try { return await readContract().hasVoted(bindingKey(uuid, topicId), phase, addr); }
@@ -428,39 +432,139 @@ export async function signVoteOnly(uuid, topicId, phase, support, note = '') {
   return { sig, noteHash, round, bindingHash };
 }
 
-// Nominee + revocation governance — target the PeerGovernance sidecar.
-export async function nominatePeer(nominee, handle)            { return sendGovTx('nominatePeer', [nominee, handle]); }
-export async function endorseNominee(nominee)                  { return sendGovTx('endorseNominee', [nominee]); }
+// Sign a PeerVote(subject, kind, support, round, noteHash) — recovered ON-CHAIN
+// by PeerGovernance, so the domain is the governance sidecar's own. kind: 0 =
+// nominee endorse, 1 = revocation discard. support is always true.
+async function signPeerVote({ subject, kind, support, round, noteHash }) {
+  const signer = await getBrowserProvider().getSigner();
+  return signer.signTypedData(PEER_GOVERNANCE_DOMAIN, PEER_VOTE_TYPES, { subject, kind, support, round, noteHash });
+}
+
+// Nominee + revocation governance — target the PeerGovernance sidecar. nominate
+// / lapse / cancelStale are not votes (plain calls). The membership VOTES —
+// endorseNominee, motionRevoke, voteRevoke — are by-signature: they sign a
+// PeerVote (bound to the subject's current round + the note hash) and submit it,
+// returning { txHash, sig, noteHash, round } so the off-chain writer can persist
+// the SAME signature + note the chain verified.
+// Nominate is the nominator's own signed act (PeerVote kind 2), bound to the
+// round this nomination mints (current + 1). Returns { txHash, sig, noteHash,
+// round } so the off-chain writer can persist the same note + signature.
+export async function nominatePeer(nominee, handle, note = '') {
+  const round    = Number(await govContract().nomineeRound(nominee)) + 1;
+  const noteHash = noteHashOf(note);
+  const sig      = await signPeerVote({ subject: nominee, kind: PEER_VOTE_KIND.nominate, support: true, round, noteHash });
+  const c  = await govWriteContract();
+  const tx = await c.nominatePeer(nominee, handle, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round };
+}
 export async function lapseNominee(nominee)                    { return sendGovTx('lapseNominee', [nominee]); }
-export async function motionRevoke(peer)                       { return sendGovTx('motionRevoke', [peer]); }
-export async function voteRevoke(peer)                         { return sendGovTx('voteRevoke', [peer]); }
 export async function cancelStaleRevocation(peer)             { return sendGovTx('cancelStaleRevocation', [peer]); }
+
+export async function endorseNominee(nominee, note = '') {
+  const round    = Number(await govContract().nomineeRound(nominee));
+  const noteHash = noteHashOf(note);
+  const sig      = await signPeerVote({ subject: nominee, kind: PEER_VOTE_KIND.nominee, support: true, round, noteHash });
+  const c  = await govWriteContract();
+  const tx = await c.endorseNominee(nominee, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round };
+}
+// A motion opens the new round AND casts discard vote #1, so it signs round+1.
+export async function motionRevoke(peer, note = '') {
+  const round    = Number(await govContract().revokeRound(peer)) + 1;
+  const noteHash = noteHashOf(note);
+  const sig      = await signPeerVote({ subject: peer, kind: PEER_VOTE_KIND.revoke, support: true, round, noteHash });
+  const c  = await govWriteContract();
+  const tx = await c.motionRevoke(peer, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round };
+}
+export async function voteRevoke(peer, note = '') {
+  const round    = Number(await govContract().revokeRound(peer));
+  const noteHash = noteHashOf(note);
+  const sig      = await signPeerVote({ subject: peer, kind: PEER_VOTE_KIND.revoke, support: true, round, noteHash });
+  const c  = await govWriteContract();
+  const tx = await c.voteRevoke(peer, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round };
+}
 // Owner-only, seed-phase only (activePeerCount < seedPhaseK): seed a founding
 // peer directly on the CORE. Once the count reaches seedPhaseK the open
 // nominate→endorse flow (governance) takes over and addPeer reverts.
 export async function addPeer(peer, handle)                    { return sendTx('addPeer', [peer, handle]); }
 export async function heartbeatOnChain()                       { return sendTx('heartbeat', []); }
 export async function pruneInactivePeerOnChain(peer)           { return sendTx('pruneInactivePeer', [peer]); }
-// Peer supermajority (2/3) eviction of a captured/paused owner.
-export async function motionForceRenounce()                    { return sendTx('motionForceRenounce', []); }
-export async function voteForceRenounce()                      { return sendTx('voteForceRenounce', []); }
+// Peer supermajority (2/3) eviction of a captured/paused owner. By-signature
+// (Vote phase 4 over a fixed sentinel id). A motion mints round+1; a vote signs
+// the current round. Returns { txHash, sig, noteHash, round } for off-chain note.
+const FORCE_RENOUNCE_BID = slugToBytes32(FORCE_RENOUNCE_ID);
+export async function motionForceRenounce(note = '') {
+  const round    = Number(await readContract().forceRenounceRound()) + 1;
+  const noteHash = noteHashOf(note);
+  const sig      = await signVote({ bindingId: FORCE_RENOUNCE_BID, phase: VOTE_PHASE.forceRenounce, support: true, round, noteHash });
+  const c  = await writeContract();
+  const tx = await c.motionForceRenounce(noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round, bindingHash: FORCE_RENOUNCE_BID };
+}
+export async function voteForceRenounce(note = '') {
+  const round    = Number(await readContract().forceRenounceRound());
+  const noteHash = noteHashOf(note);
+  const sig      = await signVote({ bindingId: FORCE_RENOUNCE_BID, phase: VOTE_PHASE.forceRenounce, support: true, round, noteHash });
+  const c  = await writeContract();
+  const tx = await c.voteForceRenounce(noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round, bindingHash: FORCE_RENOUNCE_BID };
+}
 
 // Taxonomy governance. node ids are bytes32 = slugToBytes32(slug); metaHash from
 // computeMetaHash(). Every node is bootstrapped with a founding evidence: a
 // pillar bundles its first topic + evidence, a topic bundles its first evidence.
 // `evidenceUuid` is the off-chain evidence UUID (encoded to bytes32 here);
 // `contentHash` is computeContentHash() of that evidence.
-export async function proposePillarOnChain(id, metaHash, topicId, topicMetaHash, evidenceUuid, tier, contentHash) {
-  return sendTx('proposePillar', [id, metaHash, topicId, topicMetaHash, uuidToBytes32(evidenceUuid), tier, contentHash]);
+// Taxonomy propose/endorse are Vote-by-signature (phase 2; bindingId = node id).
+// The proposer is endorsement #1, so a propose signs the round it mints
+// (current + 1); an endorse signs the node's current round. All return
+// { txHash, sig, noteHash, round } so the off-chain endorsement record can
+// persist the same note + signature the chain recovered.
+export async function proposePillarOnChain(id, metaHash, topicId, topicMetaHash, evidenceUuid, tier, contentHash, note = '') {
+  const round    = Number(await readContract().nodeRound(id)) + 1;
+  const noteHash = noteHashOf(note);
+  const sig      = await signVote({ bindingId: id, phase: VOTE_PHASE.taxonomy, support: true, round, noteHash });
+  const c  = await writeContract();
+  const tx = await c.proposePillar(id, metaHash, topicId, topicMetaHash, uuidToBytes32(evidenceUuid), tier, contentHash, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round };
 }
-export async function proposeTopicOnChain(id, parentPillar, metaHash, evidenceUuid, tier, contentHash) {
-  return sendTx('proposeTopic', [id, parentPillar, metaHash, uuidToBytes32(evidenceUuid), tier, contentHash]);
+export async function proposeTopicOnChain(id, parentPillar, metaHash, evidenceUuid, tier, contentHash, note = '') {
+  const round    = Number(await readContract().nodeRound(id)) + 1;
+  const noteHash = noteHashOf(note);
+  const sig      = await signVote({ bindingId: id, phase: VOTE_PHASE.taxonomy, support: true, round, noteHash });
+  const c  = await writeContract();
+  const tx = await c.proposeTopic(id, parentPillar, metaHash, uuidToBytes32(evidenceUuid), tier, contentHash, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round };
 }
-export async function endorseNodeOnChain(id)                        { return sendTx('endorseNode', [id]); }
+export async function endorseNodeOnChain(id, note = '') {
+  const round    = Number(await readContract().nodeRound(id));
+  const noteHash = noteHashOf(note);
+  const sig      = await signVote({ bindingId: id, phase: VOTE_PHASE.taxonomy, support: true, round, noteHash });
+  const c  = await writeContract();
+  const tx = await c.endorseNode(id, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round };
+}
 
 // Taxonomy retirement (ratified-node governance). `id` is the bytes32 node id.
-export async function motionRetireNodeOnChain(id)                   { return sendTx('motionRetireNode', [id]); }
-export async function voteRetireNodeOnChain(id)                     { return sendTx('voteRetireNode', [id]); }
+// Vote-by-signature (phase 3); motion mints round+1, vote signs current round.
+export async function motionRetireNodeOnChain(id, note = '') {
+  const round    = Number(await readContract().retireRound(id)) + 1;
+  const noteHash = noteHashOf(note);
+  const sig      = await signVote({ bindingId: id, phase: VOTE_PHASE.retire, support: true, round, noteHash });
+  const c  = await writeContract();
+  const tx = await c.motionRetireNode(id, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round };
+}
+export async function voteRetireNodeOnChain(id, note = '') {
+  const round    = Number(await readContract().retireRound(id));
+  const noteHash = noteHashOf(note);
+  const sig      = await signVote({ bindingId: id, phase: VOTE_PHASE.retire, support: true, round, noteHash });
+  const c  = await writeContract();
+  const tx = await c.voteRetireNode(id, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round };
+}
 export async function cancelStaleRetireOnChain(id)                  { return sendTx('cancelStaleRetire', [id]); }
 
 export async function submitEvidenceOnChain(uuid, tier, topicId, ch) { return sendTx('submitEvidence', [uuidToBytes32(uuid), tier, topicId, ch]); }

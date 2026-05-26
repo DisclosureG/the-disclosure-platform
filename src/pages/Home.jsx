@@ -25,6 +25,16 @@ const VERDICT_LABEL = { approve: 'Approved', endorse: 'Approved', reject: 'Rejec
 const verdictClass = (v) => (v === 'endorse' ? 'approve' : v);
 const SHORT = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '');
 
+function hashStr(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function jazzGradient(addr = '0x0') {
+  const h = hashStr(String(addr).toLowerCase());
+  const a = h % 360, b = (h >> 3) % 360, c = (h >> 6) % 360;
+  return `conic-gradient(from ${h % 360}deg, oklch(0.72 0.14 ${a}), oklch(0.72 0.14 ${b}), oklch(0.72 0.14 ${c}), oklch(0.72 0.14 ${a}))`;
+}
+const Jazz = ({ addr, size = 18 }) => (
+  <span className="jazz" style={{ width: size, height: size, borderRadius: '50%', background: jazzGradient(addr), flexShrink: 0 }} />
+);
+
 // Apple-style scroll reveal: fade + slide-up the first time a section enters the
 // viewport. Honors prefers-reduced-motion (shows instantly).
 function Reveal({ children }) {
@@ -140,16 +150,16 @@ function Hero({ counts, pillarCount, peerCount }) {
 
 function SimpleIdea() {
   const rows = [
-    ['I', 'Every claim cites its source.', 'Every entry carries its citation — a paper, book, podcast, declassified file, deposition. The claim cannot float; it has a record.'],
-    ['II', 'Verified peers attest in public.', 'Named reviewers — wallet-signed, identifiable, accountable — vote to canonize, contest, defend, or deprecate. Every vote is on-chain and signed EIP-712.'],
-    ['III', 'The chain remembers.', 'One BSC contract holds the peer set, the Pillar → Topic taxonomy, and the lifecycle. The archive grows wider (new pillars) and deeper (new topics) by peer consensus alone.'],
+    ['I', 'Every claim reaches a verdict.', 'No claim sits unjudged. Peer review canonizes, expels, or lapses every filing inside its review window — and a lapsed filing can be re-filed when fresh evidence arrives.'],
+    ['II', 'Every verdict is signed by named peers.', 'Verdicts are cast by wallet-identified peers and signed EIP-712, recovered on-chain. Every vote is accountable, every signer is recorded, every dissent is preserved.'],
+    ['III', 'Every verdict can be reopened.', 'Consensus is never frozen. Peers challenge canon, defend it, retire stale topics, and grow the archive wider (new pillars) and deeper (new topics) — all by signed consensus alone.'],
   ];
   return (
     <section className="h-idea">
       <div className="h-idea-grid">
         <div>
           <span className="eyebrow">The simple idea</span>
-          <h2 className="h2" style={{ marginTop: 20 }}>Backed by the record. Judged in public. Anchored on-chain.</h2>
+          <h2 className="h2" style={{ marginTop: 20 }}>A living consensus — reached by named peers, kept by an open ledger, reopened the moment the evidence changes.</h2>
         </div>
         <div className="h-three">
           {rows.map(([num, h, p]) => (
@@ -178,24 +188,28 @@ function VoteRow({ v, isNew, onOpen, handleMap }) {
   return (
     <div className={`h-vote-row${isNew ? ' is-new' : ''}${showNote ? ' is-noted' : ''}`} role="row">
       <span className="t" role="cell">{timeAgo(v.created_at)}</span>
-      <span className="peer" role="cell" title={v.peer_addr}>{peerName}</span>
+      <span className="peer" role="cell" title={v.peer_addr}><Jazz addr={v.peer_addr} size={18} /><span className="peer-name">{peerName}</span></span>
       <span className={`verdict ${verdictClass(v.verdict)}`} role="cell">{VERDICT_LABEL[v.verdict] || v.verdict}</span>
       <span className="on" role="cell">
         {v.evidence_title
           ? <button type="button" className="h-vote-evi" onClick={() => onOpen(v)} title="Open the full evidence record">{v.evidence_title}</button>
           : <span className="evi">Evidence</span>}
-        {note && (
-          <button
-            type="button"
-            className={`h-vote-note-btn ${showNote ? 'is-open' : ''}`}
-            onClick={() => setShowNote(s => !s)}
-            aria-expanded={showNote}
-            title={showNote ? 'Hide deliberation note' : 'Show the peer’s deliberation note'}
-          >
-            <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
-            Note
-          </button>
-        )}
+      </span>
+      <span className="note" role="cell">
+        {note
+          ? (
+            <button
+              type="button"
+              className={`h-vote-note-btn ${showNote ? 'is-open' : ''}`}
+              onClick={() => setShowNote(s => !s)}
+              aria-expanded={showNote}
+              title={showNote ? 'Hide deliberation note' : 'Show the peer’s deliberation note'}
+            >
+              <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              Note
+            </button>
+          )
+          : <span style={{ color: 'var(--ink-faint)' }}>—</span>}
       </span>
       <span className="proof" role="cell">
         <AttestationVerifier a={v} handle={peerName} />
@@ -234,7 +248,7 @@ function LiveArchive({ counts, pillarCount, topicCount, peerCount, votes, handle
       <header className="h-archive-head">
         <div>
           <span className="eyebrow">The archive — live</span>
-          <h2 className="h2" style={{ marginTop: 20 }}>A public record, ticking up.</h2>
+          <h2 className="h2" style={{ marginTop: 20 }}>A public record — of the people,<br /><em>by the people.</em></h2>
         </div>
         <p className="lead">
           Every count is live — the tally moves the instant a new attestation
@@ -268,7 +282,7 @@ function LiveArchive({ counts, pillarCount, topicCount, peerCount, votes, handle
       <div className="h-votes">
         <div className="h-votes-head">
           <span className="h-votes-label"><span className="dot" /> Live consensus · every vote signed &amp; on-chain</span>
-          <a className="h-votes-link" href="/peer-review/">Open the full vote history <span aria-hidden="true">→</span></a>
+          <a className="h-votes-link" href="/peer-review/?observe=1">Open the full vote history <span aria-hidden="true">→</span></a>
         </div>
         <div className="h-votes-table" role="table" aria-label="Recent on-chain peer votes">
           <div className="h-vote-row is-head" role="row">
@@ -276,6 +290,7 @@ function LiveArchive({ counts, pillarCount, topicCount, peerCount, votes, handle
             <span role="columnheader">Peer</span>
             <span role="columnheader">Verdict</span>
             <span role="columnheader">On the record</span>
+            <span role="columnheader">Note</span>
             <span role="columnheader">Proof</span>
           </div>
           {votes.length === 0 ? (

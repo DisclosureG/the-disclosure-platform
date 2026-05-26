@@ -120,6 +120,17 @@ contract EvidenceConsensus {
     // binding (which would re-count a peer's verdict without fresh consent).
     bytes32 private constant _VOTE_TYPEHASH =
         keccak256("Vote(bytes32 bindingId,uint8 phase,bool support,uint32 round,bytes32 noteHash)");
+    // The single Vote typehash authorises every on-chain peer act, keyed by
+    // `phase`: 0 = review, 1 = challenge, 2 = taxonomy (propose/endorse), 3 =
+    // taxonomy retire (motion/vote), 4 = force-renounce (motion/vote). For
+    // node-scoped phases (2,3) `bindingId` carries the node id and `round` the
+    // node's propose/retire round; force-renounce has no subject, so it signs a
+    // fixed sentinel id and the global forceRenounceRound. A `noteHash` commits
+    // an optional off-chain deliberation note (ZeroHash when empty).
+    bytes32 private constant _FORCE_RENOUNCE_ID = keccak256("force-renounce");
+    uint8   private constant _PHASE_TAXONOMY      = 2;
+    uint8   private constant _PHASE_RETIRE        = 3;
+    uint8   private constant _PHASE_FORCERENOUNCE = 4;
 
     // ── Peer registry ────────────────────────────────────────────────────────
 
@@ -157,7 +168,7 @@ contract EvidenceConsensus {
     bool   public   forceRenounceActive;
     uint32 public   forceRenounceVotes;
     uint48 internal forceRenounceMotionAt; // internal bookkeeping (stale-restart clock)
-    uint32 internal forceRenounceRound;    // internal bookkeeping (vote-isolation round)
+    uint32 public   forceRenounceRound;    // vote-isolation round (read by the signer to bind a PeerVote)
     mapping(uint32 => mapping(address => bool)) private _votedForceRenounce;
 
     // ── Challenge rate limiting ──────────────────────────────────────────────
@@ -214,9 +225,10 @@ contract EvidenceConsensus {
     // ── Submission queue ──────────────────────────────────────────────────────
     //
     // Open submission scales, but peers can only review so much at once.  The
-    // ACTIVE review set is bounded at reviewCapacity() = activePeerCount *
-    // REVIEW_SLOTS_PER_PEER; submissions over that bound park in the Queued state
-    // (their review clock has not started) instead of flooding the queue.  This
+    // ACTIVE review set is bounded at a fixed reviewCapacity() = REVIEW_CAPACITY
+    // (a shared batch the whole network reviews in the same order); submissions
+    // over that bound park in the Queued state (their review clock has not
+    // started) instead of flooding the queue.  This
     // global bound plus the per-address SUBMIT_COOLDOWN replaces the old
     // per-submitter outstanding cap: a single identity can no longer flood the
     // ACTIVE set regardless of how much it queues.  A public boost raises
@@ -322,7 +334,7 @@ contract EvidenceConsensus {
     uint256 public constant MAX_HANDLE_BYTES     = 64;
     uint32  internal constant MAX_PENDING_PROPOSALS      = 8;  // outstanding-proposal cap per peer
     uint256 internal constant INACTIVITY_WINDOW   = 30 days;   // peer idle before it can be pruned
-    uint32  internal constant REVIEW_SLOTS_PER_PEER = 4;       // active-review capacity per active peer
+    uint32  internal constant REVIEW_CAPACITY = 3;             // fixed active-review capacity (shared batch)
     uint256 internal constant SUBMIT_COOLDOWN     = 10 minutes; // per-address gap between PUBLIC submissions
     uint256 public   constant BOOST_COOLDOWN      = 10 minutes; // per-address gap between PUBLIC boosts
 
@@ -466,7 +478,7 @@ contract EvidenceConsensus {
 
     /// @notice Open a motion for peers to strip the owner entirely (and unpause).
     /// The escape hatch against an owner that pauses forever.  Motioner is vote #1.
-    function motionForceRenounce() external onlyActivePeer {
+    function motionForceRenounce(bytes32 noteHash, bytes calldata sig) external onlyActivePeer {
         require(owner != address(0), "no owner");
         // A live motion blocks a new one; a stale motion (past the window without
         // reaching 2/3) is simply restarted with a fresh round — so a single peer
@@ -477,7 +489,9 @@ contract EvidenceConsensus {
             "force-renounce active"
         );
 
+        // A motion opens the new round AND casts vote #1, so it signs round+1.
         uint32 round = ++forceRenounceRound;
+        require(_recoverVoter(_FORCE_RENOUNCE_ID, _PHASE_FORCERENOUNCE, true, round, noteHash, sig) == msg.sender, "bad sig");
         forceRenounceActive   = true;
         forceRenounceMotionAt = uint48(block.timestamp);
         forceRenounceVotes    = 1;
@@ -490,9 +504,10 @@ contract EvidenceConsensus {
         _checkForceRenounce(threshold);
     }
 
-    function voteForceRenounce() external onlyActivePeer {
+    function voteForceRenounce(bytes32 noteHash, bytes calldata sig) external onlyActivePeer {
         require(forceRenounceActive, "no force-renounce active");
         uint32 round = forceRenounceRound;
+        require(_recoverVoter(_FORCE_RENOUNCE_ID, _PHASE_FORCERENOUNCE, true, round, noteHash, sig) == msg.sender, "bad sig");
         require(!_votedForceRenounce[round][msg.sender], "already voted");
 
         _votedForceRenounce[round][msg.sender] = true;
@@ -703,13 +718,18 @@ contract EvidenceConsensus {
         bytes32 topicMetaHash,
         bytes32 evidenceId,
         uint8   tier,
-        bytes32 contentHash
+        bytes32 contentHash,
+        bytes32 noteHash,
+        bytes calldata sig
     )
         external onlyActivePeer whenNotPaused
     {
         require(id != bytes32(0) && topicId != bytes32(0), "zero id");
         require(id != topicId, "id collision");
         require(metaHash != bytes32(0) && topicMetaHash != bytes32(0), "empty meta hash");
+        // The proposer is endorsement #1, so they sign a taxonomy Vote over the
+        // pillar id at the round _registerProposal is about to mint (current + 1).
+        require(_recoverVoter(id, _PHASE_TAXONOMY, true, nodeRound[id] + 1, noteHash, sig) == msg.sender, "bad sig");
         // The pillar's own id must be free as a node AND not reserved as another
         // pending pillar's founding child topic, mirroring proposeTopic.  Without
         // the topicReserved[id] guard a pillar could register at a reserved topic
@@ -739,13 +759,18 @@ contract EvidenceConsensus {
         bytes32 metaHash,
         bytes32 evidenceId,
         uint8   tier,
-        bytes32 contentHash
+        bytes32 contentHash,
+        bytes32 noteHash,
+        bytes calldata sig
     )
         external onlyActivePeer whenNotPaused
     {
         require(id != bytes32(0), "zero id");
         require(metaHash != bytes32(0), "empty meta hash");
         require(taxonomyNodes[id].state == NodeState.None && !topicReserved[id], "topic taken");
+        // Proposer is endorsement #1 — sign a taxonomy Vote over the topic id at
+        // the round _registerProposal is about to mint (current + 1).
+        require(_recoverVoter(id, _PHASE_TAXONOMY, true, nodeRound[id] + 1, noteHash, sig) == msg.sender, "bad sig");
 
         TaxonomyNode storage parent = taxonomyNodes[parentPillar];
         require(parent.state == NodeState.Ratified && parent.kind == NodeKind.Pillar, "bad parent");
@@ -767,12 +792,13 @@ contract EvidenceConsensus {
         require(!evidences[evidenceId].exists && !evidenceReserved[evidenceId], "evidence taken");
     }
 
-    function endorseNode(bytes32 id)
+    function endorseNode(bytes32 id, bytes32 noteHash, bytes calldata sig)
         external onlyActivePeer whenNotPaused
     {
         TaxonomyNode storage n = taxonomyNodes[id];
         require(n.state == NodeState.Proposed, "not proposed");
         uint32 round = nodeRound[id];
+        require(_recoverVoter(id, _PHASE_TAXONOMY, true, round, noteHash, sig) == msg.sender, "bad sig");
         require(!_endorsedNode[id][round][msg.sender], "already endorsed");
 
         _endorsedNode[id][round][msg.sender] = true;
@@ -932,7 +958,7 @@ contract EvidenceConsensus {
     /// directly: a pillar retires automatically together with its last topic, so
     /// it can never sit ratified with zero topics.  The motioner counts as
     /// retire-vote #1.
-    function motionRetireNode(bytes32 id)
+    function motionRetireNode(bytes32 id, bytes32 noteHash, bytes calldata sig)
         external onlyActivePeer whenNotPaused
     {
         TaxonomyNode storage n = taxonomyNodes[id];
@@ -940,7 +966,9 @@ contract EvidenceConsensus {
         require(n.kind == NodeKind.Topic, "pillars auto-retire");
         require(!retireActive[id], "retire already active");
 
+        // A motion opens the new round AND casts retire vote #1, so it signs round+1.
         uint32 round = ++retireRound[id];
+        require(_recoverVoter(id, _PHASE_RETIRE, true, round, noteHash, sig) == msg.sender, "bad sig");
         retireActive[id]                 = true;
         retireMotionAt[id]               = uint48(block.timestamp);
         retireVotes[id]                  = 1;
@@ -953,11 +981,12 @@ contract EvidenceConsensus {
         _checkRetire(id, threshold);
     }
 
-    function voteRetireNode(bytes32 id)
+    function voteRetireNode(bytes32 id, bytes32 noteHash, bytes calldata sig)
         external onlyActivePeer whenNotPaused
     {
         require(retireActive[id], "no retire active");
         uint32 round = retireRound[id];
+        require(_recoverVoter(id, _PHASE_RETIRE, true, round, noteHash, sig) == msg.sender, "bad sig");
         require(!_votedRetire[id][round][msg.sender], "already voted");
 
         _votedRetire[id][round][msg.sender] = true;
@@ -1141,11 +1170,11 @@ contract EvidenceConsensus {
         _openBinding(id, topicId);
     }
 
-    /// @notice Upper bound on bindings in active review at once, scaled by the
-    /// live peer set so review load per peer stays bounded; submissions beyond it
-    /// park in the queue.
-    function reviewCapacity() public view returns (uint256) {
-        return activePeerCount * REVIEW_SLOTS_PER_PEER;
+    /// @notice Upper bound on bindings in active review at once — a fixed shared
+    /// batch the whole network works in the same order; submissions beyond it
+    /// park in the queue, where the public boost prioritizes the next promotion.
+    function reviewCapacity() public pure returns (uint256) {
+        return REVIEW_CAPACITY;
     }
 
     function _openBinding(bytes32 id, bytes32 topicId) internal {

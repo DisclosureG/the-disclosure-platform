@@ -33,8 +33,55 @@ contract PeerGovernance {
 
     IEvidenceCore public immutable core;
 
+    // ── EIP-712 vote-by-signature ─────────────────────────────────────────────
+    //
+    // Every membership VOTE (nominee endorsement, revocation discard) is
+    // authorised by an EIP-712 `PeerVote` the voter signs in their wallet, bound
+    // to the subject, the vote kind, and the subject's CURRENT round (anti-replay
+    // across re-nominations / re-motions) plus a `noteHash` that commits an
+    // optional off-chain deliberation note. This mirrors the core's evidence
+    // vote-by-signature; the note TEXT stays off-chain (only its hash is signed).
+    bytes32 private immutable _DOMAIN_SEPARATOR;
+    bytes32 private constant _PEERVOTE_TYPEHASH =
+        keccak256("PeerVote(address subject,uint8 kind,bool support,uint32 round,bytes32 noteHash)");
+    uint8 internal constant KIND_NOMINEE  = 0; // endorse a nominee (admission)
+    uint8 internal constant KIND_REVOKE   = 1; // discard a peer  (removal)
+    uint8 internal constant KIND_NOMINATE = 2; // open a nomination (the nominator is endorsement #1)
+
     constructor(address core_) {
         core = IEvidenceCore(core_);
+        _DOMAIN_SEPARATOR = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes("PeerGovernance")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(this)
+            )
+        );
+    }
+
+    /// @notice The EIP-712 domain separator (name "PeerGovernance", version "1").
+    /// Exposed so clients can sanity-check the domain they sign against.
+    function DOMAIN_SEPARATOR() external view returns (bytes32) { return _DOMAIN_SEPARATOR; }
+
+    /// @notice Recover the signer of a PeerVote(subject, kind, support, round,
+    /// noteHash). Reverts on a malformed signature.
+    function _recoverPeerVoter(
+        address subject, uint8 kind, bool support, uint32 round, bytes32 noteHash, bytes calldata sig
+    ) internal view returns (address) {
+        require(sig.length == 65, "bad sig len");
+        bytes32 structHash = keccak256(abi.encode(_PEERVOTE_TYPEHASH, subject, kind, support, round, noteHash));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _DOMAIN_SEPARATOR, structHash));
+        bytes32 r; bytes32 s; uint8 v;
+        assembly {
+            r := calldataload(sig.offset)
+            s := calldataload(add(sig.offset, 32))
+            v := byte(0, calldataload(add(sig.offset, 64)))
+        }
+        address signer = ecrecover(digest, v, r, s);
+        require(signer != address(0), "bad sig");
+        return signer;
     }
 
     // ── Constants ────────────────────────────────────────────────────────────
@@ -114,7 +161,7 @@ contract PeerGovernance {
 
     // ── Nominee flow ─────────────────────────────────────────────────────────
 
-    function nominatePeer(address nominee, string calldata handle)
+    function nominatePeer(address nominee, string calldata handle, bytes32 noteHash, bytes calldata sig)
         external onlyActivePeer whenNotPaused
     {
         require(nominationsOpen(), "seed phase: owner must seed peers first");
@@ -123,7 +170,11 @@ contract PeerGovernance {
         require(!isNominated[nominee], "already nominated");
         require(bytes(handle).length <= MAX_HANDLE_BYTES, "handle too long");
 
-        ++nomineeRound[nominee];
+        // The nominator signs a PeerVote over the nominee at the round this
+        // nomination mints. They are NOT endorsement #1 (endorsements start at 0);
+        // the signature only proves the nomination is the nominator's own act.
+        uint32 round = ++nomineeRound[nominee];
+        require(_recoverPeerVoter(nominee, KIND_NOMINATE, true, round, noteHash, sig) == msg.sender, "bad sig");
         isNominated[nominee]         = true;
         nomineeHandle[nominee]       = handle;
         nomineeBy[nominee]           = msg.sender;
@@ -136,11 +187,12 @@ contract PeerGovernance {
         emit PeerNominated(nominee, handle, msg.sender, nomineeThreshold());
     }
 
-    function endorseNominee(address nominee)
+    function endorseNominee(address nominee, bytes32 noteHash, bytes calldata sig)
         external onlyActivePeer whenNotPaused
     {
         require(isNominated[nominee], "not nominated");
         uint32 round = nomineeRound[nominee];
+        require(_recoverPeerVoter(nominee, KIND_NOMINEE, true, round, noteHash, sig) == msg.sender, "bad sig");
         require(!_endorsedNominee[nominee][round][msg.sender], "already endorsed");
 
         _endorsedNominee[nominee][round][msg.sender] = true;
@@ -198,14 +250,17 @@ contract PeerGovernance {
 
     // ── Revocation flow ──────────────────────────────────────────────────────
 
-    function motionRevoke(address peer)
+    function motionRevoke(address peer, bytes32 noteHash, bytes calldata sig)
         external onlyActivePeer whenNotPaused
     {
         require(core.isActivePeer(peer), "not active peer");
         require(!revocationActive[peer], "revocation already active");
         require(peer != msg.sender, "cannot self-revoke");
 
+        // A motion opens the new round AND casts discard vote #1, so the signed
+        // round is the round this motion creates (current + 1).
         uint32 round = ++revokeRound[peer];
+        require(_recoverPeerVoter(peer, KIND_REVOKE, true, round, noteHash, sig) == msg.sender, "bad sig");
         revocationActive[peer]              = true;
         revokeMotionAt[peer]                = uint48(block.timestamp);
         revokeVoteCount[peer]               = 1;
@@ -218,11 +273,12 @@ contract PeerGovernance {
         _checkRevocation(peer, threshold);
     }
 
-    function voteRevoke(address peer)
+    function voteRevoke(address peer, bytes32 noteHash, bytes calldata sig)
         external onlyActivePeer whenNotPaused
     {
         require(revocationActive[peer], "no revocation active");
         uint32 round = revokeRound[peer];
+        require(_recoverPeerVoter(peer, KIND_REVOKE, true, round, noteHash, sig) == msg.sender, "bad sig");
         require(!_votedRevoke[peer][round][msg.sender], "already voted");
 
         _votedRevoke[peer][round][msg.sender] = true;

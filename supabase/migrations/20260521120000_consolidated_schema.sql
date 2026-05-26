@@ -234,6 +234,9 @@ create table public.attestations (
   -- signer client-side. Null for taxonomy (Attestation-typed) and tx-proof rows.
   round       integer,
   note_hash   text,
+  -- The on-chain bindingId for a taxonomy ENDORSE Vote (which signs the node id,
+  -- not the founding binding hash), so the proof modal can recover its signer.
+  node_hash   text,
   -- Every vote must carry a verifiable proof of its peer. 'eip712' rows are
   -- signed in the voter's browser (verify-attestation recovers the signer);
   -- 'tx' rows are indexer gap-fills proven by the on-chain tx sender. The
@@ -593,14 +596,17 @@ create view public.attestation_log_view with (security_invoker = true) as
          e.source as evidence_source, e.year as evidence_year,
          e.excerpt as evidence_excerpt, e.link as evidence_link,
          e.tier as evidence_tier, e.content_hash, e.submission_tx_hash,
-         -- proof_type + the Vote-reconstruction surface appended last so the live
-         -- DB's `create or replace view` (append-only) matches byte-for-byte.
-         -- binding_hash is the on-chain bindingId the Vote signature commits to.
-         a.proof_type, b.binding_hash, a.round, a.note_hash
+         -- proof_type + the Vote-reconstruction surface. binding_hash is the
+         -- on-chain bindingId a review/challenge Vote commits to; node_hash is the
+         -- node id a taxonomy ENDORSE Vote commits to. pillar_title is carried so
+         -- the vote history keeps the pillar name even after the pillar retires
+         -- (the taxonomy cache only holds ratified nodes).
+         a.proof_type, b.binding_hash, a.round, a.note_hash, a.node_hash, p.title as pillar_title
     from public.attestations a
     join public.evidence e on e.id = a.evidence_id
     left join public.bindings b on b.id = a.binding_id
-    left join public.topics  t on t.id = b.topic_id;
+    left join public.topics  t on t.id = b.topic_id
+    left join public.pillars p on p.id = b.pillar_id;
 grant select on public.attestation_log_view to anon, authenticated;
 
 -- Bindings whose off-chain timer expired but the chain hasn't emitted a terminal
@@ -716,3 +722,110 @@ begin
   end if;
 end
 $cron$;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Off-chain note stores for membership + node/owner governance votes.
+--
+-- Every peer governance act is EIP-712-signed and recovered on-chain; the note
+-- TEXT can't live on-chain, so the edge functions record each note + the SAME
+-- signature the chain verified here. nominee_votes covers the nominate/endorse
+-- PeerVotes; revocation_votes (above) covers keep/discard; gov_votes covers the
+-- node/owner-scoped core Votes (taxonomy retire + force-renounce).
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- Nominee admission notes. `nominate` (kind 2 — the nominator's own act) and
+-- `endorse` (kind 0) are PeerVote-signed on PeerGovernance; the note + signature
+-- are recorded by the `nominee-vote` edge function, gated on gov.nomineeBy /
+-- gov.hasEndorsed + a PeerVote re-verification. `verdict` is in the unique key so
+-- a nominator who later endorses the same nominee in the same round never clashes.
+create table public.nominee_votes (
+  id           uuid primary key default gen_random_uuid(),
+  nominee_addr text not null,
+  voter_addr   text not null,
+  round        integer not null,
+  verdict      text not null check (verdict in ('endorse','nominate')),
+  note         text,
+  eip712_sig   text not null,
+  created_at   timestamptz not null default now(),
+  unique (nominee_addr, voter_addr, round, verdict)
+);
+create index nominee_votes_nominee_idx on public.nominee_votes (nominee_addr, round);
+create index nominee_votes_voter_idx   on public.nominee_votes (voter_addr);
+alter table public.nominee_votes enable row level security;
+create policy nominee_votes_read on public.nominee_votes for select using (true);
+
+-- Node/owner governance notes. Taxonomy RETIRE (motion/vote) and FORCE-RENOUNCE
+-- (motion/vote) are core `Vote`-signed (phase 3 retire, 4 force-renounce; bindingId
+-- = the node id, or the fixed force-renounce sentinel). They have no evidence, so
+-- they live here, written by the `gov-note` edge function after it re-verifies the
+-- Vote signature and the matching on-chain event.
+create table public.gov_votes (
+  id          uuid primary key default gen_random_uuid(),
+  kind        text not null check (kind in ('retire','force_renounce')),
+  subject     text not null,        -- on-chain Vote bindingId: node id (retire) or the force-renounce sentinel
+  topic_id    text,                 -- topic slug (retire only) — joins to topics for pillar/title in the view
+  verdict     text not null check (verdict in ('retire','renounce')),
+  round       integer not null,
+  peer_addr   text not null,
+  peer_handle text,
+  note        text,
+  note_hash   text,
+  eip712_sig  text not null,
+  tx_hash     text,
+  created_at  timestamptz not null default now(),
+  unique (kind, subject, peer_addr, round)
+);
+create index gov_votes_created_idx on public.gov_votes (created_at desc);
+create index gov_votes_subject_idx on public.gov_votes (subject, round);
+alter table public.gov_votes enable row level security;
+create policy gov_votes_read on public.gov_votes for select using (true);
+
+-- ── Unified public vote log ─────────────────────────────────────────────────
+-- attestation_log_view (review / challenge / taxonomy endorse·reject) UNION the
+-- node/owner governance votes (taxonomy retire + force-renounce), shaped to the
+-- SAME columns so the public vote-history feed reads one source. Evidence-only
+-- columns are null for gov rows; `node_hash` carries the Vote bindingId so the
+-- proof modal can recover the signer. Peer-registry membership votes deliberately
+-- stay OUT of this feed (they have their own registry log).
+create view public.vote_log_view with (security_invoker = true) as
+  select id, evidence_id, binding_id, peer_addr, peer_handle, phase, verdict, note,
+         created_at, eip712_sig, tx_hash, evidence_title, evidence_search_text,
+         evidence_id_text, pillar_id, topic_id, topic_title, evidence_source,
+         evidence_year, evidence_excerpt, evidence_link, evidence_tier, content_hash,
+         submission_tx_hash, proof_type, binding_hash, round, note_hash, node_hash, pillar_title
+    from public.attestation_log_view
+  union all
+  select g.id,
+         null::uuid          as evidence_id,
+         null::uuid          as binding_id,
+         g.peer_addr,
+         g.peer_handle,
+         g.verdict           as phase,        -- 'retire' | 'renounce' (not 'taxonomy', so no propose-flag logic)
+         g.verdict,
+         g.note,
+         g.created_at,
+         g.eip712_sig,
+         g.tx_hash,
+         null::text          as evidence_title,
+         null::text          as evidence_search_text,
+         null::text          as evidence_id_text,
+         t.pillar_id         as pillar_id,     -- null for force-renounce
+         g.topic_id,
+         t.title             as topic_title,
+         null::text          as evidence_source,
+         null::text          as evidence_year,
+         null::text          as evidence_excerpt,
+         null::text          as evidence_link,
+         null::smallint      as evidence_tier,
+         null::text          as content_hash,
+         null::text          as submission_tx_hash,
+         'eip712'::text      as proof_type,
+         null::text          as binding_hash,
+         g.round,
+         g.note_hash,
+         g.subject           as node_hash,     -- the on-chain Vote bindingId
+         p.title             as pillar_title    -- kept so retired pillars still render
+    from public.gov_votes g
+    left join public.topics  t on t.id = g.topic_id
+    left join public.pillars p on p.id = t.pillar_id;
+grant select on public.vote_log_view to anon, authenticated;

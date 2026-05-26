@@ -13,17 +13,19 @@ import { supabase } from '../lib/supabase';
 import Element115 from '../components/Element115';
 import CopyChip from '../components/CopyChip';
 import AttestationVerifier from '../components/AttestationVerifier';
+import RegistryProofVerifier from '../components/RegistryProofVerifier';
 import EvidenceDetailBody from '../components/EvidenceDetailBody';
 import {
   useTaxonomy, usePendingTaxonomy,
   deprecateThreshold, canonizeThreshold,
   PENDING_WINDOW_DAYS, CHALLENGE_WINDOW_DAYS, daysRemaining,
-  usePendingBindings, useContestedBindings, useAttestationLog,
+  usePendingBindings, useContestedBindings, useAttestationLog, usePeerRegistryLog,
   useQueuedBindings, useMyReviewCount, usePeerHandleMap, fetchBindingPreview,
   useSystemHealth, useTamperAlertCount,
   castReviewVote, castChallengeVote, finalizeChallengeSupabase,
   proposeTaxonomyBundle, endorseNodeSupabase, rejectNodeSupabase, fetchMyTaxonomyRejects,
-  castRevocationKeep, fetchMyRevocationKeeps, fetchRevocationKeepCounts,
+  castRevocationKeep, castRevocationDiscard, castNomineeEndorse, castNominate, castGovNote,
+  fetchMyRevocationKeeps, fetchRevocationKeepCounts,
 } from '../evidence-data';
 import {
   connectWallet, switchToTargetChain, getActivePeerCount, getPeerHandle, isPeerActive,
@@ -31,8 +33,8 @@ import {
   endorseNominee as endorseNomineeOnChain,
   motionRevoke as motionRevokeOnChain,
   voteRevoke as voteRevokeOnChain,
+  motionForceRenounce, voteForceRenounce, getForceRenounceActive, getForceRenounceVotes,
   heartbeatOnChain, pruneInactivePeerOnChain, getLastActive,
-  getReviewCapacity, getActiveReviewCount, promoteOnChain,
   castReviewVoteOnChain, castChallengeVoteOnChain, signVoteOnly,
   finalizeChallengeOnChain, markLapsedOnChain,
   waitForTx,
@@ -62,6 +64,8 @@ const ROMAN  = ['', 'I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII
 const toRoman = (n) => ROMAN[n] || String(n);
 const tierRoman = (t) => (t === 1 ? 'I' : t === 2 ? 'II' : 'III');
 const tierWord  = (t) => (t === 1 ? 'Paper' : t === 2 ? 'Doc.' : 'Test.');
+// Truncate a long identifier (UUID or 0x-hash) for display next to a copy chip.
+const shortHash = (v) => { if (!v) return '—'; const s = String(v); return s.length > 18 ? `${s.slice(0, 10)}…${s.slice(-6)}` : s; };
 // Review / challenge votes are no longer pre-signed with an Attestation here —
 // their authorising signature is the EIP-712 *Vote*, produced by the on-chain
 // vote call (or signVoteOnly() in dev mode). So SIG_ACTIONS is now empty; it
@@ -203,16 +207,21 @@ function VoteBar({ yes, no, challenge }) {
 }
 
 // ── Review row (queue) ───────────────────────────────────────────────────────
-function ReviewRow({ b, mine, onVote, onLapse, onPreview, onHistory, peerCount }) {
+// `resolvedInBatch` flags a binding that left the shared queue (canon / expelled
+// / lapsed) while still sitting in this peer's batch and never received this
+// peer's vote: the row stays visible behind an Acknowledge action so the gate
+// holds until the peer has actively cleared every batch slot, never silently
+// advances around them.
+function ReviewRow({ b, mine, resolvedInBatch, onVote, onLapse, onAck, onPreview, onHistory, peerCount }) {
   const archived = ARCHIVED.has(b.status);
   const rejected = REJECTED.has(b.status);
-  const voting   = b.status === 'pending';
+  const voting   = b.status === 'pending' && !resolvedInBatch;
   const approvals = b.approve_count || 0;
   const rejections = b.reject_count || 0;
   const canT = canonizeThreshold(b.tier, peerCount);
   const left = daysRemaining(b.submitted_at, PENDING_WINDOW_DAYS);
   const lapsable = voting && left === 0;
-  const rowCls = mine ? 'is-mine' : archived ? 'is-archived' : rejected ? 'is-rejected-binding' : '';
+  const rowCls = resolvedInBatch ? 'is-archived' : mine ? 'is-mine' : archived ? 'is-archived' : rejected ? 'is-rejected-binding' : '';
 
   return (
     <div className={`pr-row ${rowCls}`} data-tier={b.tier}>
@@ -247,8 +256,9 @@ function ReviewRow({ b, mine, onVote, onLapse, onPreview, onHistory, peerCount }
           <span className="n"><b>{rejections}</b> reject</span>
         </div>
         {voting && <div className="pr-vote-thresh">Approves at {canT} of {peerCount} peer{peerCount === 1 ? '' : 's'}</div>}
-        {archived && <div className="pr-vote-thresh ok">✓ Approved · in archive</div>}
-        {rejected && <div className="pr-vote-thresh bad">× {b.status} · not in archive</div>}
+        {!resolvedInBatch && archived && <div className="pr-vote-thresh ok">✓ Approved · in archive</div>}
+        {!resolvedInBatch && rejected && <div className="pr-vote-thresh bad">× {b.status} · not in archive</div>}
+        {resolvedInBatch && <div className="pr-vote-thresh">Resolved by network before your vote · acknowledge to continue</div>}
       </div>
       <div className="pr-row-actions">
         {voting && !mine && (
@@ -258,11 +268,14 @@ function ReviewRow({ b, mine, onVote, onLapse, onPreview, onHistory, peerCount }
           </>
         )}
         {voting && mine && <span className="pr-vote-btn voted">✓ You voted</span>}
-        {archived && <span className="pr-vote-btn voted">✓ Filed in archive</span>}
-        {rejected && <span className="pr-vote-btn sealed">× Not in archive</span>}
-        <div className={`pr-vote-window ${left != null && left <= 2 ? 'is-urgent' : ''}`}>
-          {voting ? (left === 0 ? 'window closed' : `${left} d left`) : 'sealed'}
-        </div>
+        {!resolvedInBatch && archived && <span className="pr-vote-btn voted">✓ Filed in archive</span>}
+        {!resolvedInBatch && rejected && <span className="pr-vote-btn sealed">× Not in archive</span>}
+        {resolvedInBatch && <button className="pr-vote-btn yes" onClick={() => onAck(b)}>Acknowledge</button>}
+        {!resolvedInBatch && (
+          <div className={`pr-vote-window ${left != null && left <= 2 ? 'is-urgent' : ''}`}>
+            {voting ? (left === 0 ? 'window closed' : `${left} d left`) : 'sealed'}
+          </div>
+        )}
         {lapsable && <button className="pr-vote-btn no" onClick={() => onLapse(b)}>Mark lapsed</button>}
       </div>
     </div>
@@ -270,12 +283,16 @@ function ReviewRow({ b, mine, onVote, onLapse, onPreview, onHistory, peerCount }
 }
 
 // ── Challenge row ────────────────────────────────────────────────────────────
-function ChallengeRow({ b, mine, onVote, onFinalize, onPreview, peerCount }) {
+// `resolvedInBatch` mirrors ReviewRow: a contested binding the network resolved
+// (deprecate / reaffirm) while it sat in this peer's challenge batch, never
+// receiving their vote, holds an Acknowledge slot until cleared so the gate
+// can't silently advance around them.
+function ChallengeRow({ b, mine, resolvedInBatch, onVote, onFinalize, onAck, onPreview, peerCount }) {
   const sup = b.challenge_votes || 0;
   const def = b.defense_votes || 0;
   const depT = deprecateThreshold(b.tier, peerCount);
   const left = daysRemaining(b.challenged_at, CHALLENGE_WINDOW_DAYS);
-  const finalizable = left === 0;
+  const finalizable = left === 0 && !resolvedInBatch;
   return (
     <div className="pr-row is-contested" data-tier={b.tier}>
       <div className="pr-row-tier"><div className="ring">{tierRoman(b.tier)}</div>{tierWord(b.tier)}</div>
@@ -303,20 +320,24 @@ function ChallengeRow({ b, mine, onVote, onFinalize, onPreview, peerCount }) {
           <span className="s"><b>{sup}</b> support</span>
           <span className="d"><b>{def}</b> defend</span>
         </div>
-        <div className="pr-vote-thresh">Deprecates at {depT} of {peerCount} peer{peerCount === 1 ? '' : 's'}</div>
+        {!resolvedInBatch && <div className="pr-vote-thresh">Deprecates at {depT} of {peerCount} peer{peerCount === 1 ? '' : 's'}</div>}
+        {resolvedInBatch && <div className="pr-vote-thresh">Resolved by network before your vote · acknowledge to continue</div>}
       </div>
       <div className="pr-row-actions">
-        {!mine && !finalizable && (
+        {!mine && !finalizable && !resolvedInBatch && (
           <>
             <button className="pr-vote-btn challenge" onClick={() => onVote(b, true)}>Support challenge</button>
             <button className="pr-vote-btn defend" onClick={() => onVote(b, false)}>Defend evidence</button>
           </>
         )}
-        {mine && <span className="pr-vote-btn voted">✓ You voted</span>}
+        {mine && !resolvedInBatch && <span className="pr-vote-btn voted">✓ You voted</span>}
         {finalizable && <button className="pr-vote-btn defend" onClick={() => onFinalize(b)}>Finalize</button>}
-        <div className={`pr-vote-window ${left != null && left <= 2 ? 'is-urgent' : ''}`}>
-          {finalizable ? 'window closed' : `${left} d left`}
-        </div>
+        {resolvedInBatch && <button className="pr-vote-btn defend" onClick={() => onAck(b)}>Acknowledge</button>}
+        {!resolvedInBatch && (
+          <div className={`pr-vote-window ${left != null && left <= 2 ? 'is-urgent' : ''}`}>
+            {finalizable ? 'window closed' : `${left} d left`}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -409,7 +430,7 @@ function SignModal({ payload, onCancel, onSign }) {
   // rather than a pre-signed Attestation gated through SIG_ACTIONS. Either way
   // the user signs, so the button still reads "Sign & submit".
   const requiresSig = SIG_ACTIONS.has(payload.action)
-    || payload.action === 'review_vote' || payload.action === 'challenge_vote';
+    || ['review_vote', 'challenge_vote', 'retire_node', 'force_renounce'].includes(payload.action);
   const verdict = VERDICT_STYLE[payload.verdict];
   return createPortal(
     <div className="pr-modal-scrim" onClick={onCancel}>
@@ -452,6 +473,7 @@ function ProposeModal({ tax, me, onClose, onDone, setToast }) {
   const [node, setNode] = useState({ title: '', tag: '', blurb: '' });   // the pillar/topic node
   const [ftopic, setFtopic] = useState({ title: '', blurb: '' });                  // founding topic (pillar kind)
   const [ev, setEv] = useState({ tier: 2, type: 'Paper', title: '', source: '', year: '', excerpt: '', link: '', tags: '' });
+  const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
 
   // The slug (= node id, on-chain node_hash) is derived from the title, not
@@ -496,7 +518,7 @@ function ProposeModal({ tax, me, onClose, onDone, setToast }) {
           topic: { id: ftopicSlug, pillar_id: nodeSlug, node_hash: topicHash, title: ftopic.title, blurb: ftopic.blurb, meta_hash: topicMeta },
           evidence,
         };
-        sendOnChain = () => proposePillarOnChain(pillarHash, pillarMeta, topicHash, topicMeta, evidenceId, Number(ev.tier), contentHash);
+        sendOnChain = () => proposePillarOnChain(pillarHash, pillarMeta, topicHash, topicMeta, evidenceId, Number(ev.tier), contentHash, note.trim());
       } else {
         const topicHash  = await slugToBytes32(nodeSlug);
         const topicMeta  = await computeMetaHash({ kind: 'topic', slug: nodeSlug, parent, title: node.title.trim(), blurb: node.blurb.trim(), tag: '' });
@@ -508,15 +530,17 @@ function ProposeModal({ tax, me, onClose, onDone, setToast }) {
           topic: { id: nodeSlug, pillar_id: parent, node_hash: topicHash, title: node.title, blurb: node.blurb, meta_hash: topicMeta },
           evidence,
         };
-        sendOnChain = () => proposeTopicOnChain(topicHash, parentHash, topicMeta, evidenceId, Number(ev.tier), contentHash);
+        sendOnChain = () => proposeTopicOnChain(topicHash, parentHash, topicMeta, evidenceId, Number(ev.tier), contentHash, note.trim());
       }
       const bindingHash = await bindingKey(evidenceId, await slugToBytes32(foundingTopicSlug));
 
       // 1. On-chain proposal FIRST — nothing is written off-chain until it
-      //    confirms, so a rejected or reverted tx leaves no orphaned rows.
-      let txHash = null;
+      //    confirms, so a rejected or reverted tx leaves no orphaned rows. The
+      //    propose call IS the proposer's founding endorsement (Vote phase 2), so
+      //    it returns the same { sig, noteHash, round } the chain recovered.
+      let txHash = null, proposeSig = null, proposeNoteHash = null, proposeRound = null;
       if (CONSENSUS_ADDR) {
-        txHash = await sendOnChain();
+        ({ txHash, sig: proposeSig, noteHash: proposeNoteHash, round: proposeRound } = await sendOnChain());
         await waitForTx(txHash);
       }
 
@@ -526,17 +550,22 @@ function ProposeModal({ tax, me, onClose, onDone, setToast }) {
       const { bindingId, error } = await proposeTaxonomyBundle({ ...bundle, evidenceId, bindingHash });
       if (error) throw error;
 
-      // 3. Proposer's founding endorsement (endorser #1 on-chain) — a signed log
-      //    entry. Best-effort: the proposal is already filed, so neither a
-      //    rejected signature nor a log-write hiccup should fail the flow.
+      // 3. Proposer's founding endorsement log entry — reuse the propose
+      //    signature (the proposer is endorser #1 on-chain). Dev mode (no
+      //    contract) falls back to an off-chain Attestation so the note is still
+      //    recorded. Best-effort: the proposal is already filed.
       try {
-        const endorseSig = await signAttestation(
-          { evidenceId, topicId: foundingTopicSlug, phase: 'taxonomy', verdict: 'endorse', note: '' },
-          me.addr,
-        );
+        let sig = proposeSig;
+        if (!CONSENSUS_ADDR) {
+          sig = await signAttestation(
+            { evidenceId, topicId: foundingTopicSlug, phase: 'taxonomy', verdict: 'endorse', note: note.trim() },
+            me.addr,
+          );
+        }
         await endorseNodeSupabase({
           nodeHash, evidenceId, topicId: foundingTopicSlug, bindingId,
-          peerAddr: me.addr, peerHandle: me.handle, note: '', sig: endorseSig, txHash,
+          peerAddr: me.addr, peerHandle: me.handle, note: note.trim(), sig, txHash,
+          round: proposeRound, noteHash: proposeNoteHash,
         });
       } catch (endErr) { if (endErr?.code !== 4001) console.warn('Endorsement log failed (proposal is filed):', endErr); }
 
@@ -602,9 +631,14 @@ function ProposeModal({ tax, me, onClose, onDone, setToast }) {
         <div className="field"><label>Source URL</label><input value={ev.link} onChange={setEvK('link')} placeholder="https://…" /></div>
         <div className="field"><label>Tags (comma-separated)</label><input value={ev.tags} onChange={setEvK('tags')} placeholder="quantum, mysticism" /></div>
 
+        <div className="field">
+          <label>Deliberation note (optional)</label>
+          <textarea rows={3} value={note} onChange={e => setNote(e.target.value)} placeholder="Why this belongs in the archive — recorded as your founding endorsement…" />
+        </div>
+
         <div className="pr-modal-actions">
           <button className="btn btn--ghost btn--sm" onClick={onClose}>Cancel</button>
-          <button className="btn btn--accent btn--sm" disabled={!canSubmit} onClick={submit}>{busy ? 'Proposing…' : 'Propose'}</button>
+          <button className="btn btn--accent btn--sm" disabled={!canSubmit} onClick={submit}>{busy ? 'Proposing…' : 'Sign & propose'}</button>
         </div>
       </div>
     </div>,
@@ -616,22 +650,31 @@ function ProposeModal({ tax, me, onClose, onDone, setToast }) {
 // `seed` switches to the owner-only seed-phase path: a direct addPeer that makes
 // the wallet an active peer immediately (no endorsement gate), used while the
 // network is below seedPhaseK and nominations are closed.
-function NominateModal({ onClose, onDone, setToast, seed = false }) {
+function NominateModal({ me, onClose, onDone, setToast, seed = false }) {
   const [addr, setAddr] = useState('');
   const [handle, setHandle] = useState('');
+  const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const valid = /^0x[a-fA-F0-9]{40}$/.test(addr.trim());
   const submit = async () => {
     if (!valid) return;
     setBusy(true);
     try {
-      const txHash = seed
-        ? await addPeerOnChain(addr.trim(), handle.trim())
-        : await nominatePeerOnChain(addr.trim(), handle.trim());
-      await waitForTx(txHash);
+      if (seed) {
+        // Owner seed path — a plain addPeer (no vote, no note).
+        await waitForTx(await addPeerOnChain(addr.trim(), handle.trim()));
+      } else {
+        // Nominate is the nominator's own EIP-712-signed act (PeerVote kind 2).
+        const { txHash, sig, round } = await nominatePeerOnChain(addr.trim(), handle.trim(), note.trim());
+        await waitForTx(txHash);
+        // Persist the deliberation note + the same signature the chain recovered,
+        // best-effort (the on-chain nomination stands regardless).
+        try { await castNominate({ nomineeAddr: addr.trim(), nominatorAddr: me.addr, round, note: note.trim(), sig }); }
+        catch (e) { console.warn('Nominate note write failed (nomination stands):', e); }
+      }
       setToast({ type: 'info', msg: `${seed ? 'Seeded' : 'Nominated'} ${handle.trim() || SHORT(addr.trim())}` });
       onDone();
-    } catch (e) { setToast({ type: 'err', msg: e?.message || (seed ? 'Seeding failed' : 'Nomination failed') }); }
+    } catch (e) { if (e?.code === 4001) { setBusy(false); return; } setToast({ type: 'err', msg: e?.message || (seed ? 'Seeding failed' : 'Nomination failed') }); }
     finally { setBusy(false); }
   };
   return createPortal(
@@ -643,9 +686,15 @@ function NominateModal({ onClose, onDone, setToast, seed = false }) {
           : 'Nominate a wallet to join the named network. Peers endorse to verify.'}</p>
         <div className="field"><label>Wallet address</label><input value={addr} onChange={e => setAddr(e.target.value)} placeholder="0x…" /></div>
         <div className="field"><label>Handle</label><input value={handle} onChange={e => setHandle(e.target.value)} placeholder="name" /></div>
+        {!seed && (
+          <div className="field">
+            <label>Deliberation note (optional)</label>
+            <textarea rows={3} value={note} onChange={e => setNote(e.target.value)} placeholder="Why this wallet should join the network…" />
+          </div>
+        )}
         <div className="pr-modal-actions">
           <button className="btn btn--ghost btn--sm" onClick={onClose}>Cancel</button>
-          <button className="btn btn--primary btn--sm" disabled={busy || !valid} onClick={submit}>{busy ? (seed ? 'Seeding…' : 'Nominating…') : (seed ? 'Seed peer' : 'Nominate')}</button>
+          <button className="btn btn--primary btn--sm" disabled={busy || !valid} onClick={submit}>{busy ? (seed ? 'Seeding…' : 'Nominating…') : (seed ? 'Seed peer' : 'Sign & nominate')}</button>
         </div>
       </div>
     </div>,
@@ -815,7 +864,9 @@ function TaxonomyTab({ me, setToast, onPropose, review }) {
   const [retire, setRetire] = useState({ threshold: 1, byHash: {} });
   const [subtab, setSubtab] = useState('pillars');  // 'pillars' | 'topics'
   const [voting, setVoting] = useState(null);       // bundle awaiting confirm + sign
+  const [retireSign, setRetireSign] = useState(null); // { node, mode: 'motion'|'vote' } awaiting note + sign
   const [refreshing, setRefreshing] = useState(false);
+  const [preview, setPreview] = useState(null);     // founding evidence record opened in the full-record modal
 
   const refresh = async () => {
     setRefreshing(true);
@@ -873,16 +924,14 @@ function TaxonomyTab({ me, setToast, onPropose, review }) {
     if (!evidence || !foundingTopic) { setToast({ type: 'err', msg: 'Founding evidence not loaded yet — try again' }); return; }
     const topicSlug = foundingTopic.id;
     const reject = verdict === 'reject';
-    let sig = null;
-    try {
-      sig = await signAttestation(
-        { evidenceId: evidence.evidenceId, topicId: topicSlug, phase: 'taxonomy', verdict, note },
-        me.addr,
-      );
-    } catch (e) { if (e?.code === 4001) return; setToast({ type: 'err', msg: 'Signature rejected' }); return; }
     try {
       if (reject) {
-        // Off-chain dissent only — the contract has no reject-node call.
+        // Off-chain dissent only — the contract has no reject-node call, so this
+        // stays an EIP-712 Attestation signed in the browser.
+        let sig;
+        try {
+          sig = await signAttestation({ evidenceId: evidence.evidenceId, topicId: topicSlug, phase: 'taxonomy', verdict, note }, me.addr);
+        } catch (e) { if (e?.code === 4001) return; setToast({ type: 'err', msg: 'Signature rejected' }); return; }
         await rejectNodeSupabase({
           nodeHash: node.node_hash, evidenceId: evidence.evidenceId, topicId: topicSlug,
           bindingId: evidence.bindingId, peerAddr: me.addr, peerHandle: me.handle, note, sig,
@@ -890,11 +939,22 @@ function TaxonomyTab({ me, setToast, onPropose, review }) {
         setToast({ type: 'info', msg: `Rejected “${node.title}”` });
         loadRejects(); refetch();
       } else {
-        let txHash = null;
-        if (CONSENSUS_ADDR) { txHash = await endorseNodeOnChain(node.node_hash); await waitForTx(txHash); }
+        // Endorse is the on-chain by-sig Vote (phase 2): the signature the chain
+        // recovers IS the off-chain record. Dev mode (no contract) falls back to
+        // an Attestation so the note is still captured.
+        let txHash = null, sig = null, noteHash = null, round = null;
+        try {
+          if (CONSENSUS_ADDR) {
+            ({ txHash, sig, noteHash, round } = await endorseNodeOnChain(node.node_hash, note));
+            await waitForTx(txHash);
+          } else {
+            sig = await signAttestation({ evidenceId: evidence.evidenceId, topicId: topicSlug, phase: 'taxonomy', verdict, note }, me.addr);
+          }
+        } catch (e) { if (e?.code === 4001) return; setToast({ type: 'err', msg: e?.message || 'Endorse failed' }); return; }
         await endorseNodeSupabase({
           nodeHash: node.node_hash, evidenceId: evidence.evidenceId, topicId: topicSlug,
           bindingId: evidence.bindingId, peerAddr: me.addr, peerHandle: me.handle, note, sig, txHash,
+          round, noteHash,
         });
         setToast({ type: 'info', msg: `Endorsed “${node.title}”` });
         loadChain(); refetch();
@@ -902,13 +962,32 @@ function TaxonomyTab({ me, setToast, onPropose, review }) {
     } catch (e) { setToast({ type: 'err', msg: e?.message || (reject ? 'Reject failed' : 'Endorse failed') }); }
   };
 
-  const motionRetire = async (n) => {
-    try { await waitForTx(await motionRetireNodeOnChain(n.node_hash)); setToast({ type: 'info', msg: `Retire motion opened for “${n.title}”` }); loadRetire(); }
-    catch (e) { setToast({ type: 'err', msg: e?.message || 'Motion failed' }); }
-  };
-  const voteRetire = async (n) => {
-    try { await waitForTx(await voteRetireNodeOnChain(n.node_hash)); setToast({ type: 'info', msg: `Retire vote cast for “${n.title}”` }); loadRetire(); refetch(); }
-    catch (e) { setToast({ type: 'err', msg: e?.message || 'Vote failed' }); }
+  // Retire motion/vote are on-chain by-sig (Vote phase 3), so each opens a
+  // note-capture sign modal first; runRetire signs + submits on confirm.
+  const motionRetire = (n) => setRetireSign({ node: n, mode: 'motion' });
+  const voteRetire   = (n) => setRetireSign({ node: n, mode: 'vote' });
+  const runRetire = async (note) => {
+    const sign = retireSign;
+    setRetireSign(null);
+    if (!sign) return;
+    const { node: n, mode } = sign;
+    try {
+      const res = mode === 'motion'
+        ? await motionRetireNodeOnChain(n.node_hash, note)
+        : await voteRetireNodeOnChain(n.node_hash, note);
+      await waitForTx(res.txHash);
+      // Persist the deliberation note + the same Vote signature the chain
+      // recovered so the retire shows in the shared vote history. Best-effort.
+      try {
+        await castGovNote({
+          kind: 'retire', subject: n.node_hash, topicId: n.id, verdict: 'retire',
+          round: res.round, note, noteHash: res.noteHash, sig: res.sig, txHash: res.txHash,
+          peerAddr: me.addr, peerHandle: me.handle,
+        });
+      } catch (e) { console.warn('Retire note write failed (vote stands):', e); }
+      setToast({ type: 'info', msg: mode === 'motion' ? `Retire motion opened for “${n.title}”` : `Retire vote cast for “${n.title}”` });
+      loadRetire(); if (mode !== 'motion') refetch();
+    } catch (e) { if (e?.code === 4001) return; setToast({ type: 'err', msg: e?.message || 'Retire failed' }); }
   };
   const cancelRetire = async (n) => {
     try { await waitForTx(await cancelStaleRetireOnChain(n.node_hash)); setToast({ type: 'info', msg: `Stale retire motion cleared for “${n.title}”` }); loadRetire(); }
@@ -917,30 +996,97 @@ function TaxonomyTab({ me, setToast, onPropose, review }) {
 
   const nowSec = Math.floor(Date.now() / 1000);
 
-  // One pending-proposal card. `node` is the pillar or standalone topic row;
-  // `foundingTopic` + `evidence` are the bundle detail the endorsement ratifies.
-  // Endorsing opens the confirm-sign modal.
+  // One pending-proposal card. A bundle is rendered as stacked parts — the
+  // PILLAR (pillar bundles only) → the TOPIC → the founding EVIDENCE — each
+  // showing its full set of params so a peer can judge the whole filing before
+  // endorsing. The evidence title/"View full record" open the same shared
+  // EvidenceDetailBody preview the review queue uses. Endorsing opens the
+  // confirm-sign modal. `node` is the pillar (kind 'pillar') or standalone
+  // topic (kind 'topic'); `foundingTopic` is the bundled topic for a pillar.
   const renderProposal = (node, kind, foundingTopic, evidence) => {
     const c = chain.byHash[node.node_hash];
     const endorsements = c?.endorsements ?? 1;
     const threshold = chain.threshold || 1;
     const pct = Math.min(100, (endorsements / threshold) * 100);
     const myVote = voteStatus[node.node_hash];   // 'endorse' | 'reject' | undefined
+    const pillar = kind === 'pillar' ? node : null;
+    const topic = kind === 'pillar' ? foundingTopic : node;
+    const parentPillar = pillar || tax.pillarMap[node.pillar_id];
+
+    const openEvidence = () => {
+      if (!evidence) return;
+      setPreview({
+        id: evidence.evidenceId,
+        type: evidence.type, tier: evidence.tier, title: evidence.title,
+        source: evidence.source, year: evidence.year, excerpt: evidence.excerpt,
+        link: evidence.link, status: 'pending',
+        pillarTitle: parentPillar?.title || '—',
+        topicTitle: topic?.title || '—',
+      });
+    };
+
     return (
-      <article className="pr-tax-card" key={node.id}>
+      <article className="pr-tax-card pr-bundle" key={node.id}>
         <div className="top">
           <span className={`kind ${kind === 'topic' ? 'is-topic' : ''}`}>{kind === 'topic' ? 'Topic · bundle' : 'Pillar · bundle'}</span>
           <span>Proposed {ago(node.created_at)}</span>
         </div>
-        <h3 className="title">{node.title}</h3>
-        <p className="slug">Label · <span style={{ color: 'var(--accent-2)' }}>{node.id}</span>{kind === 'topic' && tax.pillarMap[node.pillar_id] ? <> · under {tax.pillarMap[node.pillar_id].title}</> : null}</p>
-        {node.blurb && <p className="blurb">{node.blurb}</p>}
-        <div className="pr-tax-bundle">
-          {kind === 'pillar' && (
-            <div className="row"><span className="lab">Founding topic</span><span className="val">{foundingTopic?.title || '—'}</span></div>
+
+        <div className="pr-bundle-parts">
+          {pillar && (
+            <div className="pr-part is-pillar">
+              <div className="pr-part-head"><span className="pr-part-badge">Pillar</span><span className="pr-part-flag">wider</span></div>
+              <h3 className="pr-part-title">{pillar.title}</h3>
+              {pillar.blurb && <p className="pr-part-blurb">{pillar.blurb}</p>}
+              <div className="pr-part-rows">
+                <div className="pr-part-row"><span className="k">Label</span><span className="v mono">{pillar.id}<CopyChip value={pillar.id} label="pillar slug" /></span></div>
+                {pillar.tag && <div className="pr-part-row"><span className="k">Tags</span><span className="v">{pillar.tag}</span></div>}
+                <div className="pr-part-row"><span className="k">Node</span><span className="v mono dim">{shortHash(pillar.node_hash)}<CopyChip value={pillar.node_hash} label="node hash" /></span></div>
+                <div className="pr-part-row"><span className="k">Meta</span><span className="v mono dim">{shortHash(pillar.meta_hash)}<CopyChip value={pillar.meta_hash} label="meta hash" /></span></div>
+              </div>
+            </div>
           )}
-          <div className="row"><span className="lab">Founding evidence</span><span className="val">{evidence ? <>{evidence.title} <em>· Tier {evidence.tier}</em></> : '—'}</span></div>
+
+          <div className="pr-part is-topic">
+            <div className="pr-part-head"><span className="pr-part-badge">{pillar ? 'Founding topic' : 'Topic'}</span><span className="pr-part-flag">deeper</span></div>
+            {topic ? (
+              <>
+                <h3 className="pr-part-title">{topic.title}</h3>
+                {topic.blurb && <p className="pr-part-blurb">{topic.blurb}</p>}
+                <div className="pr-part-rows">
+                  <div className="pr-part-row"><span className="k">Label</span><span className="v mono">{topic.id}<CopyChip value={topic.id} label="topic slug" /></span></div>
+                  <div className="pr-part-row"><span className="k">Under</span><span className="v">{parentPillar?.title || '—'}</span></div>
+                  <div className="pr-part-row"><span className="k">Node</span><span className="v mono dim">{shortHash(topic.node_hash)}<CopyChip value={topic.node_hash} label="node hash" /></span></div>
+                  <div className="pr-part-row"><span className="k">Meta</span><span className="v mono dim">{shortHash(topic.meta_hash)}<CopyChip value={topic.meta_hash} label="meta hash" /></span></div>
+                </div>
+              </>
+            ) : <p className="pr-part-empty">Founding topic loading…</p>}
+          </div>
+
+          <div className="pr-part is-evidence">
+            <div className="pr-part-head">
+              <span className="pr-part-badge">Founding evidence</span>
+              {evidence && <span className="pr-part-flag">Tier {tierRoman(evidence.tier)} · {evidence.type || tierWord(evidence.tier)}</span>}
+            </div>
+            {evidence ? (
+              <>
+                <h3 className="pr-part-title is-clickable" role="button" tabIndex={0}
+                  onClick={openEvidence}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEvidence(); } }}
+                  title="Open the full evidence record">{evidence.title}</h3>
+                {(evidence.source || evidence.year) && <p className="pr-part-src">{evidence.source}{evidence.year ? <> · <span className="yr">{evidence.year}</span></> : null}</p>}
+                {evidence.excerpt && <p className="pr-part-excerpt">{evidence.excerpt}</p>}
+                <div className="pr-part-rows">
+                  <div className="pr-part-row"><span className="k">Evidence id</span><span className="v mono dim">{shortHash(evidence.evidenceId)}<CopyChip value={evidence.evidenceId} label="evidence id" /></span></div>
+                  <div className="pr-part-row"><span className="k">Content</span><span className="v mono dim">{shortHash(evidence.content_hash)}<CopyChip value={evidence.content_hash} label="content hash" /></span></div>
+                  {evidence.link && <div className="pr-part-row"><span className="k">Source</span><span className="v"><a href={evidence.link} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>Open link ↗</a></span></div>}
+                </div>
+                <button type="button" className="pr-part-viewfull" onClick={openEvidence}>View full record →</button>
+              </>
+            ) : <p className="pr-part-empty">Founding evidence loading…</p>}
+          </div>
         </div>
+
         <div className="endorse">
           <div>
             <div className="label" style={{ marginBottom: 6 }}>Endorsements · {endorsements} of {threshold}</div>
@@ -1073,11 +1219,38 @@ function TaxonomyTab({ me, setToast, onPropose, review }) {
       )}
 
       {voting && <BundleVoteModal payload={voting} onCancel={() => setVoting(null)} onSign={confirmVote} />}
+      {retireSign && (
+        <SignModal
+          payload={{
+            action: 'retire_node',
+            title: retireSign.mode === 'motion' ? 'Motion to retire topic' : 'Vote to retire topic',
+            evidenceTitle: retireSign.node.title,
+            sub: retireSign.mode === 'motion'
+              ? 'Open a retire motion — you are retire vote #1. Retiring a topic needs a 2/3 supermajority.'
+              : 'Add your vote to the open retire motion.',
+            verdict: 'retire',
+          }}
+          onCancel={() => setRetireSign(null)}
+          onSign={runRetire}
+        />
+      )}
+      {preview && <EvidencePreviewModal b={preview} onClose={() => setPreview(null)} />}
     </section>
   );
 }
 
 // ── Peer registry tab ────────────────────────────────────────────────────────
+// Segmented switch at the top of the Peer registry tab: the live roster vs. the
+// searchable registry vote history (RegistryLog).
+function RegistryViewToggle({ view, onChange }) {
+  return (
+    <div className="pr-queue-toggle" role="tablist">
+      <button role="tab" aria-selected={view === 'registry'} className={view === 'registry' ? 'is-active' : ''} onClick={() => onChange('registry')}>Registry</button>
+      <button role="tab" aria-selected={view === 'history'} className={view === 'history' ? 'is-active' : ''} onClick={() => onChange('history')}>Vote history</button>
+    </div>
+  );
+}
+
 function PeersTab({ me, peerCount, onNominate, onSeed, reloadSignal, setToast, onPeerHistory, onRevocationChange }) {
   const [peers, setPeers] = useState([]);
   const [nominees, setNominees] = useState([]);
@@ -1090,10 +1263,19 @@ function PeersTab({ me, peerCount, onNominate, onSeed, reloadSignal, setToast, o
   // `addr:round`), keepCounts } for the peers currently under revocation.
   const [revKeep, setRevKeep] = useState({ rounds: {}, myKeeps: new Set(), keepCounts: {} });
   const [q, setQ] = useState('');
+  const [view, setView] = useState('registry');   // 'registry' roster | 'history' vote log
+  const [vote, setVote] = useState(null);         // pending membership vote (note-capture modal)
+  const [fr, setFr] = useState({ active: false, votes: 0, threshold: 1 }); // force-renounce state
 
   const load = useCallback(async () => {
     if (!CONSENSUS_ADDR) return;
     const [p, n, k, own, open, thr, revThr] = await Promise.all([getActivePeersAggregated(), getNomineesAggregated(), getSeedPhaseK(), getOwner(), isNominationsOpen(), getNomineeThreshold(), getRevokeThreshold()]);
+    if (own && own !== '0x0000000000000000000000000000000000000000') {
+      const [frA, frV, frT] = await Promise.all([getForceRenounceActive(), getForceRenounceVotes(), getRetireThreshold()]);
+      setFr({ active: !!frA, votes: Number(frV) || 0, threshold: Number(frT) || 1 });
+    } else {
+      setFr({ active: false, votes: 0, threshold: 1 });
+    }
     let mineRevoke = new Map();
     if (me) mineRevoke = await hasVotedForRevokeMany(p.map(x => x.addr), me.addr);
     const nomEnriched = me ? await Promise.all(n.map(async x => ({ ...x, mine: await hasEndorsedNominee(x.addr, me.addr) }))) : n;
@@ -1123,21 +1305,74 @@ function PeersTab({ me, peerCount, onNominate, onSeed, reloadSignal, setToast, o
   useEffect(() => { load(); }, [load, reloadSignal]);
 
   const afterRevChange = () => { load(); onRevocationChange?.(); };
-  const endorse = async (addr) => { try { await waitForTx(await endorseNomineeOnChain(addr)); setToast({ type: 'info', msg: 'Endorsed nominee' }); load(); } catch (e) { setToast({ type: 'err', msg: e?.message || 'Failed' }); } };
-  const motion  = async (addr) => { try { await waitForTx(await motionRevokeOnChain(addr)); setToast({ type: 'info', msg: 'Revocation motioned' }); afterRevChange(); } catch (e) { setToast({ type: 'err', msg: e?.message || 'Failed' }); } };
-  const voteRev = async (addr) => { try { await waitForTx(await voteRevokeOnChain(addr)); setToast({ type: 'info', msg: 'Voted to discard' }); afterRevChange(); } catch (e) { setToast({ type: 'err', msg: e?.message || 'Failed' }); } };
   const prune   = async (addr) => { try { await waitForTx(await pruneInactivePeerOnChain(addr)); setToast({ type: 'info', msg: 'Inactive peer pruned' }); load(); } catch (e) { setToast({ type: 'err', msg: e?.message || 'Failed' }); } };
-  // "Keep" has no on-chain call — sign an EIP-712 dissent bound to the current
-  // round and record it off-chain via the revocation-vote edge function.
-  const voteKeep = async (p) => {
-    try {
+
+  // Membership votes now open a sign modal that captures an optional deliberation
+  // note, then: sign the EIP-712 PeerVote (recovered on-chain), submit the vote,
+  // and persist the note + signature off-chain so the registry vote history can
+  // show it. The off-chain note write is best-effort — the on-chain vote stands
+  // even if it fails (the indexer still records the vote event).
+  const endorse = (n) => setVote({
+    title: 'Endorse nominee', sub: `${n.handle || SHORT(n.addr)} · verify as a peer`, verdict: 'approve',
+    onSubmit: async (note) => {
+      const { txHash, sig, round } = await endorseNomineeOnChain(n.addr, note);
+      await waitForTx(txHash);
+      try { await castNomineeEndorse({ nomineeAddr: n.addr, voterAddr: me.addr, round, note, sig }); }
+      catch (e) { console.warn('Endorse note write failed (vote stands):', e); }
+      setToast({ type: 'info', msg: 'Endorsed nominee' }); load();
+    },
+  });
+  const motion = (p) => setVote({
+    title: 'Motion to revoke', sub: `${p.handle || SHORT(p.addr)} · open a discard vote`, verdict: 'reject',
+    onSubmit: async (note) => {
+      const { txHash, sig, round } = await motionRevokeOnChain(p.addr, note);
+      await waitForTx(txHash);
+      try { await castRevocationDiscard({ subjectAddr: p.addr, voterAddr: me.addr, round, note, sig }); }
+      catch (e) { console.warn('Motion note write failed (vote stands):', e); }
+      setToast({ type: 'info', msg: 'Revocation motioned' }); afterRevChange();
+    },
+  });
+  const voteRev = (p) => setVote({
+    title: 'Vote to discard', sub: `${p.handle || SHORT(p.addr)} · remove from the peer set`, verdict: 'reject',
+    onSubmit: async (note) => {
+      const { txHash, sig, round } = await voteRevokeOnChain(p.addr, note);
+      await waitForTx(txHash);
+      try { await castRevocationDiscard({ subjectAddr: p.addr, voterAddr: me.addr, round, note, sig }); }
+      catch (e) { console.warn('Discard note write failed (vote stands):', e); }
+      setToast({ type: 'info', msg: 'Voted to discard' }); afterRevChange();
+    },
+  });
+  // "Keep" has no on-chain call — sign an EIP-712 Attestation dissent bound to the
+  // current round and record it off-chain via the revocation-vote edge function.
+  const voteKeep = (p) => setVote({
+    title: 'Vote to keep', sub: `${p.handle || SHORT(p.addr)} · defend against revocation`, verdict: 'defend',
+    onSubmit: async (note) => {
       const round = revKeep.rounds[p.addr] ?? await getRevokeRound(p.addr);
-      const sig = await signAttestation({ evidenceId: String(round), topicId: p.addr.toLowerCase(), phase: 'revocation', verdict: 'keep', note: '' }, me.addr);
-      await castRevocationKeep({ subjectAddr: p.addr, voterAddr: me.addr, round, sig });
-      setToast({ type: 'info', msg: 'Voted to keep' });
-      afterRevChange();
-    } catch (e) { if (e?.code === 4001) return; setToast({ type: 'err', msg: e?.message || 'Keep vote failed' }); }
-  };
+      const sig = await signAttestation({ evidenceId: String(round), topicId: p.addr.toLowerCase(), phase: 'revocation', verdict: 'keep', note }, me.addr);
+      await castRevocationKeep({ subjectAddr: p.addr, voterAddr: me.addr, round, note, sig });
+      setToast({ type: 'info', msg: 'Voted to keep' }); afterRevChange();
+    },
+  });
+  // Force-renounce — the peer-supermajority escape hatch that strips a
+  // captured/paused owner. By-sig (Vote phase 4); the note rides in the signed
+  // noteHash. Reuses the membership note-capture modal.
+  const forceRenounce = () => setVote({
+    title: fr.active ? 'Vote to force-renounce owner' : 'Motion to force-renounce owner',
+    sub: `Strip the owner entirely (and unpause). Passes at ${fr.threshold} of ${peerCount} peers (2/3).`,
+    verdict: 'reject',
+    onSubmit: async (note) => {
+      const res = fr.active ? await voteForceRenounce(note) : await motionForceRenounce(note);
+      await waitForTx(res.txHash);
+      try {
+        await castGovNote({
+          kind: 'force_renounce', subject: res.bindingHash, verdict: 'renounce',
+          round: res.round, note, noteHash: res.noteHash, sig: res.sig, txHash: res.txHash,
+          peerAddr: me.addr, peerHandle: me.handle,
+        });
+      } catch (e) { console.warn('Force-renounce note write failed (vote stands):', e); }
+      setToast({ type: 'info', msg: fr.active ? 'Force-renounce vote cast' : 'Force-renounce motioned' }); load();
+    },
+  });
 
   // Mirror the contract's INACTIVITY_WINDOW (30 days). A peer idle past it can be
   // pruned by anyone, but never below the seed-phase floor.
@@ -1168,7 +1403,7 @@ function PeersTab({ me, peerCount, onNominate, onSeed, reloadSignal, setToast, o
       </div>
       <div className="meta">
         <span><b>{n.endorsements}</b>of {nomThreshold} to verify</span>
-        {me && (n.mine ? <span style={{ opacity: 0.6 }}>✓ endorsed</span> : <button className="btn btn--accent btn--xs" onClick={() => endorse(n.addr)}>+ Endorse</button>)}
+        {me && (n.mine ? <span style={{ opacity: 0.6 }}>✓ endorsed</span> : <button className="btn btn--accent btn--xs" onClick={() => endorse(n)}>+ Endorse</button>)}
       </div>
     </article>
   );
@@ -1206,14 +1441,14 @@ function PeersTab({ me, peerCount, onNominate, onSeed, reloadSignal, setToast, o
                       : (
                         <div className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
                           <button className="btn btn--accent btn--xs" onClick={() => voteKeep(p)} title="Sign a keep vote — record your support off-chain">Vote keep</button>
-                          <button className="btn btn--danger btn--xs" onClick={() => voteRev(p.addr)} title="Cast an on-chain discard vote">Vote discard</button>
+                          <button className="btn btn--danger btn--xs" onClick={() => voteRev(p)} title="Sign + cast an on-chain discard vote">Vote discard</button>
                         </div>
                       )
                     )}
                   </>
                 );
               })()
-            : (me && !isMe && <button className="btn btn--ghost btn--xs" onClick={() => motion(p.addr)}>Motion revoke</button>)}
+            : (me && !isMe && <button className="btn btn--ghost btn--xs" onClick={() => motion(p)}>Motion revoke</button>)}
         </div>
       </article>
     );
@@ -1221,38 +1456,101 @@ function PeersTab({ me, peerCount, onNominate, onSeed, reloadSignal, setToast, o
 
   return (
     <section>
-      <div className="pr-tab-head">
-        <div>
-          <span className="eyebrow">Peer registry · the named network</span>
-          <h2 style={{ marginTop: 10 }}><em>{peerCount ?? peers.length}</em> verified peers<br />{nominees.length} nominations open.</h2>
-        </div>
-        <div className="row">
-          <div className="search" style={{ width: 280 }}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search peers · handle / address" />
-          </div>
-          {me && nomOpen && <button className="btn btn--primary btn--sm" onClick={onNominate}>+ Nominate peer</button>}
-          {me && !nomOpen && isOwner && <button className="btn btn--primary btn--sm" onClick={onSeed}>+ Seed peer</button>}
-        </div>
-      </div>
+      <RegistryViewToggle view={view} onChange={setView} />
 
-      {!nomOpen && (
-        <div className="pr-seed-note">
-          <b>Seed phase — {effCount} of {seedK} peers.</b>{' '}
-          {isOwner
-            ? 'Nominations are closed until the seed quorum is reached. As owner, use “Seed peer” to add the founding peers directly — each becomes active immediately. The endorsement-based nominate flow opens automatically at the quorum.'
-            : 'Nominations are closed until the network owner has seeded the founding peers. The endorsement-based nominate flow opens automatically once the quorum is reached.'}
-        </div>
+      {view === 'history' ? (
+        <RegistryLog />
+      ) : (
+        <>
+          <div className="pr-tab-head">
+            <div>
+              <span className="eyebrow">Peer registry · the named network</span>
+              <h2 style={{ marginTop: 10 }}><em>{peerCount ?? peers.length}</em> verified peers<br />{nominees.length} nominations open.</h2>
+            </div>
+            <div className="row">
+              <div className="search" style={{ width: 280 }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+                <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search peers · handle / address" />
+              </div>
+              {me && nomOpen && <button className="btn btn--primary btn--sm" onClick={onNominate}>+ Nominate peer</button>}
+              {me && !nomOpen && isOwner && <button className="btn btn--primary btn--sm" onClick={onSeed}>+ Seed peer</button>}
+            </div>
+          </div>
+
+          {!nomOpen && (
+            <div className="pr-seed-note">
+              <b>Seed phase — {effCount} of {seedK} peers.</b>{' '}
+              {isOwner
+                ? 'Nominations are closed until the seed quorum is reached. As owner, use “Seed peer” to add the founding peers directly — each becomes active immediately. The endorsement-based nominate flow opens automatically at the quorum.'
+                : 'Nominations are closed until the network owner has seeded the founding peers. The endorsement-based nominate flow opens automatically once the quorum is reached.'}
+            </div>
+          )}
+
+          {me && !isOwner && owner && (
+            <div className="pr-seed-note">
+              <b>Owner force-renounce.</b>{' '}
+              {fr.active
+                ? `A motion to strip the owner is open — ${fr.votes} of ${fr.threshold} peers (2/3). `
+                : 'The escape hatch: a 2/3 peer supermajority can strip a captured or paused owner. '}
+              <button className="btn btn--danger btn--xs" onClick={forceRenounce} style={{ marginLeft: 6 }}>
+                {fr.active ? 'Vote to force-renounce' : 'Motion to force-renounce'}
+              </button>
+            </div>
+          )}
+
+          <div className="pr-registry">
+            {youPeers.map(renderPeer)}
+            {revokingPeers.map(renderPeer)}
+            {fn.map(renderNominee)}
+            {restPeers.map(renderPeer)}
+          </div>
+          {fp.length === 0 && fn.length === 0 && <div className="pr-empty"><h3>No peers found</h3><p>Try a different search.</p></div>}
+        </>
       )}
 
-      <div className="pr-registry">
-        {youPeers.map(renderPeer)}
-        {revokingPeers.map(renderPeer)}
-        {fn.map(renderNominee)}
-        {restPeers.map(renderPeer)}
-      </div>
-      {fp.length === 0 && fn.length === 0 && <div className="pr-empty"><h3>No peers found</h3><p>Try a different search.</p></div>}
+      {vote && <PeerVoteModal payload={vote} onClose={() => setVote(null)} setToast={setToast} />}
     </section>
+  );
+}
+
+// ── Peer membership vote modal (note-capture + sign) ─────────────────────────
+//
+// Membership votes (endorse / discard / keep) are EIP-712-signed with an optional
+// deliberation note. This captures the note, then runs the caller's onSubmit —
+// which signs, casts the vote, and records the note off-chain — closing on
+// success. 4001 (user-rejected signature) closes quietly; other errors toast.
+function PeerVoteModal({ payload, onClose, setToast }) {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const v = VERDICT_STYLE[payload.verdict];
+  const submit = async () => {
+    setBusy(true);
+    try { await payload.onSubmit(note.trim()); onClose(); }
+    catch (e) { if (e?.code !== 4001) setToast({ type: 'err', msg: e?.message || 'Vote failed' }); }
+    finally { setBusy(false); }
+  };
+  return createPortal(
+    <div className="pr-modal-scrim" onClick={busy ? undefined : onClose}>
+      <div className="pr-modal" onClick={e => e.stopPropagation()}>
+        <h3>{payload.title}</h3>
+        {payload.sub && <p className="sub">{payload.sub}</p>}
+        {v && (
+          <div className="pr-vote-verdict">
+            <span className="lab">Verdict</span>
+            <span className="val" style={{ color: v.color }}>{v.label}</span>
+          </div>
+        )}
+        <div className="field">
+          <label>Deliberation note (optional)</label>
+          <textarea rows={3} value={note} onChange={e => setNote(e.target.value)} placeholder="Why this verdict…" />
+        </div>
+        <div className="pr-modal-actions">
+          <button className="btn btn--ghost btn--sm" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn btn--primary btn--sm" onClick={submit} disabled={busy}>{busy ? 'Signing…' : 'Sign & submit'}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1307,6 +1605,50 @@ function PillarFilter({ pillars, value, onChange }) {
   );
 }
 
+// "Pillar · Topic" column header with a subtle "?" explaining the colour key:
+// solid = ratified canon node, amber italic = a node this vote is proposing that
+// isn't in the canon taxonomy yet. Reuses the System-health hint popover pattern.
+function ColorKeyHint() {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="pr-log-th-hint">
+      Pillar · Topic
+      <button
+        type="button"
+        className="pr-hint-btn"
+        aria-label="What the Pillar · Topic colours mean"
+        aria-expanded={open}
+        title="What the colours mean"
+        onClick={() => setOpen(v => !v)}
+      >?</button>
+      {open && (
+        <>
+          <div className="pr-hint-scrim" onClick={() => setOpen(false)} />
+          <div className="pr-hint-pop pr-hint-pop--left" role="dialog" aria-label="Pillar · Topic colour key">
+            <strong>Pillar · Topic colour key</strong>
+            <p>
+              <b className="pr-key-swatch is-canon">White</b> — a pillar or topic
+              that already exists in the canon taxonomy (ratified on-chain).
+            </p>
+            <p>
+              <b className="pr-key-swatch is-proposed">Amber</b> — a pillar or topic
+              this vote is <em>proposing</em>. Proposing a node is itself a vote, so
+              it shows here before the node exists; it joins the canon only once the
+              proposal ratifies. A new pillar marks both itself and its founding
+              topic; a new topic under an existing pillar marks only the topic.
+            </p>
+            <p>
+              <b className="pr-key-swatch is-retired">Red</b> — a pillar or topic that
+              was <em>retired</em> off the canon taxonomy. The vote stays in the
+              record; the struck-through name shows the node no longer exists.
+            </p>
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
 // One row of the vote history. Holds local state for the optional deliberation
 // note: a peer may attach a note when voting, so the reveal toggle only renders
 // when one exists, expanding a full-width panel beneath the row.
@@ -1314,29 +1656,76 @@ function LogRow({ r, tax, onOpen, handleMap }) {
   const [showNote, setShowNote] = useState(false);
   const note = (r.note || '').trim();
   const peerName = r.peer_handle || handleMap[r.peer_addr?.toLowerCase()] || SHORT(r.peer_addr);
+
+  // Pillar · Topic cell. A taxonomy proposal IS a vote, so its row flags the
+  // pillar/topic it introduced as "not yet ratified" — and keeps flagging it after
+  // a single-peer proposal instant-ratifies. Two durable signals:
+  //   • the node is still 'proposed' (multi-peer, pre-ratification), or
+  //   • this row is the taxonomy vote whose tx first proposed the node, matched by
+  //     the propose_tx the indexer stamps on the node.
+  // A pillar bundle stamps only the pillar (its founding topic emits no
+  // PillarProposed of its own), so the founding topic rides the pillar's flag.
+  const isTaxonomyVote = r.phase === 'taxonomy';
+  const rowTx = (r.tx_hash || '').toLowerCase();
+  const proposedHere = (n) => isTaxonomyVote && !!rowTx && (n?.propose_tx || '').toLowerCase() === rowTx;
+
+  const ratifiedPillar = tax.pillarMap[r.pillar_id];
+  const proposedPillar = tax.proposedPillarMap?.[r.pillar_id];
+  // r.pillar_title (from the view) is the durable fallback so a RETIRED pillar —
+  // which drops out of the ratified-only taxonomy cache — still shows its name.
+  const pillarTitle    = ratifiedPillar?.title || proposedPillar?.title || r.pillar_title || null;
+  const pillarPending  = !!proposedPillar || proposedHere(ratifiedPillar);
+  // Retired = the node row still exists (the view resolved its title) but it's
+  // neither ratified (in the cache) nor proposed → it was retired off the canon.
+  const pillarRetired  = !ratifiedPillar && !proposedPillar && !!r.pillar_title;
+
+  const ratifiedTopic = tax.topicMap[r.topic_id];
+  const proposedTopic = tax.proposedTopicMap?.[r.topic_id];
+  const topicTitle    = ratifiedTopic?.title || r.topic_title || proposedTopic?.title || null;
+  const topicPending  = !!proposedTopic || proposedHere(ratifiedTopic) || pillarPending;
+  const topicRetired  = !ratifiedTopic && !proposedTopic && !!r.topic_title;
+
   return (
     <div className={`pr-log-row ${showNote ? 'is-noted' : ''}`}>
       <span className="t">{ago(r.created_at)}</span>
       <span className={`verdict ${displayVerdict(r.verdict)}`}>{displayVerdict(r.verdict)}</span>
-      <span className="pillar">{tax.pillarMap[r.pillar_id]?.title || '—'}</span>
-      <span className="title" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <span className="pillar">
+        <span
+          className={`pr-log-node ${pillarRetired ? 'is-retired' : pillarPending ? 'is-proposed' : ''}`}
+          title={pillarRetired ? 'Retired pillar — no longer in the canon taxonomy' : pillarPending ? 'Proposed pillar — not yet ratified' : undefined}
+        >{pillarTitle || '—'}</span>
+        {topicTitle && (
+          <>
+            <span className="pr-log-node-sep" aria-hidden="true">·</span>
+            <span
+              className={`pr-log-node ${topicRetired ? 'is-retired' : topicPending ? 'is-proposed' : ''}`}
+              title={topicRetired ? 'Retired topic — no longer in the canon taxonomy' : topicPending ? 'Proposed topic — not yet ratified' : undefined}
+            >{topicTitle}</span>
+          </>
+        )}
+      </span>
+      <span className="title">
         {r.evidence_title
           ? <button type="button" className="pr-log-evi" onClick={() => onOpen(r)} title="Open the full evidence record">{r.evidence_title}</button>
           : '—'}
-        {note && (
-          <button
-            type="button"
-            className={`pr-log-note-btn ${showNote ? 'is-open' : ''}`}
-            onClick={() => setShowNote(s => !s)}
-            aria-expanded={showNote}
-            title={showNote ? 'Hide deliberation note' : 'Show the peer’s deliberation note'}
-          >
-            <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
-            Note
-          </button>
-        )}
       </span>
       <span className="peer-cell"><Jazz addr={r.peer_addr} size={22} />{peerName}<CopyChip value={r.peer_addr} label="peer address" /></span>
+      <span className="detail">
+        {note
+          ? (
+            <button
+              type="button"
+              className={`pr-log-note-btn ${showNote ? 'is-open' : ''}`}
+              onClick={() => setShowNote(s => !s)}
+              aria-expanded={showNote}
+              title={showNote ? 'Hide deliberation note' : 'Show the peer’s deliberation note'}
+            >
+              <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              Note
+            </button>
+          )
+          : <span style={{ color: 'var(--ink-faint)' }}>—</span>}
+      </span>
       <span className="tx"><AttestationVerifier a={r} handle={peerName} /></span>
       {note && showNote && (
         <div className="pr-log-note">
@@ -1456,7 +1845,7 @@ function LogTab({ initialQuery = '' }) {
       </div>
 
       <div className="pr-log">
-        <div className="pr-log-row is-head"><span>When</span><span>Verdict</span><span>Pillar</span><span>Evidence</span><span>Peer</span><span>Proof</span></div>
+        <div className="pr-log-row is-head"><span>When</span><span>Verdict</span><ColorKeyHint /><span>Evidence</span><span>Peer</span><span>Note</span><span>Proof</span></div>
         {shown.map(r => <LogRow key={r.id} r={r} tax={tax} onOpen={openPreview} handleMap={handleMap} />)}
         {!loading && shown.length === 0 && <div className="pr-log-row"><span style={{ gridColumn: '1 / -1', color: 'var(--ink-faint)' }}>No attestations match.</span></div>}
       </div>
@@ -1464,6 +1853,119 @@ function LogTab({ initialQuery = '' }) {
         {hasMore && <button className="btn btn--ghost btn--sm" onClick={loadMore} disabled={loading}>{loading ? 'Loading…' : 'Load 30 more'}</button>}
       </div>
       {preview && <EvidencePreviewModal b={preview} onClose={() => setPreview(null)} statusLabel={null} />}
+    </section>
+  );
+}
+
+// ── Peer registry voting log ─────────────────────────────────────────────────
+//
+// The registry-scoped sibling of the evidence Vote history (LogTab): a
+// searchable, paginated stream of every governance vote and lifecycle event on
+// the named peer set (usePeerRegistryLog), reached via the toggle at the top of
+// the Peer Registry tab. Each row's Proof column opens RegistryProofVerifier —
+// recovering the PeerVote signer in-browser (a "keep" dissent recovers its core
+// Attestation instead), with sig-less lifecycle outcomes leaning on the tx.
+const REGISTRY_KIND_TABS  = ['', 'endorse', 'discard', 'keep'];
+const REGISTRY_KIND_LABEL = { '': 'All', endorse: 'Endorse', discard: 'Discard', keep: 'Keep' };
+// action → display label + the verdict colour class it reuses from the log CSS.
+const REG_ACTION = {
+  nominate:  { label: 'Nominate',  cls: 'endorse'   },
+  endorse:   { label: 'Endorse',   cls: 'approve'   },
+  verified:  { label: 'Verified',  cls: 'approve'   },
+  lapsed:    { label: 'Lapsed',    cls: 'reject'    },
+  motion:    { label: 'Motion',    cls: 'challenge' },
+  discard:   { label: 'Discard',   cls: 'reject'    },
+  keep:      { label: 'Keep',      cls: 'defend'    },
+  cancelled: { label: 'Cancelled', cls: 'defend'    },
+  revoked:   { label: 'Revoked',   cls: 'reject'    },
+  seeded:    { label: 'Seeded',    cls: 'endorse'   },
+  removed:   { label: 'Removed',   cls: 'reject'    },
+};
+
+function RegistryLogRow({ r, handleMap }) {
+  const [showNote, setShowNote] = useState(false);
+  const subjName  = r.subjectHandle || handleMap[r.subjectAddr?.toLowerCase()] || SHORT(r.subjectAddr);
+  const actorName = r.actorAddr ? (handleMap[r.actorAddr.toLowerCase()] || SHORT(r.actorAddr)) : null;
+  const act  = REG_ACTION[r.action] || { label: r.action, cls: '' };
+  const note = (r.note || '').trim();
+  return (
+    <div className={`pr-log-row is-registry ${showNote ? 'is-noted' : ''}`}>
+      <span className="t">{ago(r.ts)}</span>
+      <span className={`verdict ${act.cls}`}>{act.label}</span>
+      <span className="peer-cell">
+        {r.subjectAddr
+          ? <><Jazz addr={r.subjectAddr} size={22} />{subjName}<CopyChip value={r.subjectAddr} label="peer address" /></>
+          : '—'}
+      </span>
+      <span className="peer-cell">
+        {actorName
+          ? <><Jazz addr={r.actorAddr} size={22} />{actorName}<CopyChip value={r.actorAddr} label="actor address" /></>
+          : <span style={{ color: 'var(--ink-faint)' }}>Genesis Peer</span>}
+      </span>
+      <span className="detail">
+        {note
+          ? (
+            <button
+              type="button"
+              className={`pr-log-note-btn ${showNote ? 'is-open' : ''}`}
+              onClick={() => setShowNote(s => !s)}
+              aria-expanded={showNote}
+              title={showNote ? 'Hide deliberation note' : 'Show the peer’s deliberation note'}
+            >
+              <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              Note
+            </button>
+          )
+          : <span style={{ color: 'var(--ink-faint)' }}>—</span>}
+      </span>
+      <span className="tx"><RegistryProofVerifier r={r} actorName={actorName} actionLabel={act.label} /></span>
+      {note && showNote && (
+        <div className="pr-log-note">
+          <span className="pr-log-note-label">Deliberation note</span>
+          <p>{note}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RegistryLog() {
+  const [q, setQ] = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [kind, setKind] = useState('');
+  useEffect(() => { const t = setTimeout(() => setDebounced(q), 250); return () => clearTimeout(t); }, [q]);
+  const { log, loading, hasMore, loadMore, total } = usePeerRegistryLog(30, debounced, kind);
+  const handleMap = usePeerHandleMap();
+
+  return (
+    <section>
+      <div className="pr-tab-head">
+        <div>
+          <span className="eyebrow">Registry vote history · searchable</span>
+          <h2 style={{ marginTop: 10 }}><em>{total ?? log.length}</em> registry {(total ?? log.length) === 1 ? 'action' : 'actions'}</h2>
+        </div>
+      </div>
+
+      <div className="pr-log-controls is-registry">
+        <div className="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by peer handle, address, or tx hash" />
+        </div>
+        <div className="tabs">
+          {REGISTRY_KIND_TABS.map(v => (
+            <button key={v || 'any'} className={kind === v ? 'is-active' : ''} onClick={() => setKind(v)}>{REGISTRY_KIND_LABEL[v]}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="pr-log is-registry">
+        <div className="pr-log-row is-registry is-head"><span>When</span><span>Action</span><span>Peer</span><span>By</span><span>Note</span><span>Proof</span></div>
+        {log.map(r => <RegistryLogRow key={r.id} r={r} handleMap={handleMap} />)}
+        {!loading && log.length === 0 && <div className="pr-log-row"><span style={{ gridColumn: '1 / -1', color: 'var(--ink-faint)' }}>No registry votes match.</span></div>}
+      </div>
+      <div className="pr-log-foot">
+        {hasMore && <button className="btn btn--ghost btn--sm" onClick={loadMore} disabled={loading}>{loading ? 'Loading…' : 'Load 30 more'}</button>}
+      </div>
     </section>
   );
 }
@@ -1476,13 +1978,31 @@ function LogTab({ initialQuery = '' }) {
 // tab, shows how many items are still owed on the current batch, and ticks green
 // when cleared — so it's obvious at a glance what's blocking the next batch.
 function BatchGate({ surfaces, allCleared, onJump }) {
+  const [showHint, setShowHint] = useState(false);
   return (
     <div className={`pr-gate ${allCleared ? 'is-clear' : ''}`} role="status" aria-label="Batch clear-all gate">
       <div className="pr-gate-head">
-        <span className="pr-gate-eyebrow">Batch gate</span>
-        {!allCleared && (
-          <span className="pr-gate-msg">Your next batch loads only once every surface is cleared.</span>
-        )}
+        <span className="pr-health-hint">
+          <span className="pr-gate-eyebrow">Batch gate</span>
+          <button
+            type="button"
+            className="pr-hint-btn"
+            aria-label="Why the batch gate"
+            aria-expanded={showHint}
+            title="Why the batch gate"
+            onClick={() => setShowHint(v => !v)}
+          >?</button>
+          {showHint && (
+            <>
+              <div className="pr-hint-scrim" onClick={() => setShowHint(false)} />
+              <div className="pr-hint-pop pr-hint-pop--left" role="dialog" aria-label="Batch gate philosophy">
+                <strong>One queue. One pace. One consensus.</strong>
+                <p>Every peer works the <em>same</em> review, challenge, and taxonomy queues, in the same order. The gate keeps the three surfaces in lockstep — your next batch loads only once you've cleared the current one on every surface.</p>
+                <p>Without it, a peer racing through one surface while skipping the others would let their preferred claims canonize on a thinner quorum while harder questions sat unjudged. The gate makes that impossible: every claim earns a verdict from the same peers, in the same window, so consensus is <em>always</em> reachable — never a side-effect of who showed up where.</p>
+              </div>
+            </>
+          )}
+        </span>
       </div>
       <div className="pr-gate-steps">
         {surfaces.map(s => {
@@ -1569,7 +2089,6 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
   // it lives here and is passed down to the Taxonomy tab (one source of truth).
   const taxReview = useTaxonomyReview(me);
   const revGate = useRevocationGate(me);
-  const [capacity, setCapacity] = useState({ active: 0, max: 0 });
 
   // Liveness clock — the on-chain `lastActive` ticks down toward the 30-day
   // INACTIVITY_WINDOW after which any peer can prune this one. We read it to tint
@@ -1586,22 +2105,6 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
   // Tick once a minute so the colour keeps creeping red on a long-idle tab.
   useEffect(() => { const id = setInterval(() => setNow(Date.now() / 1000), 60_000); return () => clearInterval(id); }, []);
 
-  const loadCapacity = useCallback(() => {
-    if (!CONSENSUS_ADDR) return;
-    Promise.all([getActiveReviewCount(), getReviewCapacity()])
-      .then(([a, m]) => setCapacity({ active: Number(a) || 0, max: Number(m) || 0 }))
-      .catch(() => {});
-  }, []);
-  useEffect(() => { loadCapacity(); }, [loadCapacity, queue.length, queued.length]);
-
-  const promote = async (b) => {
-    try {
-      await waitForTx(await promoteOnChain(b.id, slugToBytes32(b.topicId)));
-      setToast({ type: 'info', msg: 'Promoted into review' });
-      refetchQueued(); refetchQueue(); loadCapacity();
-    } catch (e) { setToast({ type: 'err', msg: e?.message || 'Failed' }); }
-  };
-
   const beat = async () => {
     setBeating(true);
     try {
@@ -1617,7 +2120,7 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
   // queue, the waiting list, and review capacity on demand.
   const refreshQueue = async () => {
     setRefreshing(true);
-    try { await Promise.all([refetchQueue(), refetchQueued()]); loadCapacity(); }
+    try { await Promise.all([refetchQueue(), refetchQueued()]); }
     finally { setRefreshing(false); }
   };
 
@@ -1708,52 +2211,114 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
 
   const [batchIds, setBatchIds] = useState([]);
   const [chBatchIds, setChBatchIds] = useState([]);
-  const batch = batchIds.map(id => byId[id]).filter(Boolean);
-  const challengeBatch = chBatchIds.map(id => contestedById[id]).filter(Boolean);
-  // The batch still "holds" voted items so the clear-all gate keeps counting
+  // In-session acknowledgements for batch entries the network resolved before
+  // this peer could vote.  The peer can't (and shouldn't) cast a vote anymore,
+  // but they must clear the slot explicitly — silently dropping it would let
+  // the unified gate advance around items the peer never actually addressed.
+  const [batchAcks, setBatchAcks] = useState({});
+  const [chBatchAcks, setChBatchAcks] = useState({});
+  // Snapshot of each batch entry's last-known data, so a row stays renderable
+  // after the binding leaves the live queue (status flipped from `pending` to
+  // canon / expelled / lapsed, or from contested to deprecate / reaffirmed).
+  const [batchSnapshot, setBatchSnapshot] = useState({});
+  const [chBatchSnapshot, setChBatchSnapshot] = useState({});
+  useEffect(() => {
+    setBatchSnapshot(prev => {
+      const next = {};
+      for (const id of batchIds) next[id] = byId[id] || prev[id] || null;
+      const pk = Object.keys(prev), nk = Object.keys(next);
+      if (pk.length === nk.length && nk.every(k => prev[k] === next[k])) return prev;
+      return next;
+    });
+  }, [batchIds, byId]);
+  useEffect(() => {
+    setChBatchSnapshot(prev => {
+      const next = {};
+      for (const id of chBatchIds) next[id] = contestedById[id] || prev[id] || null;
+      const pk = Object.keys(prev), nk = Object.keys(next);
+      if (pk.length === nk.length && nk.every(k => prev[k] === next[k])) return prev;
+      return next;
+    });
+  }, [chBatchIds, contestedById]);
+
+  // Effective batch — live queue data when present, falling back to the snapshot
+  // for rows whose binding left the queue (network-resolved) while still
+  // committed to this peer's batch.
+  const batch = batchIds.map(id => byId[id] || batchSnapshot[id]).filter(Boolean);
+  const challengeBatch = chBatchIds.map(id => contestedById[id] || chBatchSnapshot[id]).filter(Boolean);
+
+  // Per-entry status helpers — an entry is "resolved-in-batch" when it has
+  // dropped out of the live queue (canon / expelled / lapsed, or deprecate /
+  // reaffirmed on the challenge side).  An ack only counts while the binding is
+  // resolved: if a lapsed binding gets re-filed and re-enters the batch with
+  // a fresh review round, a stale ack from the previous lifecycle is ignored.
+  const isResolvedReview = (id) => !byId[id];
+  const isResolvedChallenge = (id) => !contestedById[id];
+  const isDoneReview = (id) => !!myVotes[id] || (isResolvedReview(id) && !!batchAcks[id]);
+  const isDoneChallenge = (id) => !!myChVotes[id] || (isResolvedChallenge(id) && !!chBatchAcks[id]);
+
+  // The batch still "holds" closed slots so the clear-all gate keeps counting
   // them, but they render under Open votes — the live review/challenge lists show
-  // only what this peer still has to vote on.
-  const reviewBatch = batch.filter(b => !myVotes[b.bindingId]);
-  const challengeReviewBatch = challengeBatch.filter(b => !myChVotes[b.bindingId]);
+  // only what this peer still has to act on (vote on a pending entry, or
+  // acknowledge one the network resolved before they got to vote).
+  const reviewBatch = batch.filter(b => !isDoneReview(b.bindingId));
+  const challengeReviewBatch = challengeBatch.filter(b => !isDoneChallenge(b.bindingId));
+  // Count of resolved-but-unacted batch entries on each surface — totals the
+  // peer still owes that the shared `personalQueue` / `challengePersonal` lists
+  // can't see (resolved bindings aren't in the live queue anymore).
+  const resolvedReviewAckPending    = batchIds.filter(id => isResolvedReview(id) && !isDoneReview(id)).length;
+  const resolvedChallengeAckPending = chBatchIds.filter(id => isResolvedChallenge(id) && !isDoneChallenge(id)).length;
+  const needsReviewCount    = personalQueue.length      + resolvedReviewAckPending;
+  const needsChallengeCount = challengePersonal.length  + resolvedChallengeAckPending;
 
   // ── Unified clear-all gate ──────────────────────────────────────────────────
-  // Each surface is "cleared" when this peer owes nothing on its current batch
-  // (votes cast or items network-resolved). The next batch in EITHER queue loads
-  // only once ALL THREE surfaces are cleared, so a peer can never churn reviews
-  // while challenges or taxonomy proposals pile up unaddressed — consensus
-  // always advances on every aspect of the platform together.
-  const reviewBatchCleared    = batch.every(b => !!myVotes[b.bindingId]);
-  const challengeBatchCleared = challengeBatch.every(b => !!myChVotes[b.bindingId]);
+  // Each surface is "cleared" when this peer has actively closed every slot in
+  // their current batch — voted on the still-pending entries AND acknowledged
+  // any entries the network resolved before they got to them.  The next batch
+  // in EITHER queue loads only once ALL surfaces are cleared, so a peer can
+  // never churn reviews while challenges or taxonomy proposals pile up
+  // unaddressed, and the gate never silently advances around a slot the peer
+  // never personally closed.
+  const reviewBatchCleared    = batchIds.every(id => isDoneReview(id));
+  const challengeBatchCleared = chBatchIds.every(id => isDoneChallenge(id));
   const taxCleared            = taxReview.cleared;
   const revCleared            = revGate.cleared;
   const allCleared            = reviewBatchCleared && challengeBatchCleared && taxCleared && revCleared;
 
-  // A batch holds its current ≤3 while the peer still owes votes on it OR while
-  // any OTHER surface is still outstanding (the gate). Only when everything is
-  // cleared does the front of the shared order advance to the next 3.
+  // A batch holds its current ≤3 while the peer still owes ANY action on it
+  // (vote on a pending entry, or acknowledge a network-resolved one) OR while
+  // any OTHER surface is still outstanding (the gate).  Only when every slot is
+  // actively closed does the front of the shared order advance to the next 3.
   useEffect(() => {
     setBatchIds(prev => {
-      const present    = prev.filter(id => byId[id]);        // drop network-resolved items
-      const actionable = present.filter(id => !myVotes[id]); // items I still owe a vote
+      // Keep every prior entry — even those the network resolved — until the
+      // peer acknowledges them.  Defensive: drop only ids we have no data for
+      // (neither live in the queue nor in the captured snapshot), which would
+      // only happen on a stale state we can't render anyway.
+      const valid = prev.filter(id => byId[id] || batchSnapshot[id]);
+      const actionable = valid.filter(id => !isDoneReview(id));
       const next = (actionable.length > 0 || !allCleared)
-        ? present
+        ? valid
         : personalQueue.slice(0, 3).map(b => b.bindingId);
       if (next.length === prev.length && next.every((id, i) => id === prev[i])) return prev;
       return next;
     });
-  }, [personalQueue, byId, myVotes, allCleared]);
+  }, [personalQueue, byId, batchSnapshot, myVotes, batchAcks, allCleared]);
 
   useEffect(() => {
     setChBatchIds(prev => {
-      const present    = prev.filter(id => contestedById[id]);
-      const actionable = present.filter(id => !myChVotes[id]);
+      const valid = prev.filter(id => contestedById[id] || chBatchSnapshot[id]);
+      const actionable = valid.filter(id => !isDoneChallenge(id));
       const next = (actionable.length > 0 || !allCleared)
-        ? present
+        ? valid
         : challengePersonal.slice(0, 3).map(b => b.bindingId);
       if (next.length === prev.length && next.every((id, i) => id === prev[i])) return prev;
       return next;
     });
-  }, [challengePersonal, contestedById, myChVotes, allCleared]);
+  }, [challengePersonal, contestedById, chBatchSnapshot, myChVotes, chBatchAcks, allCleared]);
+
+  const handleReviewAck = (b) => setBatchAcks(a => a[b.bindingId] ? a : { ...a, [b.bindingId]: true });
+  const handleChallengeAck = (b) => setChBatchAcks(a => a[b.bindingId] ? a : { ...a, [b.bindingId]: true });
 
   const runSigned = async (sign, note) => {
     setPendingSign(null);
@@ -1879,9 +2444,10 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
 
   // What THIS peer still owes on each surface's current batch — drives the
   // badges and the "next batch locked" notices that point to whatever is
-  // blocking the unified gate.
-  const reviewBatchPending    = batch.filter(b => !myVotes[b.bindingId]).length;
-  const challengeBatchPending = challengeBatch.filter(b => !myChVotes[b.bindingId]).length;
+  // blocking the unified gate.  Mirrors the gate's "voted-or-acked" definition
+  // so a resolved-but-unacknowledged slot keeps the counter > 0.
+  const reviewBatchPending    = reviewBatch.length;
+  const challengeBatchPending = challengeReviewBatch.length;
   const taxPending            = taxReview.pendingForMe;
   const revPending            = revGate.pendingForMe;
   const gateItems = [
@@ -1936,7 +2502,7 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
             <div className="pr-peer-handle">{me.handle || SHORT(me.addr)}</div>
             <div className="pr-peer-addr" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>{me.addr}<CopyChip value={me.addr} label="address" /></div>
             <div className="pr-peer-tags">
-              <span className="pill pill--canon" style={{ fontSize: 9 }}><span className="dot" />Verified</span>
+              <span className="pill pill--verified" style={{ fontSize: 9 }}><span className="dot" />Verified</span>
               {isGenesis && <span className="pill" style={{ fontSize: 9 }}>Genesis peer</span>}
             </div>
           </div>
@@ -1971,8 +2537,8 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
 
       <div className="pr-tabs">
         <div className="tabs" role="tablist">
-          <button className={tab === 'queue' ? 'is-active' : ''} onClick={() => setTab('queue')}>Review queue <span style={{ marginLeft: 8, opacity: 0.7 }}>{personalQueue.length}</span></button>
-          <button className={tab === 'challenges' ? 'is-active' : ''} onClick={() => setTab('challenges')}>Challenges <span style={{ marginLeft: 8, opacity: 0.7 }}>{challengePersonal.length}</span></button>
+          <button className={tab === 'queue' ? 'is-active' : ''} onClick={() => setTab('queue')}>Review queue <span style={{ marginLeft: 8, opacity: 0.7 }}>{needsReviewCount}</span></button>
+          <button className={tab === 'challenges' ? 'is-active' : ''} onClick={() => setTab('challenges')}>Challenges <span style={{ marginLeft: 8, opacity: 0.7 }}>{needsChallengeCount}</span></button>
           <button className={tab === 'taxonomy' ? 'is-active' : ''} onClick={() => setTab('taxonomy')}>Taxonomy <span style={{ marginLeft: 8, opacity: 0.7 }}>{taxReview.pendingForMe}</span></button>
           <button className={tab === 'log' ? 'is-active' : ''} onClick={() => setTab('log')}>Vote history</button>
           <button className={tab === 'peers' ? 'is-active' : ''} onClick={() => setTab('peers')}>Peer registry</button>
@@ -1988,7 +2554,7 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
           <div className="pr-tab-head">
             <div>
               <span className="eyebrow">Your review batch · one vote per filing</span>
-              <h2 style={{ marginTop: 10 }}><em>{reviewBatch.length}</em> to review now<br />{queue.length} in the shared queue.</h2>
+              <h2 style={{ marginTop: 10 }}><em>{reviewBatch.length}</em> to review now</h2>
               <p className="small" style={{ color: 'var(--ink-soft)', marginTop: 10, maxWidth: '62ch' }}>
                 Every peer works the <strong style={{ color: 'var(--ink)' }}>same shared queue in the same order</strong> — most-boosted filings first, then the oldest. You review up to three at a time; the next three load only once you've also cleared your <strong style={{ color: 'var(--ink)' }}>challenges and taxonomy proposals</strong> (see the batch gate above). Your vote only advances your own queue — each filing stays in review until the whole network reaches consensus.
               </p>
@@ -2001,11 +2567,11 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
             </button>
           </div>
 
-          <QueueToggle view={queueView} onChange={setQueueView} needsLabel="Needs my review" needsCount={personalQueue.length} openCount={myOpenVotes.length} />
+          <QueueToggle view={queueView} onChange={setQueueView} needsLabel="Needs my review" needsCount={needsReviewCount} openCount={myOpenVotes.length} />
 
           {queueView === 'needs' ? (
             <>
-              {personalQueue.length === 0 ? (
+              {personalQueue.length === 0 && reviewBatch.length === 0 ? (
                 <div className="pr-empty">
                   <h3>{queue.length === 0 ? 'The queue is clear' : "You're all caught up"}</h3>
                   <p>{queue.length === 0
@@ -2020,14 +2586,20 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
               ) : (
                 <div>
                   <div className="pr-queue-rows">
-                    {reviewBatch.map(b => <ReviewRow key={b.bindingId} b={b} mine={false} onVote={handleVote} onLapse={handleLapse} onPreview={setPreview} onHistory={seeHistory} peerCount={peerCount} />)}
+                    {reviewBatch.map(b => <ReviewRow key={b.bindingId} b={b} mine={false} resolvedInBatch={isResolvedReview(b.bindingId)} onVote={handleVote} onLapse={handleLapse} onAck={handleReviewAck} onPreview={setPreview} onHistory={seeHistory} peerCount={peerCount} />)}
                   </div>
                   {reviewBatchPending > 0
-                    ? (personalQueue.length > reviewBatchPending && (
-                        <p className="small" style={{ color: 'var(--ink-soft)', marginTop: 12 }}>
-                          Finish your batch to reveal the next {Math.min(3, personalQueue.length - reviewBatchPending)}.
-                        </p>
-                      ))
+                    ? (() => {
+                        // Items in the shared queue parked behind this peer's
+                        // current batch — `personalQueue` includes the current
+                        // batch's still-pending entries, so subtract them.
+                        const waiting = personalQueue.filter(b => !batchIds.includes(b.bindingId)).length;
+                        return waiting > 0 && (
+                          <p className="small" style={{ color: 'var(--ink-soft)', marginTop: 12 }}>
+                            Finish your batch to reveal the next {Math.min(3, waiting)}.
+                          </p>
+                        );
+                      })()
                     : <GateNotice surface="review" />}
                 </div>
               )}
@@ -2037,15 +2609,6 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
                   <div className="pr-topic-bar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span className="n">Waiting for a review slot · {queued.length} queued (highest public boost first)</span>
                   </div>
-                  {queued.map(b => (
-                    <div key={b.bindingId} className="pr-review-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-                      <div>
-                        <div style={{ fontWeight: 600 }}>{b.title}</div>
-                        <div className="addr" style={{ opacity: 0.7 }}>{b.pillarTitle} · {b.topicTitle} · ✦ {b.queue_priority} boosts</div>
-                      </div>
-                      <button className="btn btn--ghost btn--xs" disabled={capacity.active >= capacity.max && capacity.max > 0} onClick={() => promote(b)} title={capacity.active >= capacity.max ? 'No free review slot yet' : 'Move into active review'}>Promote</button>
-                    </div>
-                  ))}
                 </div>
               )}
             </>
@@ -2064,7 +2627,7 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
           <div className="pr-tab-head">
             <div>
               <span className="eyebrow">Your challenge batch · support or defend</span>
-              <h2 style={{ marginTop: 10 }}><em>{challengeBatchPending}</em> to vote now<br />{contested.length} contested across the network.</h2>
+              <h2 style={{ marginTop: 10 }}><em>{challengeBatchPending}</em> to vote now</h2>
               <p className="small" style={{ color: 'var(--ink-soft)', marginTop: 10, maxWidth: '62ch' }}>
                 Every peer works the <strong style={{ color: 'var(--ink)' }}>same contested queue in the same order</strong> — the oldest challenge first. You vote up to three at a time; the next three load only once you've also cleared your <strong style={{ color: 'var(--ink)' }}>reviews and taxonomy proposals</strong> (see the batch gate above). Your vote only advances your own queue — each challenge stays open until the whole network reaches consensus.
               </p>
@@ -2077,10 +2640,10 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
             </button>
           </div>
 
-          <QueueToggle view={chQueueView} onChange={setChQueueView} needsLabel="Needs my vote" needsCount={challengePersonal.length} openCount={myChOpenVotes.length} />
+          <QueueToggle view={chQueueView} onChange={setChQueueView} needsLabel="Needs my vote" needsCount={needsChallengeCount} openCount={myChOpenVotes.length} />
 
           {chQueueView === 'needs' ? (
-            challengePersonal.length === 0 ? (
+            challengePersonal.length === 0 && challengeReviewBatch.length === 0 ? (
               <div className="pr-empty">
                 <h3>{contested.length === 0 ? 'No active challenges' : "You're all caught up"}</h3>
                 <p>{contested.length === 0
@@ -2095,14 +2658,17 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
             ) : (
               <div>
                 <div className="pr-queue-rows">
-                  {challengeReviewBatch.map(b => <ChallengeRow key={b.bindingId} b={b} mine={false} onVote={handleChallengeVote} onFinalize={handleFinalize} onPreview={setPreview} peerCount={peerCount} />)}
+                  {challengeReviewBatch.map(b => <ChallengeRow key={b.bindingId} b={b} mine={false} resolvedInBatch={isResolvedChallenge(b.bindingId)} onVote={handleChallengeVote} onFinalize={handleFinalize} onAck={handleChallengeAck} onPreview={setPreview} peerCount={peerCount} />)}
                 </div>
                 {challengeBatchPending > 0
-                  ? (challengePersonal.length > challengeBatchPending && (
-                      <p className="small" style={{ color: 'var(--ink-soft)', marginTop: 12 }}>
-                        Finish your batch to reveal the next {Math.min(3, challengePersonal.length - challengeBatchPending)}.
-                      </p>
-                    ))
+                  ? (() => {
+                      const waiting = challengePersonal.filter(b => !chBatchIds.includes(b.bindingId)).length;
+                      return waiting > 0 && (
+                        <p className="small" style={{ color: 'var(--ink-soft)', marginTop: 12 }}>
+                          Finish your batch to reveal the next {Math.min(3, waiting)}.
+                        </p>
+                      );
+                    })()
                   : <GateNotice surface="challenge" />}
               </div>
             )
@@ -2123,7 +2689,7 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
       {preview && <EvidencePreviewModal b={preview} onClose={() => setPreview(null)} />}
       {pendingSign && <SignModal payload={pendingSign} onCancel={() => setPendingSign(null)} onSign={(note) => runSigned(pendingSign, note)} />}
       {showPropose && <ProposeModalWrap me={me} onClose={() => setShowPropose(false)} setToast={setToast} />}
-      {showNominate && <NominateModal onClose={() => setShowNominate(false)} onDone={() => { setShowNominate(false); setReloadPeers(n => n + 1); }} setToast={setToast} />}
+      {showNominate && <NominateModal me={me} onClose={() => setShowNominate(false)} onDone={() => { setShowNominate(false); setReloadPeers(n => n + 1); }} setToast={setToast} />}
       {showSeed && <NominateModal seed onClose={() => setShowSeed(false)} onDone={() => { setShowSeed(false); setReloadPeers(n => n + 1); }} setToast={setToast} />}
 
       {chainPending && <div className="pr-toast info"><span className="pill pill--live" style={{ border: 0, padding: 0 }}><span className="dot" /></span>{chainPending}</div>}
@@ -2182,7 +2748,13 @@ export default function PeerReview() {
   const [isGenesis, setIsGenesis] = useState(() => !!cachedPeer(cachedAddr())?.isGenesis);
   const [peerHandle, setPeerHandle] = useState(() => cachedHandle(cachedAddr()));
   const [connecting, setConnecting] = useState(false);
-  const [observerMode, setObserverMode] = useState(false);
+  // ?observe=1 (e.g. the home page's "Open the full vote history" link) lands a
+  // guest straight in read-only observer mode, skipping the connect wall. A
+  // returning verified peer still falls through to their workspace — observerMode
+  // only governs the wallet-less path (see `showConnect` / `verified` below).
+  const [observerMode, setObserverMode] = useState(() => {
+    try { return new URLSearchParams(window.location.search).has('observe'); } catch { return false; }
+  });
   const [peerCount, setPeerCount] = useState(1);
   const [toast, setToast] = useState(null);
 

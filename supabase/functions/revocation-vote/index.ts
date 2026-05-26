@@ -11,11 +11,17 @@ import { ethers } from "npm:ethers@6";
 // attributable, and read by the peer-review batch gate so the network must take
 // a position on every open revocation and move on.
 //
-// The signed message reuses the shared "Attestation" EIP-712 type, mapping:
-//   evidenceId = String(round)   topicId = subject_addr   peerAddr = voter
-//   phase = "revocation"         verdict = "keep" | "discard"   note
-// so the signature is bound to the CURRENT on-chain revocation round — a
-// re-motion bumps the round and invalidates an older keep.
+// Two verdicts, two signature shapes:
+//   • keep    — pure off-chain dissent (no on-chain call). Reuses the shared
+//               "Attestation" EIP-712 type: evidenceId = String(round),
+//               topicId = subject, peerAddr = voter, phase = "revocation",
+//               verdict = "keep", note. Gated on an active revocation.
+//   • discard — the discard vote IS cast on-chain (PeerGovernance.voteRevoke /
+//               motionRevoke recover the voter from a `PeerVote`); this only
+//               records the note + the SAME signature the chain verified. Gated
+//               on gov.hasVotedRevoke, verified against the on-chain PeerVote.
+// Either way the signature is bound to the CURRENT on-chain revocation round — a
+// re-motion bumps the round and invalidates an older vote.
 
 const CHAIN_ID      = Number(Deno.env.get("CONSENSUS_CHAIN_ID") ?? 97);
 const CONTRACT_ADDR = Deno.env.get("CONSENSUS_ADDR") ?? null;
@@ -29,6 +35,8 @@ const ALLOWED_ORIGINS = (Deno.env.get("ALLOWED_ORIGINS") ?? "*").split(",").map(
 const RATE_LIMIT_WINDOW_S = 60;
 const RATE_LIMIT_MAX      = 30;
 
+const KIND_REVOKE = 1;
+
 const TYPES = {
   Attestation: [
     { name: "evidenceId", type: "string"  },
@@ -39,6 +47,16 @@ const TYPES = {
     { name: "note",       type: "string"  },
   ],
 };
+// Mirrors the on-chain PeerVote type recovered by PeerGovernance for discard.
+const PEER_VOTE_TYPES = {
+  PeerVote: [
+    { name: "subject",  type: "address" },
+    { name: "kind",     type: "uint8"   },
+    { name: "support",  type: "bool"    },
+    { name: "round",    type: "uint32"  },
+    { name: "noteHash", type: "bytes32" },
+  ],
+};
 
 const CONTRACT_ABI = [
   "function isActivePeer(address) view returns (bool)",
@@ -46,7 +64,22 @@ const CONTRACT_ABI = [
 const GOVERNANCE_ABI = [
   "function revocationActive(address) view returns (bool)",
   "function revokeRound(address) view returns (uint32)",
+  "function hasVotedRevoke(address,address) view returns (bool)",
 ];
+
+// noteHashOf — keccak256(utf8(note)) or the zero hash for an empty note. Must
+// stay byte-identical with wallet-impl.noteHashOf and the contract.
+function noteHashOf(note: string): string {
+  return note && note.length ? ethers.keccak256(ethers.toUtf8Bytes(note)) : ethers.ZeroHash;
+}
+
+// Domain for the on-chain PeerVote (name "PeerGovernance", verifyingContract =
+// the governance sidecar), distinct from the core's Attestation domain below.
+function peerVoteDomain(): Record<string, unknown> {
+  const d: Record<string, unknown> = { name: "PeerGovernance", version: "1", chainId: CHAIN_ID };
+  if (GOVERNANCE_ADDR) d.verifyingContract = GOVERNANCE_ADDR;
+  return d;
+}
 
 let _provider: ethers.JsonRpcProvider | null = null;
 function getProvider(): ethers.JsonRpcProvider {
@@ -125,7 +158,8 @@ Deno.serve(async (req: Request) => {
   } catch (_) { /* fail open */ }
 
   // ── On-chain gate: voter must be an active peer; subject must be under an
-  //    active revocation; bind the vote to the CURRENT round. ──────────────────
+  //    active revocation; bind the vote to the CURRENT round. A discard must
+  //    additionally already be recorded on-chain (the vote IS cast there). ─────
   let onchainRound: number;
   if (CONTRACT_ADDR && GOVERNANCE_ADDR) {
     const core = new ethers.Contract(CONTRACT_ADDR, CONTRACT_ABI, getProvider());
@@ -142,22 +176,41 @@ Deno.serve(async (req: Request) => {
     if (round != null && Number(round) !== onchainRound) {
       return json({ error: `stale round: signed ${round}, current ${onchainRound}` }, 409, origin);
     }
+    if (verdict === "discard") {
+      let voted = false;
+      try { voted = await gov.hasVotedRevoke(subject, voter); }
+      catch (err: unknown) { return json({ error: `Chain read failed: ${err instanceof Error ? err.message : String(err)}` }, 503, origin); }
+      if (!voted) return json({ error: "discard vote not found on-chain" }, 409, origin);
+    }
   } else {
     onchainRound = Number(round) || 1;
   }
 
-  // ── Signature verification (EOA). The message is bound to the round. ────────
-  const message = {
-    evidenceId: String(onchainRound),
-    topicId:    subject,
-    peerAddr:   voter,
-    phase:      "revocation",
-    verdict,
-    note: (note as string) ?? "",
-  };
+  // ── Signature verification (EOA). keep = off-chain Attestation; discard =
+  //    the on-chain PeerVote the chain already recovered. Both bind the round. ─
   let recovered = "";
-  try { recovered = ethers.verifyTypedData(buildDomain(), TYPES, message, eip712_sig as string); }
-  catch { recovered = ""; }
+  if (verdict === "discard") {
+    const message = {
+      subject:  subject,
+      kind:     KIND_REVOKE,
+      support:  true,
+      round:    onchainRound,
+      noteHash: noteHashOf((note as string) ?? ""),
+    };
+    try { recovered = ethers.verifyTypedData(peerVoteDomain(), PEER_VOTE_TYPES, message, eip712_sig as string); }
+    catch { recovered = ""; }
+  } else {
+    const message = {
+      evidenceId: String(onchainRound),
+      topicId:    subject,
+      peerAddr:   voter,
+      phase:      "revocation",
+      verdict,
+      note: (note as string) ?? "",
+    };
+    try { recovered = ethers.verifyTypedData(buildDomain(), TYPES, message, eip712_sig as string); }
+    catch { recovered = ""; }
+  }
   if (recovered.toLowerCase() !== voter) {
     return json({ error: "Signature signer does not match peer_addr" }, 401, origin);
   }

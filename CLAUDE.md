@@ -72,6 +72,57 @@ See [src/pages/PeerReview.jsx](src/pages/PeerReview.jsx). The whole surface is
 built on the slate **Cosmos** design system in
 [src/styles/shared.css](src/styles/shared.css) + [src/styles/peer-review.css](src/styles/peer-review.css).
 
+The Peer registry tab has a **Registry / Vote history** toggle: the roster, or a
+searchable/paginated registry vote log (`usePeerRegistryLog`) that merges on-chain
+governance events with the off-chain note records.
+
+### Every peer governance act is EIP-712 vote-by-signature
+
+**All** peer-side proposals / votes / endorsements / motions are EIP-712-signed and
+recovered **on-chain**, each binding an optional deliberation `noteHash` (the note
+*text* lives off-chain; only its keccak rides in the signature). The UI captures an
+optional note via a sign modal for every one. Two EIP-712 structs carry everything:
+
+- **Core `Vote(bindingId,phase,support,round,noteHash)`** (domain "EvidenceConsensus",
+  `verifyingContract` = core) — `phase` keys the act: 0 review, 1 challenge, **2
+  taxonomy (`proposePillar`/`proposeTopic`/`endorseNode`; `bindingId` = node id), 3
+  retire (`motionRetireNode`/`voteRetireNode`; `bindingId` = node id), 4 force-renounce
+  (`motionForceRenounce`/`voteForceRenounce`; `bindingId` = `keccak256("force-renounce")`)**.
+  A propose/motion signs the round it mints (`current + 1`); an endorse/vote signs the
+  current round. Sources of truth: `VOTE_TYPES` / `VOTE_PHASE` / `FORCE_RENOUNCE_ID` in
+  [src/lib/wallet-constants.js](src/lib/wallet-constants.js); `_VOTE_TYPEHASH` + the
+  `_PHASE_*` / `_FORCE_RENOUNCE_ID` constants in
+  [blockchain/contracts/EvidenceConsensus.sol](blockchain/contracts/EvidenceConsensus.sol).
+- **Gov `PeerVote(subject,kind,support,round,noteHash)`** (domain "PeerGovernance",
+  `verifyingContract` = gov sidecar) — `kind`: 0 nominee endorse, 1 revocation discard,
+  **2 nominate (the nominator's own signed act)**. `PeerGovernance.endorseNominee` /
+  `motionRevoke` / `voteRevoke` / `nominatePeer` take `(noteHash, sig)` and `require`
+  the recovered signer == `msg.sender`. Source of truth: `PEER_VOTE_TYPES` /
+  `PEER_GOVERNANCE_DOMAIN` / `PEER_VOTE_KIND`; the `_PEERVOTE_TYPEHASH` + domain in
+  [blockchain/contracts/PeerGovernance.sol](blockchain/contracts/PeerGovernance.sol).
+
+Still **not** votes: `lapseProposal`/`lapseNominee`/`cancelStale*`/`pruneInactivePeer`/
+`promote`/`boostQueued`/`markLapsed`/`finalizeChallenge` (permissionless GC/queue),
+owner-seed `addPeer`, and `submitEvidence`/`fileBinding` (content entry — reviewed
+*after* filing). `keep` stays an off-chain Attestation dissent; taxonomy **reject** has
+no on-chain call (off-chain Attestation only). The off-chain note text is recorded via
+edge fns that re-verify the same signature the chain recovered: review/challenge/taxonomy
+endorse → `verify-attestation` (the `endorse_node` row carries `node_hash`+`round`+
+`note_hash` so the public proof modal recovers its Vote); nominate/endorse →
+`nominee-vote` (verdicts `nominate`/`endorse`); revocation → `revocation-vote`.
+
+> Domains/typehashes in the contracts must stay byte-identical with the edge-fn
+> `buildDomain()` / `peerVoteDomain()` and the `VOTE_TYPES` / `PEER_VOTE_TYPES` mirrors.
+> The note text for **retire** and **force-renounce** is currently committed on-chain
+> (in the signed `noteHash`) but not yet persisted off-chain for browsing — a follow-up.
+
+> **Deploying this needs a FULL redeploy** (core + PeerGovernance + Lens via
+> `deploy-consensus.js`), not a PeerGovernance-only swap: the core's
+> `setGovernance` is one-shot (`require(governance == address(0))`), so an existing
+> core can't be re-pointed at a new gov. A fresh deploy resets all on-chain state.
+> After deploy update `VITE_CONSENSUS_*` + edge secrets `CONSENSUS_ADDR`/`GOVERNANCE_ADDR`,
+> push the `nominee_votes` migration, and redeploy the `nominee-vote`/`revocation-vote` fns.
+
 ## Supabase
 
 One pipeline, one registry:
@@ -82,13 +133,15 @@ One pipeline, one registry:
 | Voting unit | `bindings` (`(evidence_id, topic_id)`, per-binding status + tallies, `binding_hash`) |
 | Taxonomy | `pillars` / `topics` (status proposed→ratified, joined by `node_hash`) |
 | Attestations | `attestations` (one per `(binding_id, peer_addr, phase)`) |
+| Peer-vote notes | `nominee_votes` (endorse) · `revocation_votes` (keep + discard) — off-chain note + sig for membership votes |
 | Chain events | `chain_events` / `chain_event_cursor` |
 | Tamper alerts | `tamper_alerts` |
 | Indexer edge fn | `chain-indexer-evidence` |
 | Verify edge fn | `verify-attestation` |
+| Peer-vote edge fns | `nominee-vote` (endorse) · `revocation-vote` (keep + discard) |
 | Audit edge fn | `audit-content-hash` |
 | Atomic vote RPCs | `apply_review_counts` / `apply_challenge_counts` |
-| Throttle prefixes in `edge_rate_limit` | `ev_insert:` (evidence) · `tax_insert:` (taxonomy) |
+| Throttle prefixes in `edge_rate_limit` | `ev_insert:` (evidence) · `tax_insert:` (taxonomy) · `revoke:` · `nominee:` |
 
 The entire schema is a **single consolidated migration**
 ([supabase/migrations/20260521120000_consolidated_schema.sql](supabase/migrations/20260521120000_consolidated_schema.sql))

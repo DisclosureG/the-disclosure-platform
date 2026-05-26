@@ -400,7 +400,7 @@
   color: var(--ink-soft); background: transparent; cursor: pointer; transition: all .2s ease;
 }
 .ev-topic-chip:hover { color: var(--ink); border-color: var(--line); }
-.ev-topic-chip.is-active { background: color-mix(in oklab, var(--accent-2) 18%, transparent); border-color: var(--accent-2); color: var(--ink); }
+.ev-topic-chip.is-active { background: color-mix(in oklab, var(--accent) 18%, transparent); border-color: var(--accent); color: var(--ink); }
 
 /* ========== Topic block + card carousel ========== */
 .ev-topic-block { margin-top: 32px; scroll-margin-top: 150px; }
@@ -814,6 +814,13 @@
 .ev-challenge-form { border: 1px solid color-mix(in oklab, var(--danger) 30%, var(--line)); border-radius: var(--radius-m); padding: 18px; background: color-mix(in oklab, var(--danger) 5%, var(--bg)); }
 .ev-challenge-form-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--danger); margin-bottom: 4px; }
 .ev-challenge-form-sub { font-size: 13px; color: var(--ink-soft); margin: 0 0 8px; line-height: 1.5; }
+
+/* Promote-into-peer-review reuses the challenge form, but it's a positive
+   action (vote up, not contest) — recolor red → soft green, scoped so the
+   real challenge section stays red. */
+.ev-vote-section .ev-challenge-form-label { color: var(--ok); }
+.ev-vote-section .ev-challenge-trigger { border-color: color-mix(in oklab, var(--ok) 40%, var(--line)); color: var(--ok); }
+.ev-vote-section .ev-challenge-trigger:hover:not(:disabled) { background: color-mix(in oklab, var(--ok) 10%, transparent); border-color: var(--ok); }
 .ev-challenge-form textarea { width: 100%; background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius-m); padding: 12px 14px; color: var(--ink); font-family: var(--serif); font-size: 14px; line-height: 1.5; resize: vertical; transition: border-color .2s ease; box-sizing: border-box; }
 .ev-challenge-form textarea:focus { outline: none; border-color: var(--danger); }
 .ev-challenge-form-foot { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }

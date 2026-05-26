@@ -237,15 +237,15 @@ html { scroll-behavior: smooth; }
 }
 .h-votes-head .h-votes-link {
   font-family: var(--mono); font-size: 11px;
-  letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent-2);
+  letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent);
   display: inline-flex; align-items: center; gap: 6px; transition: color .2s ease;
   white-space: nowrap;
 }
-.h-votes-head .h-votes-link:hover { color: var(--accent); }
+.h-votes-head .h-votes-link:hover { color: color-mix(in oklab, var(--accent) 70%, var(--ink)); }
 .h-votes-table { display: grid; gap: 0; }
 .h-vote-row {
   display: grid;
-  grid-template-columns: 96px 150px 120px 1fr 130px;
+  grid-template-columns: 96px 150px 120px 1fr 72px 130px;
   gap: 18px;
   align-items: center;
   padding: 15px 24px;
@@ -262,9 +262,11 @@ html { scroll-behavior: smooth; }
 }
 .h-vote-row .t { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); letter-spacing: 0.04em; }
 .h-vote-row .peer {
+  display: flex; align-items: center; gap: 8px;
   font-family: var(--mono); font-size: 12px; color: var(--ink);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
 }
+.h-vote-row .peer .peer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .h-vote-row .verdict {
   display: inline-flex; align-items: center; gap: 7px;
   font-family: var(--mono); font-size: 10px;
@@ -275,7 +277,8 @@ html { scroll-behavior: smooth; }
 .h-vote-row .verdict.reject    { color: var(--danger); }
 .h-vote-row .verdict.challenge { color: var(--accent-3); }
 .h-vote-row .verdict.defend    { color: var(--accent-2); }
-.h-vote-row .on { display: flex; flex-direction: row; align-items: center; gap: 8px; min-width: 0; }
+.h-vote-row .on { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px; min-width: 0; text-align: center; padding-right: 60px; }
+.h-vote-row.is-head span:nth-child(4) { text-align: center; padding-right: 60px; }
 .h-vote-row .on .evi {
   font-family: var(--serif); font-size: 15px; color: var(--ink); line-height: 1.25;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto;
@@ -320,7 +323,10 @@ html { scroll-behavior: smooth; }
 }
 .h-vote-note-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-faint); }
 .h-vote-note p { margin: 0; font-family: var(--serif); font-size: 13.5px; line-height: 1.55; color: var(--ink-soft); white-space: pre-wrap; }
-.h-vote-row .proof { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; }
+.h-vote-row .note { text-align: center; }
+.h-vote-row .proof { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; text-align: center; }
+.h-vote-row.is-head span:nth-child(5),
+.h-vote-row.is-head span:nth-child(6) { text-align: center; }
 .h-vote-row .proof a { color: var(--accent); text-decoration: none; display: inline-flex; align-items: center; gap: 5px; transition: opacity .2s ease; }
 .h-vote-row .proof a:hover { opacity: 0.75; }
 .h-vote-row .proof .sig { color: var(--ok); }
