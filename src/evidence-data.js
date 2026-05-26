@@ -1466,6 +1466,7 @@ export function getRegistryDerivation(row) {
   // resolution is instant; RevocationCancelled has no count in payload and
   // falls back to a block-number lookup.
   const moment = {
+    txHash:      row.txHash ?? null,
     blockNumber: row.blockNumber ?? null,
     payload:     row.payload ?? null,
   };
