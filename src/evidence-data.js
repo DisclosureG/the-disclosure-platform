@@ -1331,20 +1331,20 @@ export function getVoteLogDerivation(row) {
   if (!txHash) return null;
   switch (row.verdict) {
     case 'canonized':
-      // Two paths produce BindingCanonized:
-      //   • normal review — chainCount.approve_count holds the count;
-      //   • founding-bundle taxonomy — atomic with node ratification, no review
-      //     votes are cast (chain approve_count is 0). Keep ONLY the founding
-      //     query so the panel still shows which path produced the canon.
+      // BindingCanonized.payload.approve_count is reused by the contract for
+      // both paths: under review it's the approve tally; under the founding-
+      // bundle path it's the node endorsements count (see EvidenceConsensus.sol
+      // line 939 — `approveCount: endorsements` for the founding mint). So the
+      // chain count is the authoritative canonization count regardless of path;
+      // the label below names both for honesty.
       return bindingId ? {
         kind: 'canonized',
         outcomeLabel: 'Approved into the canon',
         question: 'How was this binding canonized?',
-        query: { table: 'attestations', label: 'Founding-bundle endorses', filter: { binding_id: bindingId, phase: 'taxonomy', verdict: 'endorse' } },
-        chainCount: { events: ['BindingCanonized'], countField: 'approve_count', label: 'On-chain review approves' },
+        chainCount: { events: ['BindingCanonized'], countField: 'approve_count', label: 'On-chain consensus count (approves / founding-bundle endorses)' },
         thresholdFn: (peers) => tier && peers ? canonizeThreshold(tier, peers) : null,
         thresholdLabel: 'Canonize threshold',
-        thresholdNote: 'Canonization happens via review approves OR via the founding-bundle node endorses — exactly one path applies per binding.',
+        thresholdNote: 'Canonization happens via review approves OR via founding-bundle endorses on the parent taxonomy node — the chain reuses `approve_count` for both paths.',
         moment: { txHash, events: ['BindingCanonized'] },
         filterTerm: eviTerm,
       } : null;
@@ -1384,7 +1384,7 @@ export function getVoteLogDerivation(row) {
           thresholdFn: (peers) => tier && peers ? bundleThreshold(tier, peers) : null,
           thresholdLabel: 'Bundle threshold (not reached)',
           moment: { txHash, events: ['ProposalLapsed'] },
-          filterTerm: nodeHash,
+          filterTerm: row.topic_id || row.pillar_id || nodeHash,
         };
       }
       return null;
@@ -1414,29 +1414,37 @@ export function getVoteLogDerivation(row) {
         filterTerm: eviTerm,
       } : null;
     case 'ratified':
-      // Taxonomy ratification: no on-chain count in the PillarRatified /
-      // TopicRatified payload, so the count below comes from off-chain
-      // attestations (these go through the verify-attestation edge fn).
+      // PillarRatified / TopicRatified themselves carry no count; but their
+      // sibling NodeEndorsed in the same tx (the threshold-crossing endorse
+      // that triggered ratification) has the authoritative count + threshold
+      // straight from the contract. For a BUNDLED topic the NodeEndorsed is
+      // for the parent pillar's node_hash — that's still the right count
+      // since the bundle ratifies on one shared endorsement gate. Using
+      // chainCount avoids the bug where filtering attestations by the topic's
+      // own node_hash returns 0 for bundled topics (peers signed the parent's
+      // hash, not the topic's).
       return nodeHash ? {
         kind: 'ratified',
         outcomeLabel: 'Ratified into the taxonomy',
         question: 'How many peers endorsed this proposal?',
-        query: { table: 'attestations', label: 'Endorses', filter: { node_hash: nodeHash, phase: 'taxonomy', verdict: 'endorse' } },
-        thresholdFn: (peers) => tier && peers ? bundleThreshold(tier, peers) : null,
+        chainCount: { events: ['NodeEndorsed'], countField: 'endorsements', thresholdField: 'threshold', label: 'On-chain endorsements' },
         thresholdLabel: 'Bundle threshold',
         moment: { txHash, events: ['PillarRatified', 'TopicRatified'] },
-        filterTerm: nodeHash,
+        // Slug-based linkback so the log search lands on rows whose pillar /
+        // topic title matches — node_hash hex isn't surfaced in the log.
+        filterTerm: row.topic_id || row.pillar_id || nodeHash,
       } : null;
     case 'retired':
+      // NodeRetireVoteCast carries votes + threshold in the same tx that emits
+      // NodeRetired; read it instead of recomputing from formulas.
       return nodeHash ? {
         kind: 'retired',
         outcomeLabel: 'Retired off the canon',
         question: 'How many peers voted to retire?',
-        query: { table: 'gov_votes', label: 'Retire votes', filter: { subject: nodeHash, verdict: 'retire' } },
-        thresholdFn: (peers) => peers ? RETIRE_THRESHOLD(peers) : null,
+        chainCount: { events: ['NodeRetireVoteCast'], countField: 'votes', thresholdField: 'threshold', label: 'On-chain retire votes' },
         thresholdLabel: 'Retire threshold (ceil 2 peers/3)',
         moment: { txHash, events: ['NodeRetired'] },
-        filterTerm: nodeHash,
+        filterTerm: row.topic_id || row.pillar_id || nodeHash,
       } : null;
     default:
       return null;
