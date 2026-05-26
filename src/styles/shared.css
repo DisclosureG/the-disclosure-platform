@@ -943,6 +943,8 @@ p { margin: 0 0 1em; }
 }
 .av-trigger.is-chainonly { color: var(--accent); }
 .av-trigger.is-chainonly .sig { color: var(--accent); }
+.av-trigger.is-derived { color: var(--ink-soft); border-style: dashed; }
+.av-trigger.is-derived .sig { color: var(--ink-soft); }
 
 .av-nosig {
   display: flex; flex-direction: column; gap: 8px;

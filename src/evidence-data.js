@@ -106,6 +106,17 @@ export function deprecateThreshold(tier, peers = ACTIVE_PEER_COUNT) {
   return Math.max(1, Math.ceil(peers * (pct[tier] ?? 0.60)));
 }
 
+// Strict majority floor(n/2)+1, mirrors EvidenceConsensus.taxonomyThreshold().
+export function taxonomyThreshold(peers = ACTIVE_PEER_COUNT) {
+  return Math.floor(peers / 2) + 1;
+}
+
+// Effective gate to ratify a founding bundle: at least taxonomyThreshold AND at
+// least the tier's canonizeThreshold. Mirrors EvidenceConsensus.bundleThreshold().
+export function bundleThreshold(tier, peers = ACTIVE_PEER_COUNT) {
+  return Math.max(taxonomyThreshold(peers), canonizeThreshold(tier, peers));
+}
+
 // How many days from submission before pending evidence lapses
 export const PENDING_WINDOW_DAYS = 30;
 // How many days a challenge stays open before it resolves by defense
@@ -1189,6 +1200,104 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
   return { log, loading, hasMore, loadMore, total, refetch };
 }
 
+// ── Derived "consensus-reject" outcome rows ──────────────────────────────────
+//
+// The contract has no on-chain reject for taxonomy proposals — a node either
+// ratifies at endorse threshold or sits Proposed until its 30-day window lapses.
+// That leaves the public log without a "the network rejected this" moment, even
+// when peers have signed enough off-chain dissents to make ratification
+// arithmetically impossible.
+//
+// This hook fills that gap *honestly*: it derives a synthetic row from the
+// real signed reject_node attestations. A proposal is considered consensus-
+// rejected the moment its cumulative dissents reach `peers - need + 1`, where
+// `need = bundleThreshold(tier, peers)` — i.e. fewer eligible endorsers remain
+// than the threshold requires, so ratification is impossible regardless of how
+// many of them later endorse. The synthetic row carries `derived: true` so the
+// proof badge reads "Derived ✓" (not "On-chain" / "EIP-712"), and the timestamp
+// is the crossing dissent's, so it sits at the moment consensus was reached.
+//
+// Nothing is fabricated: each dissent that produces this outcome remains an
+// independently-verifiable row in the same log; this is a projection of them.
+export function useDerivedConsensusRejects(activePeers, query = '', verdict = '') {
+  const [rows, setRows] = useState([]);
+
+  const terms = query.trim().replace(/[,()*"%\\]/g, '').split(/\s+/).filter(Boolean);
+  const termsKey = terms.join(' ');
+  const v = ['approve', 'reject', 'challenge', 'defend'].includes(verdict) ? verdict : '';
+
+  useEffect(() => {
+    if (!activePeers || activePeers < 1) { setRows([]); return; }
+    // The verdict filter narrows the public log; reject-only filters keep our
+    // row, approve/challenge/defend hide it.
+    if (v && v !== 'reject') { setRows([]); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('vote_log_view')
+        .select('*')
+        .eq('phase', 'taxonomy')
+        .eq('verdict', 'reject')
+        .order('binding_hash', { ascending: true })
+        .order('created_at',   { ascending: true });
+      if (cancelled) return;
+      const byBinding = new Map();
+      for (const r of data || []) {
+        const k = r.binding_hash;
+        if (!k) continue;
+        const arr = byBinding.get(k) || [];
+        arr.push(r);
+        byBinding.set(k, arr);
+      }
+      const haystack = (r) => [
+        r.peer_handle, r.peer_addr, r.evidence_title, r.evidence_source,
+        r.evidence_excerpt, r.evidence_link, r.pillar_title, r.topic_title,
+        r.evidence_id != null ? String(r.evidence_id) : '',
+      ].filter(Boolean).join(' ').toLowerCase();
+      const out = [];
+      for (const [bindingHash, dissents] of byBinding) {
+        const tier = dissents.find(d => d.evidence_tier != null)?.evidence_tier;
+        if (tier == null) continue;
+        const need = bundleThreshold(Number(tier), activePeers);
+        const rejectThreshold = activePeers - need + 1;
+        if (rejectThreshold < 1 || dissents.length < rejectThreshold) continue;
+        const crossing = dissents[rejectThreshold - 1];
+        if (terms.length) {
+          const hs = haystack(crossing);
+          if (!terms.every(t => hs.includes(t.toLowerCase()))) continue;
+        }
+        out.push({
+          ...crossing,
+          id: `derived:${bindingHash}`,
+          created_at: crossing.created_at,
+          peer_addr: null,
+          peer_handle: 'Network',
+          verdict: 'reject',
+          phase: 'taxonomy',
+          eip712_sig: null,
+          tx_hash: null,
+          note: null,
+          note_hash: null,
+          round: null,
+          proof_type: 'derived',
+          derived: true,
+          derived_dissents: dissents.length,
+          derived_peers: activePeers,
+          derived_need: need,
+          derived_threshold: rejectThreshold,
+        });
+      }
+      out.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+      setRows(out);
+    })();
+    return () => { cancelled = true; };
+  // termsKey + v close over the filter values used inside
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePeers, termsKey, v]);
+
+  return rows;
+}
+
 // ── Per-evidence vote history hook ───────────────────────────────────────────
 //
 // Every signed peer vote on one piece of evidence (across all its topic
@@ -1591,6 +1700,26 @@ export async function fetchMyTaxonomyRejects(peerAddr) {
     .eq('phase', 'taxonomy')
     .eq('verdict', 'reject');
   return new Set((data || []).map(r => r.binding_id).filter(Boolean));
+}
+
+// Off-chain reject count per founding binding — used to hide proposals from the
+// vote queue once dissent makes ratification mathematically impossible (the
+// contract has no on-chain reject, so the proposal sits Proposed until the
+// 30-day window lapses, but the UI shouldn't keep soliciting votes on a dead
+// one). Each peer has at most one taxonomy attestation per founding binding
+// (a later endorseNode upserts over a prior reject), so a row count is the
+// current dissent count.
+export async function fetchTaxonomyDissentCounts(bindingIds) {
+  if (!bindingIds || bindingIds.length === 0) return new Map();
+  const { data } = await supabase
+    .from('attestations')
+    .select('binding_id')
+    .in('binding_id', bindingIds)
+    .eq('phase', 'taxonomy')
+    .eq('verdict', 'reject');
+  const m = new Map();
+  for (const r of data || []) m.set(r.binding_id, (m.get(r.binding_id) || 0) + 1);
+  return m;
 }
 
 // ── Peer revocation: off-chain signed "keep" position ────────────────────────

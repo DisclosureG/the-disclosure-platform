@@ -223,6 +223,7 @@ function VerifierModal({ a, onClose, handle }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  const isDerived = !!a.derived;
   const rawSig = a.eip712_sig || '';
   const vote = voteMessage(a);
   const canRecoverVote = !!vote;
@@ -255,11 +256,11 @@ function VerifierModal({ a, onClose, handle }) {
   };
 
   // Per-step rail state + status chip.
-  const authState = !sig ? 'na' : status === 'ok' ? 'ok' : status === 'bad' ? 'bad' : 'idle';
-  const authChip  = !sig ? 'Not archived' : status === 'ok' ? 'Authentic ✓' : status === 'bad' ? 'Mismatch ✗' : null;
+  const authState = isDerived ? 'na' : !sig ? 'na' : status === 'ok' ? 'ok' : status === 'bad' ? 'bad' : 'idle';
+  const authChip  = isDerived ? 'Derived' : !sig ? 'Not archived' : status === 'ok' ? 'Authentic ✓' : status === 'bad' ? 'Mismatch ✗' : null;
 
   const txState = a.tx_hash ? 'idle' : 'na';
-  const txChip  = a.tx_hash ? 'On-chain' : 'No tx';
+  const txChip  = isDerived ? 'Off-chain by design' : a.tx_hash ? 'On-chain' : 'No tx';
 
   const contentState = !a.content_hash ? 'na'
     : contentStatus === 'ok' ? 'ok'
@@ -276,12 +277,25 @@ function VerifierModal({ a, onClose, handle }) {
         <button className="av-close" onClick={onClose} aria-label="Close">×</button>
 
         <span className="av-eyebrow">Independent verification</span>
-        <h3 className="av-title">Prove this vote yourself</h3>
+        <h3 className="av-title">{isDerived ? 'How this consensus outcome was derived' : 'Prove this vote yourself'}</h3>
         <p className="av-lead">
-          This vote stands on three independent proofs — <b>who</b> cast it, <b>that</b> it was
-          recorded on-chain, and <b>what</b> it was cast on. Each one re-checks in your own
-          browser, with no server in the loop — you never have to trust this page. Work through
-          the steps.
+          {isDerived ? (
+            <>
+              The contract has no on-chain reject for taxonomy proposals — by design, a node either
+              ratifies at endorsement threshold or sits Proposed until its window lapses. This row
+              is a <b>projection</b> of the signed peer dissents that, together, made ratification
+              arithmetically impossible. Nothing here is invented: each dissent has its own row in
+              this log, signed by its peer and independently verifiable. The steps below explain the
+              math and how to inspect the underlying signatures.
+            </>
+          ) : (
+            <>
+              This vote stands on three independent proofs — <b>who</b> cast it, <b>that</b> it was
+              recorded on-chain, and <b>what</b> it was cast on. Each one re-checks in your own
+              browser, with no server in the loop — you never have to trust this page. Work through
+              the steps.
+            </>
+          )}
         </p>
 
         <div className="av-steps">
@@ -348,6 +362,29 @@ function VerifierModal({ a, onClose, handle }) {
                   </div>
                 </details>
               </>
+            ) : isDerived ? (
+              <div className="av-kv">
+                <div className="av-row"><span className="k">Signed dissents</span><span className="v"><b>{a.derived_dissents}</b> peers signed a reject on this proposal</span></div>
+                {a.derived_peers != null && <div className="av-row"><span className="k">Active peers</span><span className="v">{a.derived_peers}</span></div>}
+                {a.derived_need != null && <div className="av-row"><span className="k">Endorses needed to ratify</span><span className="v">{a.derived_need}</span></div>}
+                {a.derived_peers != null && a.derived_need != null && (
+                  <div className="av-row"><span className="k">Eligible endorsers left</span><span className="v">{Math.max(0, a.derived_peers - a.derived_dissents)} — below the {a.derived_need} threshold</span></div>
+                )}
+                <p className="av-verdict">
+                  Once dissents exceed <code>peers − threshold</code>, fewer than the required number of
+                  peers remain available to endorse — ratification becomes impossible regardless of how
+                  many of them later vote yes. This row marks that crossing. The underlying signed
+                  dissents each have their own row in this log; filter the log by this evidence to
+                  inspect every signature individually.
+                </p>
+              </div>
+            ) : !a.peer_addr ? (
+              <p className="av-step-note">
+                This is a <b>Network consensus outcome</b> — no peer signed it. The contract emitted
+                this event when peer votes crossed the threshold, so there is no individual author
+                to recover. <b>Step 2</b> proves the chain emitted it; the underlying peer votes
+                have their own rows in this log.
+              </p>
             ) : (
               <p className="av-step-note">
                 No off-chain signature is archived for this vote — the voter likely lost
@@ -376,6 +413,12 @@ function VerifierModal({ a, onClose, handle }) {
                   View the vote transaction <span className="mono">{SHORT(a.tx_hash)}</span> <span aria-hidden="true">↗</span>
                 </a>
               </>
+            ) : isDerived ? (
+              <p className="av-step-note">
+                No transaction — taxonomy reject is off-chain by design. The on-chain anchor is in
+                the underlying dissents: each signed reject_node Attestation is its own row in this
+                log, and each one's signer is recoverable in your browser.
+              </p>
             ) : (
               <p className="av-step-note">No transaction hash is recorded on this row.</p>
             )}
@@ -407,16 +450,19 @@ function VerifierModal({ a, onClose, handle }) {
 export default function AttestationVerifier({ a, handle }) {
   const [open, setOpen] = useState(false);
   const hasSig = canRecoverRow(a);
+  const isDerived = !!a.derived;
   return (
     <>
       <button
         type="button"
-        className={`av-trigger ${hasSig ? '' : 'is-chainonly'}`}
+        className={`av-trigger ${isDerived ? 'is-derived' : hasSig ? '' : 'is-chainonly'}`}
         onClick={() => setOpen(true)}
-        title={hasSig ? 'Verify the EIP-712 signature yourself' : 'On-chain vote — view the proof'}
+        title={isDerived
+          ? 'Derived consensus outcome — computed from signed peer dissents (no on-chain reject exists for taxonomy)'
+          : hasSig ? 'Verify the EIP-712 signature yourself' : 'On-chain vote — view the proof'}
       >
         <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M12 2l7 3v6c0 4.5-3 8.5-7 9-4-.5-7-4.5-7-9V5l7-3z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
-        <span className="sig">{hasSig ? 'EIP-712 ✓' : 'On-chain ✓'}</span>
+        <span className="sig">{isDerived ? 'Derived ✓' : hasSig ? 'EIP-712 ✓' : 'On-chain ✓'}</span>
       </button>
       {open && <VerifierModal a={a} onClose={() => setOpen(false)} handle={handle} />}
     </>
