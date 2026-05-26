@@ -946,6 +946,50 @@ p { margin: 0 0 1em; }
 .av-trigger.is-derived { color: var(--ink-soft); border-style: dashed; }
 .av-trigger.is-derived .sig { color: var(--ink-soft); }
 
+/* Contract-formula expander inside the Derivation panel. Collapsed shows the
+   formula in mono; expanded shows the contract function, source line, the
+   substituted computation with the moment's peer count, and a rationale. */
+.av-formula { display: inline-block; width: 100%; }
+.av-formula > summary {
+  list-style: none; cursor: pointer; user-select: none;
+  font-family: var(--mono); font-size: 12px; opacity: 0.9;
+  color: var(--ink);
+  padding: 2px 0;
+  border-bottom: 1px dashed color-mix(in oklab, var(--ink-soft) 35%, transparent);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.av-formula > summary::-webkit-details-marker { display: none; }
+.av-formula > summary::before {
+  content: '▸'; font-family: inherit; font-size: 10px; opacity: 0.6;
+  transition: transform .12s ease;
+}
+.av-formula[open] > summary::before { transform: rotate(90deg); }
+.av-formula > summary:hover { opacity: 1; }
+.av-formula-body {
+  margin-top: 8px; padding: 10px 12px; border-radius: var(--r-s);
+  background: color-mix(in oklab, var(--bg-deep) 50%, transparent);
+  border-left: 2px solid color-mix(in oklab, var(--ink-soft) 30%, transparent);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.av-formula-line {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;
+  font-size: 12px; color: var(--ink-soft);
+}
+.av-formula-line code {
+  font-family: var(--mono); font-size: 12px; color: var(--ink);
+  background: transparent; padding: 0;
+}
+.av-formula-tag {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-faint);
+  flex: 0 0 auto;
+}
+.av-formula-file { font-style: normal; opacity: 0.7; }
+.av-formula-rationale {
+  margin: 4px 0 0 0; font-size: 12px; line-height: 1.5;
+  color: var(--ink-soft); opacity: 0.95;
+}
+
 .av-nosig {
   display: flex; flex-direction: column; gap: 8px;
   padding: 14px 16px; border-radius: var(--r-s);

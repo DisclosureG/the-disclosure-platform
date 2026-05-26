@@ -350,10 +350,38 @@ export function DerivationPanel({ descriptor, precomputed, onLinkback }) {
               <span className="v"><b>{moment.threshold}</b>{moment.peers != null ? ` of ${moment.peers}` : ''} — the value the contract used at the time</span>
             </div>
           )}
-          {descriptor.thresholdFormula && (
+          {descriptor.thresholdDoc && (
             <div className="av-row">
               <span className="k">Contract formula</span>
-              <span className="v" style={{ fontFamily: 'var(--mono)', opacity: 0.85 }}>{descriptor.thresholdFormula}</span>
+              <span className="v">
+                <details className="av-formula">
+                  <summary>{descriptor.thresholdDoc.formula}</summary>
+                  <div className="av-formula-body">
+                    {descriptor.thresholdDoc.fn && (
+                      <div className="av-formula-line">
+                        <span className="av-formula-tag">Function</span>
+                        <code>{descriptor.thresholdDoc.fn}</code>
+                        {descriptor.thresholdDoc.file && <em className="av-formula-file"> in {descriptor.thresholdDoc.file}</em>}
+                      </div>
+                    )}
+                    {descriptor.thresholdDoc.source && (
+                      <div className="av-formula-line">
+                        <span className="av-formula-tag">Source</span>
+                        <code>{descriptor.thresholdDoc.source}</code>
+                      </div>
+                    )}
+                    {moment?.peers != null && descriptor.thresholdDoc.compute && descriptor.thresholdDoc.compute(moment.peers) && (
+                      <div className="av-formula-line">
+                        <span className="av-formula-tag">With peers = {moment.peers}</span>
+                        <code>{descriptor.thresholdDoc.compute(moment.peers)}</code>
+                      </div>
+                    )}
+                    {descriptor.thresholdDoc.rationale && (
+                      <p className="av-formula-rationale">{descriptor.thresholdDoc.rationale}</p>
+                    )}
+                  </div>
+                </details>
+              </span>
             </div>
           )}
           {descriptor.thresholdNote && (
