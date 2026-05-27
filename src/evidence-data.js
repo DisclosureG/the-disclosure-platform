@@ -9,18 +9,22 @@ import { supabase } from './lib/supabase';
 // instead of refetching.  ensureTaxonomy() is idempotent; useTaxonomy() exposes
 // the live, reshaped tree to React.
 
-let _taxonomy = { pillars: [], topics: [], pillarMap: {}, topicMap: {}, proposedPillarMap: {}, proposedTopicMap: {}, loaded: false };
+let _taxonomy = { pillars: [], topics: [], pillarMap: {}, topicMap: {}, proposedPillarMap: {}, proposedTopicMap: {}, allPillarMap: {}, allTopicMap: {}, loaded: false };
 let _taxonomyPromise = null;
 
 async function loadTaxonomy() {
   // Proposed (not-yet-ratified) nodes are loaded alongside the ratified set so
   // surfaces like the vote history can resolve a proposal's pillar/topic title
-  // (and flag it as not-yet-existing) before it ratifies.
-  const [{ data: pillars }, { data: topics }, { data: proposedPillars }, { data: proposedTopics }] = await Promise.all([
+  // (and flag it as not-yet-existing) before it ratifies. We also fetch every
+  // status into `allPillar/TopicMap` so canon evidence whose topic has since
+  // been retired still resolves a human title in the detail view.
+  const [{ data: pillars }, { data: topics }, { data: proposedPillars }, { data: proposedTopics }, { data: allPillars }, { data: allTopics }] = await Promise.all([
     supabase.from('pillars').select('*').eq('status', 'ratified').order('ord', { ascending: true }),
     supabase.from('topics').select('*').eq('status', 'ratified').order('ord', { ascending: true }),
     supabase.from('pillars').select('id, title').eq('status', 'proposed'),
     supabase.from('topics').select('id, title, pillar_id').eq('status', 'proposed'),
+    supabase.from('pillars').select('id, title, status'),
+    supabase.from('topics').select('id, title, pillar_id, status'),
   ]);
   const pillarRows = pillars || [];
   const topicRows  = topics  || [];
@@ -37,6 +41,8 @@ async function loadTaxonomy() {
     topicMap:  Object.fromEntries(topicRows.map(t => [t.id, t])),
     proposedPillarMap: Object.fromEntries((proposedPillars || []).map(p => [p.id, p])),
     proposedTopicMap:  Object.fromEntries((proposedTopics  || []).map(t => [t.id, t])),
+    allPillarMap:      Object.fromEntries((allPillars || []).map(p => [p.id, p])),
+    allTopicMap:       Object.fromEntries((allTopics  || []).map(t => [t.id, t])),
     loaded:    true,
   };
   return _taxonomy;
@@ -144,8 +150,8 @@ export const STATUS_LABEL = {
 
 // ── Row normalization ────────────────────────────────────────────────────────
 function normalize(row) {
-  const pillar = _taxonomy.pillarMap[row.pillar_id] || {};
-  const topic  = _taxonomy.topicMap[row.topic_id]   || {};
+  const pillar = _taxonomy.pillarMap[row.pillar_id] || _taxonomy.allPillarMap[row.pillar_id] || {};
+  const topic  = _taxonomy.topicMap[row.topic_id]   || _taxonomy.allTopicMap[row.topic_id]   || {};
   return {
     ...row,
     pillarId:    row.pillar_id,
@@ -163,8 +169,8 @@ function normalize(row) {
 // evidence content (title/source/tier/…) is flattened from the join.
 function normalizeBinding(row) {
   const ev     = row.evidence || {};
-  const pillar = _taxonomy.pillarMap[row.pillar_id] || {};
-  const topic  = _taxonomy.topicMap[row.topic_id]   || {};
+  const pillar = _taxonomy.pillarMap[row.pillar_id] || _taxonomy.allPillarMap[row.pillar_id] || {};
+  const topic  = _taxonomy.topicMap[row.topic_id]   || _taxonomy.allTopicMap[row.topic_id]   || {};
   return {
     // binding identity + lifecycle
     bindingId:    row.id,
