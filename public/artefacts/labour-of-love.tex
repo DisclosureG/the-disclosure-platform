@@ -336,14 +336,31 @@ durable as its resistance to being seized. So the platform refuses three
 conveniences that almost every other system accepts: anonymous authority, a
 boss, and a kill switch.
 
-\textbf{No anonymity for judges.} Anyone may read the archive, and anyone
-may file evidence into it --- those doors are open to the world. But the
-people who \emph{judge} the evidence are named. A peer carries a handle and
-signs every vote with their own cryptographic key. There are no anonymous
-moderators deleting records in the dark. If a record is canonized,
-contested, or retired, you can see who stood behind that decision and what
-they put their name to. Accountability here is not a policy that can be
-quietly suspended; it is the physical shape of the system.
+\textbf{No anonymity for judges, and no unsigned acts.} Anyone may read
+the archive, and anyone may file evidence into it --- those doors are
+open to the world. But the people who \emph{judge} the evidence are
+named, and \emph{every} act they take --- approving or rejecting a
+record, challenging or defending it, proposing a new pillar or topic,
+endorsing one, nominating a peer, voting on a removal, even removing a
+captured owner --- is a cryptographic signature their wallet produces
+and the contract itself verifies. There is no path by which the
+platform, or anyone else, can post a vote on a peer's behalf, because
+that call would not carry that peer's signature. There are no anonymous
+moderators deleting records in the dark; there is no back office where
+counts can be quietly adjusted. If a record is canonized, contested, or
+retired, you can see who stood behind that decision and what they put
+their name to. Accountability here is not a policy that can be quietly
+suspended; it is the physical shape of the system.
+
+\textbf{And every act now carries the reason for it.} Alongside the
+signature, each peer may attach a short deliberation note --- the
+\emph{why} behind their yes, no, defend, challenge, or endorse. The note
+is bound into the signature itself (its fingerprint is part of what the
+peer signs), so a peer cannot quietly walk back the reasoning they were
+counted for: the record now keeps not only \emph{who} voted and
+\emph{how}, but \emph{why}, in their own words, under their own name.
+``Judgement under your own name'' has become ``judgement under your own
+signature, with your reasons attached, for anyone to read.''
 
 \textbf{No administrator in the loop.} Membership in the named network is
 not granted by an owner. A newcomer is nominated by an existing peer and
@@ -369,6 +386,96 @@ follower count to chase, no engagement loop to feed. A peer's standing comes
 from the records they have helped verify and the judgements they have been
 willing to sign --- the only reputation a record room has any business
 keeping.
+
+% =====================================================================
+\section{The destination: Disclosure, on every front}
+% =====================================================================
+
+It is worth saying out loud what all of this is \emph{for}. The name on
+the door is not decorative. The Disclosure Platform is built to become
+the place where \textbf{Disclosure} --- on every front where institutions
+have for decades decided what the public is allowed to know --- finally
+has somewhere to live, to accumulate, and to stand.
+
+\emph{Disclosure} here is plural by design. Whatever the file room of a
+ministry, an agency, a corporation, a university, a publisher, or a
+priesthood has kept off the public record, this archive is the place to
+put it. A declassified intelligence document. A whistleblower's sworn
+testimony. A buried preprint. A suppressed clinical dataset. A
+photographed artefact. A historian's primary source the textbook left
+out. A first-person account a court would not hear. Wherever a
+gatekeeper has been the one deciding what counts, an open record room
+is the answer to the gatekeeper.
+
+What is unusual about this platform is not the ambition --- many places
+have aspired to host the unhostable --- but that the architecture is
+finally adequate to the ambition. Every previous attempt to keep a
+public record of contested truth has eventually hit the same three
+walls: the host gets pressured, the moderators get captured, or the
+funding gets pulled. Each of those failure modes has a specific
+engineered answer here, and the answers do not merely promise
+resistance, they \emph{enforce} it.
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{The host cannot be pressured into pulling a record},
+  because there is no host with that power. The canonical record lives
+  on a public blockchain; the only way to remove it is the same way it
+  entered: a vote, in the open, by a supermajority of named peers,
+  under their own signatures. ``Take it down'' has no recipient.
+
+  \item \textbf{The moderators cannot be captured}, because there are
+  no moderators in the closed-door sense. Every act of admission,
+  removal, ratification, retirement, canonization, expulsion, or
+  challenge is a cryptographic signature from a named wallet that the
+  contract itself verifies. A coalition of less than two thirds of
+  peers can do nothing the rest do not consent to; a coalition of two
+  thirds can even strip a captured caretaker entirely. The most
+  consequential power in the system --- evicting its own owner --- has
+  been engineered to be a signed, counted, public act, not a
+  back-channel deal.
+
+  \item \textbf{The funding cannot be pulled}, because there is no
+  funding to pull. The platform sells nothing, harvests nothing, and is
+  owned by no one who could be paid to fold it. Every state change is
+  paid for by the wallet that causes it --- the user, never the
+  platform --- so the operating cost of the archive is borne by the
+  people using it, and there is no central treasury an adversary could
+  drain or seize.
+\end{itemize}
+
+This is what makes ``Disclosure on every front'' not a slogan but a
+plausible outcome. The instrument is correctly shaped for the job. An
+archive that cannot be edited, cannot be captured, and cannot be
+defunded is the right kind of place for evidence that powerful
+interests would prefer to see disappear. It is also the right kind of
+place for evidence that powerful interests have, until now, simply been
+\emph{able} to make disappear, because there was nowhere else for it to
+go.
+
+\begin{notebox}
+\textbf{The blank page is an invitation, not a verdict.} The archive
+starts empty on purpose. The platform does not arrive with a settled
+view of what has been hidden and where; it arrives with the
+\emph{capacity} to keep an honest, signed, evolving record of whatever
+the network is willing to file and defend. Which fronts of disclosure
+become real here is, in the most literal sense, up to the peers who
+show up to keep them. Every domain where the truth has been deferred is
+a pillar waiting to be proposed.
+\end{notebox}
+
+None of this means the platform decides what is true; it never has and
+it never will. ``Canon'' here still means only ``a majority of named
+peers presently stands behind this record, on the strength of its
+evidence.'' Disclosure, in this archive, is not the end of inquiry ---
+it is the moment a piece of evidence finally has somewhere to be filed,
+judged in the open, and kept where it cannot quietly disappear again.
+That is a smaller claim than ``the truth has been revealed,'' and it is
+the only claim a record room of this kind can honestly make. It is also
+exactly the claim that, scaled across enough domains and enough years,
+\emph{is} what disclosure looks like in practice: not one dramatic
+revelation, but a thousand records the public was never supposed to
+have, kept somewhere they cannot be erased, with the names of the
+people who stood behind them attached.
 
 % =====================================================================
 \section{What this is not}
@@ -482,12 +589,16 @@ evolving record of what we have reason to believe is worth making for its
 own sake --- and worth giving away.
 
 \begin{notebox}
-\textbf{The whole thing, finally.} A public record room for contested truth,
-where evidence is filed against its source, judged in the open by a majority
-of named peers, kept where no one can quietly edit it, owned by no one and
-seizable by no one, and revised forever as the evidence changes. The
-scientific method, handed back to the public. The social network, reclaimed
-for the truth. A labour of love --- and an open invitation to help build it.
+\textbf{The whole thing, finally.} A public record room for contested
+truth, where evidence is filed against its source, judged in the open
+by a majority of named peers --- each verdict cryptographically signed
+with the reasoning attached --- kept where no one can quietly edit it,
+owned by no one and seizable by no one, and revised forever as the
+evidence changes. The scientific method, handed back to the public. The
+social network, reclaimed for the truth. The instrument, finally
+adequate to the ambition: Disclosure, on every front, with the evidence
+to back it and the signatures to stand behind it. A labour of love ---
+and an open invitation to help build it.
 \end{notebox}
 
 The companion paper, \emph{The Evidence Peer-Review System}, describes the

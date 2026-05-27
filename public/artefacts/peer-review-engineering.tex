@@ -1,16 +1,18 @@
 % =====================================================================
 %  The Evidence Peer-Review System
 %  An engineering paper for The Disclosure Platform. Specifies the
-%  smart contract (EvidenceConsensus on BNB Smart Chain) and its
-%  read-only sidecar (EvidenceConsensusLens), the off-chain projection
-%  (Supabase), content/taxonomy hashing, the binding model, the
-%  eight-state lifecycle, the bounded submission queue, the threshold
-%  mathematics, order-independence via peer-count snapshots, the
-%  challenge flow, the administrator-free peer registry, the capture
-%  boundary and force-renounce backstop, peer-liveness garbage
-%  collection, taxonomy retirement, and the EIP-712 attestation scheme
-%  --- and shows how each delivers the goals set out in the companion
-%  essay "Disclosure: A Labour of Love".
+%  smart contract (EvidenceConsensus on BNB Smart Chain mainnet), its
+%  read-only Lens sidecar (EvidenceConsensusLens) and its peer-membership
+%  sidecar (PeerGovernance), the off-chain projection (Supabase),
+%  content/taxonomy hashing, the binding model, the eight-state
+%  lifecycle, the bounded submission queue, the threshold mathematics,
+%  order-independence via peer-count snapshots, the challenge flow, the
+%  administrator-free peer registry, the capture boundary and
+%  force-renounce backstop, peer-liveness garbage collection, taxonomy
+%  retirement, and the universal EIP-712 vote-by-signature scheme that
+%  authorises every peer act on-chain (with a hashed off-chain
+%  deliberation note) --- and shows how each delivers the goals set out
+%  in the companion essay "Disclosure: A Labour of Love".
 %  Class : article
 % =====================================================================
 
@@ -108,26 +110,32 @@
 \textbf{Abstract.}
 This is an engineering paper. It specifies the system that turns the
 philosophy of \emph{Disclosure: A Labour of Love} into enforceable
-mechanism. A single smart contract, \texttt{EvidenceConsensus}, deployed
-on BNB Smart Chain, is the sole source of truth for the peer set, the
-Pillar~\arr~Topic taxonomy, and the lifecycle of every record; a read-only
-sidecar, \texttt{EvidenceConsensusLens}, serves aggregate views without
-holding any authority. A Supabase database is a fast, rebuildable
-\emph{projection} of the chain, kept in step by an indexer that joins rows
-to on-chain events by deterministic hashes. We specify how a record's
-content is hashed so any later tampering is detectable; how the taxonomy is
-grown by peer consensus and why a node is never empty; the \emph{binding} ---
-an (evidence~$\times$~topic) pair --- as the atomic unit of review; the
-eight-state lifecycle a binding moves through; the bounded submission queue
-that keeps open submission from outrunning review capacity; the threshold
-mathematics that scales with the active peer set and makes ``Canon'' a true
-majority; how vote outcomes are made order-independent via peer-count
-snapshots; the time-boxed challenge procedure; the administrator-free peer
-registry; the BFT-style capture boundary and the peer \emph{force-renounce}
-backstop against a captured owner; peer-liveness garbage collection; and the
-EIP-712 attestation scheme that makes every vote a signed, human-readable,
-independently verifiable artefact. We close by mapping each mechanism back
-to the principle it secures.
+mechanism. A smart contract, \texttt{EvidenceConsensus}, deployed on
+BNB Smart Chain \emph{mainnet}, is the sole source of truth for the peer
+set, the Pillar~\arr~Topic taxonomy, and the lifecycle of every record;
+a read-only sidecar, \texttt{EvidenceConsensusLens}, serves aggregate
+views without holding any authority, and a second sidecar,
+\texttt{PeerGovernance}, holds the nominee/revocation flows so the core
+stays under the EIP-170 deploy ceiling. A Supabase database is a fast,
+rebuildable \emph{projection} of the chain, kept in step by an indexer
+that joins rows to on-chain events by deterministic hashes. We specify
+how a record's content is hashed so any later tampering is detectable;
+how the taxonomy is grown by peer consensus and why a node is never
+empty; the \emph{binding} --- an (evidence~$\times$~topic) pair --- as
+the atomic unit of review; the eight-state lifecycle a binding moves
+through; the bounded submission queue that keeps open submission from
+outrunning review capacity; the threshold mathematics that scales with
+the active peer set and makes ``Canon'' a true majority; how vote
+outcomes are made order-independent via peer-count snapshots; the
+time-boxed challenge procedure; the administrator-free peer registry;
+the BFT-style capture boundary and the peer \emph{force-renounce}
+backstop against a captured owner; peer-liveness garbage collection;
+taxonomy retirement; and the \emph{universal} EIP-712
+vote-by-signature scheme --- a single \texttt{Vote} typehash on the core
+and a single \texttt{PeerVote} typehash on the governance sidecar ---
+that authorises \emph{every} peer act on-chain, each carrying an
+optional, signed off-chain deliberation note. We close by mapping each
+mechanism back to the principle it secures.
 \end{plainbox}
 
 \tableofcontents
@@ -139,17 +147,19 @@ to the principle it secures.
 \section{Architecture: a chain of truth and a cache of speed}
 % =====================================================================
 
-The system is two layers with a strict division of authority, plus a
-read-only sidecar that holds none.
+The system is two layers with a strict division of authority, plus two
+sidecars at the chain layer that hold either no authority at all (the
+Lens) or only a narrowly scoped, peer-gated authority over the peer
+registry (the governance sidecar).
 
-\textbf{Layer 1 --- the chain of truth.} A single Solidity contract,
-\texttt{EvidenceConsensus}, on BNB Smart Chain (BSC), holds everything that
-must be authoritative and tamper-resistant: the set of verified peers, the
-taxonomy of pillars and topics, the state and vote tallies of every record,
-and the time windows that govern them. Nothing is canon unless the chain
-says so. Because the chain is public and append-only, the entire
-deliberative history is preserved end to end and cannot be silently
-rewritten.
+\textbf{Layer 1 --- the chain of truth.} A Solidity core,
+\texttt{EvidenceConsensus}, on BNB Smart Chain (BSC) mainnet, holds
+everything that must be authoritative and tamper-resistant: the set of
+verified peers, the taxonomy of pillars and topics, the state and vote
+tallies of every record, and the time windows that govern them. Nothing
+is canon unless the chain says so. Because the chain is public and
+append-only, the entire deliberative history is preserved end to end and
+cannot be silently rewritten.
 
 \textbf{The read sidecar.} As the core grew --- a submission queue and
 on-chain peer garbage collection were added --- its deployed bytecode
@@ -160,7 +170,24 @@ with their tallies) were therefore moved into a separate contract,
 \emph{no privileges}, and reconstructs every aggregate purely from the
 core's public state, so it carries zero consensus risk: the core remains
 the sole writer and the sole source of truth. Read clients call the Lens
-for these list views; everything that mutates state goes to the core.
+for these list views.
+
+\textbf{The peer-governance sidecar.} When universal EIP-712
+vote-by-signature was added to the hot voting path (Section~14), the
+core ran out of EIP-170 headroom again. The nominee admission and
+revocation flows --- which do not touch the binding vote path; they only
+need the core's peer \emph{registry} state --- were moved into a
+separate contract, \texttt{PeerGovernance}. The sidecar holds its own
+nominee/revocation bookkeeping and its own EIP-712
+\texttt{PeerVote} domain, and mutates the core's peer set through two
+privileged hooks, \texttt{gAddPeer} / \texttt{gRemovePeer}, gated by an
+\texttt{onlyGovernance} modifier wired once at deploy via
+\texttt{setGovernance}. The core therefore remains the source of truth
+for who is a peer; the sidecar is the only authorised path (besides
+seed-phase owner \texttt{addPeer} and inactivity GC) to change that set
+once the seed phase is over. Read clients hit the Lens for list views,
+the sidecar for membership writes, and the core for everything else
+that mutates state.
 
 \textbf{Layer 2 --- the cache of speed.} A Supabase (Postgres) database
 holds a \emph{projection} of the chain: the same records and taxonomy,
@@ -184,11 +211,12 @@ change they cause.
 \begin{notebox}
 \textbf{Why this split.} Putting authority on-chain makes the record
 tamper-evident and ownerless; putting presentation off-chain makes it fast
-and pleasant; putting list aggregation in a privilege-free sidecar keeps the
-core small enough to deploy without weakening it. Keeping the cache strictly
-subordinate --- rebuildable, never authoritative --- means a compromised or
-lost database costs convenience, not truth. The truth is whatever the
-contract can prove.
+and pleasant; splitting list aggregation into a privilege-free Lens and
+narrow peer-registry mutation into a peer-gated governance sidecar keeps
+the core small enough to deploy without weakening it. Keeping the cache
+strictly subordinate --- rebuildable, never authoritative --- means a
+compromised or lost database costs convenience, not truth. The truth is
+whatever the contract can prove.
 \end{notebox}
 
 % =====================================================================
@@ -423,18 +451,22 @@ Open submission scales without limit; human review does not. If every
 submission entered active review immediately, a burst of filings --- honest
 or hostile --- could bury the peers under more open reviews than they could
 ever process, and the 30-day clock on each would start ticking regardless.
-The contract bounds the \emph{active} review set instead.
+The contract bounds the \emph{active} review set instead, as a fixed
+shared batch the whole network works through in the same order.
 
 \begin{plainbox}
-\texttt{reviewCapacity() = activePeerCount * REVIEW\_SLOTS\_PER\_PEER}
-\hspace{1em}(\texttt{REVIEW\_SLOTS\_PER\_PEER = 4})
+\texttt{reviewCapacity() = REVIEW\_CAPACITY}
+\hspace{1em}(\texttt{REVIEW\_CAPACITY = 3})
 \end{plainbox}
 
 When a binding is opened, it enters \texttt{Submitted} only if
 \texttt{activeReviewCount < reviewCapacity()}; otherwise it parks in
-\texttt{Queued} with its review clock unset. As bindings resolve
-(canonized / expelled / lapsed) they free slots, and queued bindings are
-promoted to fill them:
+\texttt{Queued} with its review clock unset. The shared-batch design is
+deliberate: every peer is looking at the same small set of bindings, so
+the network converges on each verdict together rather than spreading
+attention thin across hundreds of half-reviewed records. As bindings
+resolve (canonized / expelled / lapsed) they free slots, and queued
+bindings are promoted to fill them:
 
 \begin{itemize}[leftmargin=1.4em]
   \item \texttt{boostQueued(id, topicId)} casts \emph{one} boost on a queued
@@ -459,9 +491,10 @@ promoted to fill them:
 
 This global bound, together with a per-address \texttt{SUBMIT\_COOLDOWN} of
 10 minutes on non-peer submitters, replaces an earlier per-submitter
-outstanding cap: a single identity can no longer flood the \emph{active} set
-no matter how much it queues, and the review load carried by each peer stays
-proportional to the size of the peer set.
+outstanding cap: a single identity can no longer flood the \emph{active}
+set no matter how much it queues, and the active review load the network
+carries at any moment is fixed by the contract rather than by the size
+of the inbox.
 
 \begin{notebox}
 \textbf{Self-healing by construction.} \texttt{activeReviewCount} falls every
@@ -629,45 +662,63 @@ re-examination; it is only ever ``standing for now.''
 \section{The peer registry: membership without an administrator}
 % =====================================================================
 
-The set of peers who may judge evidence is governed entirely on-chain, by
-the peers themselves.
+The set of peers who may judge evidence is governed entirely on-chain,
+by the peers themselves. All membership writes live on the
+\texttt{PeerGovernance} sidecar (Section~1); the core exposes the peer
+set as a view and accepts membership changes only through the sidecar's
+peer-gated \texttt{gAddPeer} / \texttt{gRemovePeer} hooks.
 
-\textbf{Genesis and seed phase.} The system launches from a Genesis peer set
-supplied at deployment (the quorum floor of 1 lets even a one-peer network
-act). During an initial seed phase the owner may seed further peers directly
-with \texttt{addPeer}, but \emph{only} while \texttt{activePeerCount <
-seedPhaseK}; the moment the active set reaches \texttt{seedPhaseK}, ordinary
-nominations open (\texttt{nominationsOpen()}) and the owner's seeding power
-ends.
+\textbf{Genesis and seed phase.} The system launches from a Genesis peer
+set supplied at deployment (the quorum floor of 1 lets even a one-peer
+network act). During an initial seed phase the owner may seed further
+peers directly with the core's \texttt{addPeer}, but \emph{only} while
+\texttt{activePeerCount < seedPhaseK}; the moment the active set reaches
+\texttt{seedPhaseK}, ordinary nominations open
+(\texttt{nominationsOpen()} on the sidecar) and the owner's seeding
+power ends. If the owner has \emph{renounced}, nominations stay open
+unconditionally --- otherwise a later shrink below the seed floor with
+no owner to re-seed would permanently strand the network.
 
-\textbf{Steady state.} A newcomer is brought in by an existing peer via
-\texttt{nominatePeer(nominee, handle)} (the handle is at most 64 bytes).
-Other peers then endorse the nominee with \texttt{endorseNominee}; when
-endorsements reach the admission gate $\floorop{n/3}+1$, the contract
-verifies the nominee \emph{automatically} --- no administrator approves the
-final step. A nomination that never reaches its gate can be cleared after the
-proposal window by the permissionless \texttt{lapseNominee}, freeing the
-address to be nominated again with a fresh endorsement round.
+\textbf{Steady state.} A newcomer is brought in by an existing peer
+via the sidecar's \texttt{nominatePeer} (handle, note hash, signature;
+the handle is at most 64 bytes). The nominator's signature is an
+EIP-712 \texttt{PeerVote} of kind \texttt{nominate} (Section~14) that
+the contract recovers and matches against \texttt{msg.sender}, so a
+nomination is a signed, accountable act --- not just a function call.
+Other peers then endorse the nominee with \texttt{endorseNominee} (a
+\texttt{PeerVote} of kind \texttt{nominee-endorse}); when endorsements
+reach the admission gate $\floorop{n/3}+1$, the sidecar calls back
+into the core's \texttt{gAddPeer} hook and the nominee is verified
+\emph{automatically} --- no administrator approves the final step. A
+nomination that never reaches its gate can be cleared after the
+proposal window by the permissionless \texttt{lapseNominee}, freeing
+the address to be nominated again with a fresh endorsement round.
 
-\textbf{Removal.} A peer can be removed by the same community that admits
-them: \texttt{motionRevoke} opens a motion and \texttt{voteRevoke} accrues
-votes, with removal at a majority $\ceilop{n/2}$. A stale motion that never
-passed is cleared after \texttt{REVOKE\_WINDOW} by
-\texttt{cancelStaleRevocation}, so no peer is left indefinitely under an open
-cloud. A peer-floor invariant forbids removing the last peer.
+\textbf{Removal.} A peer can be removed by the same community that
+admits them: \texttt{motionRevoke} opens a motion (the motioner is
+discard vote one and signs a \texttt{PeerVote} of kind \texttt{revoke}
+for the new round) and \texttt{voteRevoke} accrues further signed
+discards, with removal at a majority $\ceilop{n/2}$. A stale motion
+that never passed is cleared after \texttt{REVOKE\_WINDOW} by
+\texttt{cancelStaleRevocation}, so no peer is left indefinitely under
+an open cloud. A peer-floor invariant forbids removing the last peer.
 
-\textbf{Ownership.} The owner role exists only for the seed phase and for
-emergency \texttt{pause}/\texttt{unpause}; it can never force a record in,
-force a peer out, or override a vote. Ownership transfers in a safe two-step
-\texttt{proposeOwner}~\arr~\texttt{acceptOwnership} handshake (cancellable),
-and once the seed phase is complete and the contract is live the owner may
-\texttt{renounceOwnership} to drop the role entirely.
+\textbf{Ownership.} The owner role exists only for the seed phase and
+for emergency \texttt{pause}/\texttt{unpause}; it can never force a
+record in, force a peer out, or override a vote. Ownership transfers in
+a safe two-step \texttt{proposeOwner}~\arr~\texttt{acceptOwnership}
+handshake (cancellable), and once the seed phase is complete and the
+contract is live the owner may \texttt{renounceOwnership} to drop the
+role entirely.
 
 \begin{notebox}
-\textbf{Identity is a wallet plus a handle.} A peer is a wallet address
-carrying a human-readable handle. The system makes no claim that a wallet is
-a verified legal identity --- but every judgement is permanently tied to the
-wallet that signed it, which is what accountability requires here.
+\textbf{Identity is a wallet plus a handle, and now a signed reason.}
+A peer is a wallet address carrying a human-readable handle. The system
+makes no claim that a wallet is a verified legal identity --- but every
+judgement is permanently tied to the wallet that signed it, and (since
+the universal vote-by-signature rollout) every membership act also
+carries an optional deliberation note hashed into that signature.
+Identity here is wallet + handle + a public history of signed reasons.
 \end{notebox}
 
 % =====================================================================
@@ -696,18 +747,25 @@ longer spawn nodes that a supermajority must then clean up; the
 create/retire gap narrows from $1/3 \to 2/3$ to $1/2 \to 2/3$, and the retire
 bar sits safely above the capture line.
 
-\textbf{The force-renounce backstop.} The owner's only powers are pause and
-seed-phase \texttt{addPeer}, and \texttt{renounceOwnership} is gated on the
-contract not being paused --- so a malicious or compromised owner could, in
-principle, pause forever and brick the network with no peer recourse. One
-motion closes that gap. \texttt{motionForceRenounce} /
-\texttt{voteForceRenounce} let a $2/3$ peer supermajority (the same bar used
-to destroy canon governance) strip the owner entirely \emph{and} unpause the
-contract. These two functions deliberately carry \emph{no}
-``when-not-paused'' guard --- their whole purpose is to act precisely when a
-captured owner has paused everything. When they pass, ownership passes to no
-one: \texttt{owner} is set to the zero address and the network continues
-fully self-governed.
+\textbf{The force-renounce backstop.} The owner's only powers are pause
+and seed-phase \texttt{addPeer}, and \texttt{renounceOwnership} is gated
+on the contract not being paused --- so a malicious or compromised owner
+could, in principle, pause forever and brick the network with no peer
+recourse. One motion closes that gap.
+\texttt{motionForceRenounce(noteHash, sig)} and
+\texttt{voteForceRenounce(noteHash, sig)} let a $2/3$ peer supermajority
+(the same bar used to destroy canon governance) strip the owner
+entirely \emph{and} unpause the contract. Each vote is an EIP-712
+\texttt{Vote} (phase~4, with a fixed sentinel \texttt{bindingId =
+keccak256("force-renounce")}) that the contract recovers on-chain and
+matches against \texttt{msg.sender}, so the most consequential act in
+the system is also one of its most carefully attributed --- signed,
+counted, and bound to a deliberation note. These two functions
+deliberately carry \emph{no} ``when-not-paused'' guard --- their whole
+purpose is to act precisely when a captured owner has paused
+everything. When they pass, ownership passes to no one: \texttt{owner}
+is set to the zero address and the network continues fully
+self-governed.
 
 \begin{notebox}
 \textbf{What this buys.} ``Owned by no one'' is not merely a promise to
@@ -756,10 +814,13 @@ depends on a caretaker to make progress.
 A ratified node is never deleted --- the log is immutable --- but a strong
 peer supermajority can \emph{retire} a node so it drops out of the public
 taxonomy. Retirement mirrors the revocation motion:
-\texttt{motionRetireNode(id)} opens it (the motioner is retire-vote one),
-\texttt{voteRetireNode(id)} accrues votes, and at $\ceilop{2n/3}$ the node
-flips to \texttt{Retired} and is removed from the public lists. A stale
-motion is cleared by \texttt{cancelStaleRetire} after the window.
+\texttt{motionRetireNode(id, noteHash, sig)} opens it (the motioner is
+retire-vote one, signing an EIP-712 \texttt{Vote} of phase~3
+\texttt{retire} for the new round, with \texttt{bindingId} = the node
+id), \texttt{voteRetireNode(id, noteHash, sig)} accrues further signed
+votes, and at $\ceilop{2n/3}$ the node flips to \texttt{Retired} and is
+removed from the public lists. A stale motion is cleared by
+\texttt{cancelStaleRetire} after the window.
 
 The mechanism enforces ``no empty pillars'' from the other direction. Only
 \textbf{topics} are retired directly; \texttt{motionRetireNode} reverts on a
@@ -772,62 +833,134 @@ retirement.) The off-chain indexer flips both rows to \texttt{retired} as it
 handles each \texttt{NodeRetired} event.
 
 % =====================================================================
-\section{Attestations: every vote is a signed artefact}
+\section{Universal vote-by-signature: every peer act is signed}
 % =====================================================================
 
-On-chain tallies record \emph{that} a vote happened. To record \emph{what} a
-peer attested, in a form a human can read and any party can verify
-independently, every vote is also carried as an EIP-712 typed-data
-signature in the off-chain layer.
+Every act a peer can take on this system --- approving or rejecting a
+record, opening or voting in a challenge, proposing or endorsing a
+pillar/topic, motioning or voting on a retirement, motioning or voting
+on a force-renounce, nominating a peer, endorsing a nominee, or
+motioning/voting to revoke a peer --- is authorised by an EIP-712
+typed-data signature that the contracts recover \emph{on-chain} and
+match against \texttt{msg.sender}. The signed message is not a
+description of the vote that lives only off-chain; it \emph{is} the
+authorisation the contract checks before mutating state. Two typehashes
+carry the whole surface:
 
-The signing domain binds the signature to this exact contract and chain:
-
-\begin{plainbox}
-\texttt{domain = \{ name: "EvidenceConsensus", version: "1",}\\
-\hspace*{2em}\texttt{chainId, verifyingContract \}}
-\end{plainbox}
-
-and the message type ties the attestation to a specific binding:
+\textbf{Core \texttt{Vote} --- evidence, taxonomy, retirement,
+force-renounce.} The core contract recovers signatures against a single
+typehash, keyed by a \texttt{phase} field that names the act:
 
 \begin{plainbox}
 \small
-\texttt{Attestation \{}\\
-\hspace*{1.5em}\texttt{evidenceId : string}\\
-\hspace*{1.5em}\texttt{topicId    : string}\\
-\hspace*{1.5em}\texttt{peerAddr   : address}\\
-\hspace*{1.5em}\texttt{phase      : string}\;\; // review, challenge, or taxonomy\\
-\hspace*{1.5em}\texttt{verdict    : string}\;\; // approve/reject/challenge/defend/endorse\\
-\hspace*{1.5em}\texttt{note       : string}\\
+\texttt{domain = \{ name: "EvidenceConsensus", version: "1",}\\
+\hspace*{2em}\texttt{chainId, verifyingContract = core \}}\\[0.5em]
+\texttt{Vote \{}\\
+\hspace*{1.5em}\texttt{bindingId : bytes32}\\
+\hspace*{1.5em}\texttt{phase     : uint8}\;\; // 0 review, 1 challenge,\\
+\hspace*{1.5em}\hspace*{8.5em}    // 2 taxonomy, 3 retire, 4 force-renounce\\
+\hspace*{1.5em}\texttt{support   : bool}\\
+\hspace*{1.5em}\texttt{round     : uint32}\\
+\hspace*{1.5em}\texttt{noteHash  : bytes32}\\
 \texttt{\}}
 \end{plainbox}
 
-Because \texttt{topicId} is part of the signed message, a signature is
-cryptographically bound to the precise (evidence~$\times$~topic) binding
-being voted on --- a vote cannot be replayed against a different filing. The
-signature is produced through the peer's wallet
-(\texttt{eth\_signTypedData\_v4}) and verified by the
-\texttt{verify-attestation} edge function, which recovers the signer,
-confirms it is an active peer, and recomputes the content hash before
-recording the attestation. The off-chain store keeps exactly one attestation
-per \texttt{(binding\_id, peer\_addr, phase)}, mirroring the contract's
-no-double-voting rule. Critically, this check need not be trusted: any
-visitor can re-run the identical EIP-712 recovery in their own browser over
-the public \texttt{(domain, types, message, signature)} and confirm that the
-\emph{named peer} --- not the platform --- authored the vote.
+For phase \texttt{review} / \texttt{challenge} the \texttt{bindingId} is
+the (evidence~$\times$~topic) id; for phase \texttt{taxonomy} it is the
+node id (a pillar or topic propose/endorse); for phase \texttt{retire}
+it is the node id of the retirement target; for phase
+\texttt{force-renounce} there is no subject node, so a fixed sentinel
+\texttt{keccak256("force-renounce")} stands in. The \texttt{round}
+field binds the signature to the current motion / review / challenge
+round (anti-replay across re-filings and re-motions), and a propose /
+motion (which mints the new round) signs the round it is about to
+create (\texttt{current + 1}). \texttt{noteHash} commits an optional
+off-chain deliberation note (\texttt{0x00...00} for ``no note'').
 
-\textbf{Taxonomy endorsements are signed too.} A peer endorsing a
-pillar/topic proposal (\texttt{endorseNode}) is the same accountable, signed
-act as a review or challenge vote, so it is recorded as a first-class
-attestation in the \texttt{taxonomy} phase with verdict \texttt{endorse},
-tied to the proposal's founding binding (every proposal ships with one).
-\texttt{verify-attestation} confirms it against the on-chain
-\texttt{NodeEndorsed} event before recording it. A taxonomy \emph{rejection}
-is admitted as a signed dissent (verdict \texttt{reject}) with no on-chain
-counterpart --- the contract has no reject-node call --- so it skips tx-hash
-verification. Either way the signed log is purely a record: the
-vote-counting triggers act only on the \texttt{review} and \texttt{challenge}
-phases, so a taxonomy attestation never moves a binding's tallies, and the
-on-chain \texttt{endorseNode} gate remains the sole consensus mechanism.
+\textbf{Governance \texttt{PeerVote} --- nominate, endorse-nominee,
+revoke.} The membership sidecar uses its own domain and typehash so the
+two signing surfaces cannot be cross-replayed:
+
+\begin{plainbox}
+\small
+\texttt{domain = \{ name: "PeerGovernance", version: "1",}\\
+\hspace*{2em}\texttt{chainId, verifyingContract = sidecar \}}\\[0.5em]
+\texttt{PeerVote \{}\\
+\hspace*{1.5em}\texttt{subject  : address}\\
+\hspace*{1.5em}\texttt{kind     : uint8}\;\; // 0 nominee-endorse, 1 revoke,\\
+\hspace*{1.5em}\hspace*{8em}     // 2 nominate (the nominator's signed act)\\
+\hspace*{1.5em}\texttt{support  : bool}\\
+\hspace*{1.5em}\texttt{round    : uint32}\\
+\hspace*{1.5em}\texttt{noteHash : bytes32}\\
+\texttt{\}}
+\end{plainbox}
+
+In both structs the signature is produced through the peer's wallet
+(\texttt{eth\_signTypedData\_v4}) and recovered by the contract via
+\texttt{ecrecover} against its own \texttt{DOMAIN\_SEPARATOR} and the
+corresponding typehash. A signature that does not recover to
+\texttt{msg.sender} reverts the call. There is no path by which a third
+party --- the platform included --- can post a vote on a peer's behalf,
+because the call would not carry that peer's signature.
+
+\textbf{The deliberation note.} Every signed act may carry an optional
+note that captures the peer's reasoning. The note \emph{text} cannot
+live on-chain (it would not fit, and storage costs would discourage
+detail), so what rides in the signature is the note's keccak-256
+fingerprint \texttt{noteHash}. The text is then submitted to one of
+four edge functions, each of which re-verifies the same signature the
+chain recovered, re-hashes the submitted note and checks it matches
+\texttt{noteHash}, and only then writes the row:
+\texttt{verify-attestation} (review, challenge, taxonomy endorse, with
+the taxonomy row also carrying \texttt{node\_hash} + \texttt{round} so
+the public proof modal recovers the underlying \texttt{Vote});
+\texttt{nominee-vote} (nominate + nominee-endorse, both
+\texttt{PeerVote}); \texttt{revocation-vote} (revoke motion + discard,
+both \texttt{PeerVote}, plus an off-chain ``keep'' dissent that has no
+on-chain counterpart and is stored as a signed Attestation); and
+\texttt{gov-note} (the retire + force-renounce notes, both phase~3 / 4
+\texttt{Vote}s, persisted alongside the matching on-chain vote event).
+
+\begin{notebox}
+\textbf{Why every act, why on-chain.} The chain by itself can record
+\emph{that} a vote happened. By recovering the signature on-chain we
+make a stronger claim: the call could only have come from the wallet
+that signed the typed message. The deliberation note --- committed by
+hash on-chain, attached as readable text off-chain --- means a peer's
+reasoning is bound to the same act they were counted for, not a
+detachable comment they could later distance themselves from.
+``Judgement under your own name'' becomes ``judgement under your own
+\emph{signature}, with your reasons attached, recoverable by anyone.''
+\end{notebox}
+
+\textbf{Off-chain Attestations are still used as a public proof
+artefact.} Alongside on-chain recovery, every counted vote also lands
+in the off-chain \texttt{attestations} table as an EIP-712
+\texttt{Attestation} (the same typed message used in the original
+scheme: \texttt{evidenceId / topicId / peerAddr / phase / verdict /
+note}). Two reasons keep this:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{Public proof, browser-verifiable.} A visitor can re-run
+  the identical \texttt{Attestation} recovery in their own browser over
+  the public \texttt{(domain, types, message, signature)} and confirm
+  the \emph{named peer} authored the vote --- no need to ask the chain,
+  no trust in the platform's UI required.
+  \item \textbf{Dissents the chain cannot represent.} A taxonomy
+  \emph{reject} and a revocation \emph{keep} have no on-chain
+  counterpart (the contract has no reject-node or keep-peer call), so
+  they are admitted as signed \texttt{Attestation} dissents with no
+  tally effect --- a public record of disagreement that the contract
+  itself does not need to count.
+\end{itemize}
+
+The off-chain store keeps exactly one row per \texttt{(binding\_id,
+peer\_addr, phase)}, mirroring the contract's no-double-voting rule.
+Vote-counting in the projection acts only on the
+\texttt{review} and \texttt{challenge} phases (the binding-tally
+phases); a taxonomy, retire, or force-renounce attestation never moves
+a binding's tallies, and the on-chain endorse / vote gate remains the
+sole consensus mechanism for those.
 
 % =====================================================================
 \section{The off-chain projection}
@@ -844,7 +977,9 @@ mirror the on-chain concepts:
 \texttt{evidence}    & Canonical content + \texttt{content\_hash}. \\
 \texttt{bindings}    & One row per (evidence, topic): status, tallies, \texttt{binding\_hash}. \\
 \texttt{pillars} / \texttt{topics} & Taxonomy nodes (proposed~\arr~ratified~\arr~retired), joined by \texttt{node\_hash}. \\
-\texttt{attestations}& One per \texttt{(binding\_id, peer\_addr, phase)}. \\
+\texttt{attestations}& One per \texttt{(binding\_id, peer\_addr, phase)} --- the public proof artefact. \\
+\texttt{nominee\_votes}    & One per (nominee, round, voter): nominate + endorse notes, \texttt{PeerVote} sig. \\
+\texttt{revocation\_votes} & One per (peer, round, voter, verdict): keep + discard notes, \texttt{PeerVote} sig (keep is a signed off-chain dissent). \\
 \texttt{chain\_events} / \texttt{chain\_event\_cursor} & Indexer input and progress. \\
 \texttt{tamper\_alerts} & Evidence content-hash mismatches \emph{and} taxonomy node\_hash / meta\_hash drift. \\
 \bottomrule
@@ -853,21 +988,37 @@ mirror the on-chain concepts:
 
 \vspace{0.4em}
 
-Four edge functions operate the layer: \texttt{chain-indexer-evidence}
-(reads chain events and reconciles the projection by \texttt{binding\_hash}
-and \texttt{node\_hash}), \texttt{verify-attestation} (verifies signatures
-and recomputes content hashes on write), \texttt{audit-content-hash}
-(re-hashes the archive \emph{and} the taxonomy on a schedule to detect
-drift --- it recomputes each evidence \texttt{content\_hash} and each
-pillar/topic \texttt{node\_hash} + \texttt{meta\_hash}, opening a
-\texttt{tamper\_alert} on any mismatch and auto-resolving one that matches
-again), and \texttt{consensus-keeper} (described below). Vote counts are
-applied through atomic database functions, \texttt{apply\_review\_counts} and
-\texttt{apply\_challenge\_counts}, so concurrent votes cannot corrupt a
-tally. Write endpoints are throttled by prefix in an \texttt{edge\_rate\_limit}
-table (\texttt{ev\_insert:} for evidence, \texttt{tax\_insert:} for
-taxonomy). Because the schema seeds nothing, the entire taxonomy and archive
-are produced at runtime by peers, never shipped as a baseline.
+Seven edge functions operate the layer.
+\texttt{chain-indexer-evidence} reads chain events from both the core
+and the governance sidecar, reconciling the projection by
+\texttt{binding\_hash} and \texttt{node\_hash} (and the sidecar's
+nominee/revocation events by address + round).
+\texttt{verify-attestation} verifies the review/challenge/taxonomy-endorse
+signature on write, re-recovers the matching on-chain \texttt{Vote},
+and (for review/challenge) recomputes the content hash before recording
+the attestation. \texttt{nominee-vote} verifies a nominate or
+nominee-endorse \texttt{PeerVote}, matches it against the on-chain
+sidecar event, and writes the note. \texttt{revocation-vote} does the
+same for revoke motion / discard, and also accepts a signed
+\emph{keep} dissent that has no on-chain counterpart.
+\texttt{gov-note} verifies the retire + force-renounce \texttt{Vote}
+and persists the note alongside the chain-emitted vote event.
+\texttt{audit-content-hash} re-hashes the archive \emph{and} the
+taxonomy on a schedule to detect drift --- it recomputes each evidence
+\texttt{content\_hash} and each pillar/topic \texttt{node\_hash} +
+\texttt{meta\_hash}, opening a \texttt{tamper\_alert} on any mismatch
+and auto-resolving one that matches again. \texttt{consensus-keeper}
+is described below.
+
+Vote counts on bindings are applied through atomic database functions,
+\texttt{apply\_review\_counts} and \texttt{apply\_challenge\_counts},
+so concurrent votes cannot corrupt a tally. Write endpoints are
+throttled by prefix in an \texttt{edge\_rate\_limit} table
+(\texttt{ev\_insert:} for evidence, \texttt{tax\_insert:} for taxonomy,
+\texttt{nominee:} for nominate / endorse, \texttt{revoke:} for revoke
+motion / vote). Because the schema seeds nothing, the entire taxonomy
+and archive are produced at runtime by peers, never shipped as a
+baseline.
 
 \textbf{The keeper.} \texttt{consensus-keeper} is a \texttt{pg\_cron}-scheduled
 edge function (every five minutes) that drives the two on-chain maintenance
@@ -924,42 +1075,51 @@ Filed against a source &
 Content-only \texttt{contentHash}, recomputed in three places; mismatches
 raise tamper alerts. \\[0.4em]
 Judged in public by named peers &
-On-chain votes plus EIP-712 attestations signed by named, wallet-verified
-peers; re-verifiable by anyone, no anonymous moderators. \\[0.4em]
+Every peer act is an EIP-712 \texttt{Vote} or \texttt{PeerVote} recovered
+\emph{on-chain} from the voter's wallet signature; re-verifiable by
+anyone, no anonymous moderators, no third-party-posted votes. \\[0.4em]
+Reasons attached, not just verdicts &
+Each signed act commits a \texttt{noteHash}; the note text is recorded
+off-chain by four edge functions that re-verify the same signature, so
+every counted vote carries its peer's reasoning. \\[0.4em]
 Canon is a majority, not a faction &
 True-majority canonize thresholds (60 / 55 / 51\%); order-independent via
 peer-count snapshots. \\[0.4em]
 Democratized method, open intake &
-Permissionless \texttt{submitEvidence} with a bounded review queue; an
-administrator-free registry that admits and removes peers by consensus. \\[0.4em]
+Permissionless \texttt{submitEvidence} with a fixed-batch review queue;
+an administrator-free registry on the \texttt{PeerGovernance} sidecar
+that admits and removes peers by signed consensus. \\[0.4em]
 Evidence is not proof &
-Tiered evidence with asymmetric thresholds; ``Canon'' is a quorum judgement,
-never a truth flag. \\[0.4em]
+Tiered evidence with asymmetric thresholds; ``Canon'' is a quorum
+judgement, never a truth flag. \\[0.4em]
 Evolving consensus reality &
 Peer-grown Pillar~\arr~Topic taxonomy; a perpetual challenge route;
 reaffirm-or-deprecate revision; supermajority retirement. \\[0.4em]
 Owned by no one, seizable by no one &
-A single open contract as sole authority; two-step transfer, renounce, and a
-$2/3$ force-renounce that evicts a captured owner. \\[0.4em]
+An open core + Lens + peer-gated sidecar as the sole authority; two-step
+transfer, renounce, and a $2/3$ \emph{signed} force-renounce that evicts
+a captured owner. \\[0.4em]
 Capture-resistant &
-A strict $1/3{+}1$ admission gate (BFT honest-supermajority boundary) and a
-liveness clock that keeps the quorum denominator honest. \\
+A strict $1/3{+}1$ admission gate (BFT honest-supermajority boundary)
+and a liveness clock that keeps the quorum denominator honest. \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 \vspace{0.6em}
 
-The contract is the place where the philosophy stops being a description of
-intentions and becomes a description of what the system can and cannot do.
-``Anyone may file'' is a function anyone can call. ``Named peers verify'' is
-a signature that recovers to a registered address. ``A majority stands behind
-it'' is a counted vote against a frozen denominator. ``Owned by no one'' is a
-key that two thirds of peers can take from any hand. ``Revised forever'' is a
-state machine with no terminal lock on canon. The mechanism is the argument
-that the values are meant --- and the companion essay, \emph{Disclosure: A
-Labour of Love}, is the argument for why they are worth meaning in the first
-place.
+The contracts are the place where the philosophy stops being a
+description of intentions and becomes a description of what the system
+can and cannot do. ``Anyone may file'' is a function anyone can call.
+``Named peers verify'' is an EIP-712 signature the contract itself
+recovers, not a database row a moderator could fabricate. ``With their
+reasons'' is a \texttt{noteHash} riding in that signature. ``A majority
+stands behind it'' is a counted vote against a frozen denominator.
+``Owned by no one'' is a key that two thirds of peers can take from any
+hand. ``Revised forever'' is a state machine with no terminal lock on
+canon. The mechanism is the argument that the values are meant --- and
+the companion essay, \emph{Disclosure: A Labour of Love}, is the
+argument for why they are worth meaning in the first place.
 
 \begin{notebox}
 \textbf{Open source.} None of this has to be taken on trust --- every claim in
