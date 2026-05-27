@@ -524,7 +524,16 @@
 .pr-log-row .verdict.endorse { color: var(--accent); }
 .pr-log-row .verdict.retire   { color: var(--danger); }
 .pr-log-row .verdict.renounce { color: var(--accent-3); }
+.pr-log-row .verdict.canonized,
+.pr-log-row .verdict.ratified,
+.pr-log-row .verdict.reaffirmed { color: var(--ok); }
+.pr-log-row .verdict.expelled,
+.pr-log-row .verdict.deprecated,
+.pr-log-row .verdict.retired    { color: var(--danger); }
+.pr-log-row .verdict.lapsed     { color: var(--ink-faint); }
 .pr-log-row .verdict::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pr-log-row .pr-log-network { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+.pr-log-row .pr-log-network-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 18%, transparent); }
 .pr-log-row:not(.is-registry) .detail { text-align: center; }
 .pr-log-row .tx { font-family: var(--mono); font-size: 10px; color: var(--accent); letter-spacing: 0.04em; }
 .pr-log-row:not(.is-registry) .tx { text-align: center; }

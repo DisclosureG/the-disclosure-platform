@@ -782,20 +782,31 @@ create policy gov_votes_read on public.gov_votes for select using (true);
 
 -- ── Unified public vote log ─────────────────────────────────────────────────
 -- attestation_log_view (review / challenge / taxonomy endorse·reject) UNION the
--- node/owner governance votes (taxonomy retire + force-renounce), shaped to the
--- SAME columns so the public vote-history feed reads one source. Evidence-only
--- columns are null for gov rows; `node_hash` carries the Vote bindingId so the
--- proof modal can recover the signer. Peer-registry membership votes deliberately
+-- node/owner governance votes (taxonomy retire + force-renounce) UNION the
+-- Network OUTCOME rows the chain emits when consensus is reached (binding
+-- canonized / expelled / lapsed / deprecated / reaffirmed; taxonomy node
+-- ratified / retired / proposal lapsed). All three branches share the same
+-- columns so the public vote-history feed reads one source. Evidence-only
+-- columns are null where they don't apply; `node_hash` carries the Vote
+-- bindingId (gov rows) or the taxonomy node id (outcome rows) so the proof
+-- modal can render its proof. Peer-registry membership votes deliberately
 -- stay OUT of this feed (they have their own registry log).
+--
+-- `id` is cast to text in every branch — the outcome branch derives its id
+-- from chain_events.id (bigserial), so UNION ALL would otherwise mismatch the
+-- uuid ids in the other two branches. `id` is only used as a React key.
+-- Network outcome rows carry peer_addr=null + peer_handle='Network' so the
+-- log row knows to render a Network badge instead of a peer avatar.
 create view public.vote_log_view with (security_invoker = true) as
-  select id, evidence_id, binding_id, peer_addr, peer_handle, phase, verdict, note,
+  select id::text       as id,
+         evidence_id, binding_id, peer_addr, peer_handle, phase, verdict, note,
          created_at, eip712_sig, tx_hash, evidence_title, evidence_search_text,
          evidence_id_text, pillar_id, topic_id, topic_title, evidence_source,
          evidence_year, evidence_excerpt, evidence_link, evidence_tier, content_hash,
          submission_tx_hash, proof_type, binding_hash, round, note_hash, node_hash, pillar_title
     from public.attestation_log_view
   union all
-  select g.id,
+  select ('gv:' || g.id::text) as id,
          null::uuid          as evidence_id,
          null::uuid          as binding_id,
          g.peer_addr,
@@ -827,5 +838,71 @@ create view public.vote_log_view with (security_invoker = true) as
          p.title             as pillar_title    -- kept so retired pillars still render
     from public.gov_votes g
     left join public.topics  t on t.id = g.topic_id
-    left join public.pillars p on p.id = t.pillar_id;
+    left join public.pillars p on p.id = t.pillar_id
+  union all
+  -- Network outcome rows: synthesized from chain_events for each consensus
+  -- moment. Binding outcomes (canonized/expelled/lapsed/deprecated/reaffirmed)
+  -- carry the evidence + binding via binding_hash; taxonomy outcomes
+  -- (PillarRatified / TopicRatified / NodeRetired / ProposalLapsed) resolve
+  -- the pillar/topic via payload->>'node_hash'. peer_addr is null + peer_handle
+  -- is 'Network' so the UI renders these as Network actions, not peer votes.
+  select ('ce:' || ce.id::text) as id,
+         ce.evidence_id,
+         b.id                as binding_id,
+         null::text          as peer_addr,
+         'Network'::text     as peer_handle,
+         case
+           when ce.event_name in ('BindingCanonized','BindingExpelled','BindingLapsed') then 'review'
+           when ce.event_name in ('BindingDeprecated','BindingReaffirmed')              then 'challenge'
+           else 'taxonomy'
+         end                 as phase,
+         case ce.event_name
+           when 'BindingCanonized'  then 'canonized'
+           when 'BindingExpelled'   then 'expelled'
+           when 'BindingLapsed'     then 'lapsed'
+           when 'BindingDeprecated' then 'deprecated'
+           when 'BindingReaffirmed' then 'reaffirmed'
+           when 'PillarRatified'    then 'ratified'
+           when 'TopicRatified'     then 'ratified'
+           when 'NodeRetired'       then 'retired'
+           when 'ProposalLapsed'    then 'lapsed'
+         end                 as verdict,
+         null::text          as note,
+         coalesce(ce.occurred_at, ce.inserted_at) as created_at,
+         null::text          as eip712_sig,
+         ce.tx_hash,
+         ev.title            as evidence_title,
+         ev.search_text      as evidence_search_text,
+         ce.evidence_id::text as evidence_id_text,
+         coalesce(b.pillar_id, pn_direct.id, pn_viatopic.id) as pillar_id,
+         coalesce(b.topic_id, tn.id)                         as topic_id,
+         coalesce(t.title, tn.title)                         as topic_title,
+         ev.source           as evidence_source,
+         ev.year             as evidence_year,
+         ev.excerpt          as evidence_excerpt,
+         ev.link             as evidence_link,
+         ev.tier             as evidence_tier,
+         ev.content_hash,
+         ev.submission_tx_hash,
+         'network'::text     as proof_type,
+         (ce.payload->>'binding_hash')                       as binding_hash,
+         null::integer       as round,
+         null::text          as note_hash,
+         coalesce((ce.payload->>'binding_hash'), (ce.payload->>'node_hash')) as node_hash,
+         coalesce(p.title, pn_direct.title, pn_viatopic.title) as pillar_title
+    from public.chain_events ce
+    left join public.bindings b          on b.binding_hash = (ce.payload->>'binding_hash')
+    left join public.evidence ev         on ev.id = ce.evidence_id
+    left join public.topics   t          on t.id = b.topic_id
+    left join public.pillars  p          on p.id = b.pillar_id
+    -- Taxonomy-outcome lookups via payload.node_hash (binding-outcome rows
+    -- have no node_hash payload, so these joins yield null and fall through).
+    left join public.topics   tn         on tn.node_hash = (ce.payload->>'node_hash')
+    left join public.pillars  pn_direct  on pn_direct.node_hash = (ce.payload->>'node_hash')
+    left join public.pillars  pn_viatopic on pn_viatopic.id = tn.pillar_id
+   where ce.event_name in (
+     'BindingCanonized','BindingExpelled','BindingLapsed',
+     'BindingDeprecated','BindingReaffirmed',
+     'PillarRatified','TopicRatified','NodeRetired','ProposalLapsed'
+   );
 grant select on public.vote_log_view to anon, authenticated;
