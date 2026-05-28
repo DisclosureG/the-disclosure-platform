@@ -1,5 +1,4 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import Element115 from '../components/Element115';
 import WalletButton from '../components/WalletButton';
 import AttestationVerifier from '../components/AttestationVerifier';
 import { useTierCounts, useTaxonomy, useRecentVotes, usePeerHandleMap, fetchBindingPreview } from '../evidence-data';
@@ -77,12 +76,12 @@ function Nav() {
     <nav className="nav">
       <div className="nav-inner">
         <a href="#top" className="brand">
-          <span className="brand-text">The Disclosure Platform<small>The Web3 Social Network</small></span>
+          <span className="brand-text">The Disclosure Platform<small>The DeSci Network</small></span>
         </a>
         <div className="nav-links">
           <a href="#top" className="is-active">Home</a>
-          <a href="/evidence/">Evidence</a>
-          <a href="/peer-review/">Peer Review</a>
+          <a href="/demo/evidence/">Evidence</a>
+          <a href="/demo/peer-review/">Peer Review</a>
         </div>
         <div className="nav-right">
           <WalletButton />
@@ -92,22 +91,74 @@ function Nav() {
   );
 }
 
-// Bohr-model atom of Element 115 (Moscovium) — rotating electron shells around a
-// proton/neutron nucleus, with the periodic-table cell.
+// Product tour — poster thumbnail in the hero; click opens a centred lightbox
+// that plays the video at its native aspect ratio with native controls.
 function HeroOrbit() {
+  const [open, setOpen] = useState(false);
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKey);
+    // Autoplay once the modal is mounted so the user lands on a moving frame.
+    const v = videoRef.current;
+    if (v) { try { v.currentTime = 0; v.play(); } catch {} }
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   return (
-    <div className="h-orbit" aria-hidden="true">
-      <Element115 size="full" />
-    </div>
+    <>
+      <button
+        type="button"
+        className="h-orbit h-tour"
+        onClick={() => setOpen(true)}
+        aria-label="Play product tour"
+      >
+        <img
+          className="h-tour-poster"
+          src="/demo/artefacts/tour-poster.jpg"
+          alt=""
+          aria-hidden="true"
+        />
+        <span className="h-tour-play" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7z" fill="currentColor" /></svg>
+        </span>
+      </button>
+      {open && (
+        <div className="h-tour-modal" role="dialog" aria-modal="true" onClick={() => setOpen(false)}>
+          <div className="h-tour-modal-frame" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="h-tour-modal-close"
+              onClick={() => setOpen(false)}
+              aria-label="Close"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" fill="none" /></svg>
+            </button>
+            <video
+              ref={videoRef}
+              className="h-tour-modal-video"
+              src="/demo/artefacts/tour.mp4"
+              poster="/demo/artefacts/tour-poster.jpg"
+              controls
+              playsInline
+              preload="metadata"
+              controlsList="nodownload noremoteplayback"
+            />
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
-function Hero({ counts, pillarCount, peerCount }) {
-  const stats = [
-    { v: (counts?.total ?? 0).toLocaleString(), lab: 'Evidence' },
-    { v: pillarCount ?? '—', lab: 'Pillars' },
-    { v: peerCount ?? '—', lab: 'Verified peers' },
-  ];
+function Hero() {
   return (
     <section id="top" className="h-hero">
       <div className="h-hero-inner">
@@ -121,26 +172,18 @@ function Hero({ counts, pillarCount, peerCount }) {
             blockchain.
           </p>
           <p className="lead-link">
-            <a href="/artefacts/labour-of-love.pdf" target="_blank" rel="noopener noreferrer">
+            <a href="/demo/artefacts/labour-of-love.pdf" target="_blank" rel="noopener noreferrer">
               Read the philosophy — A Labour of Love <span aria-hidden="true">→</span>
             </a>
           </p>
           <div className="h-hero-cta">
-            <a className="btn btn--primary" href="/evidence/">Explore evidence <span>→</span></a>
+            <a className="btn btn--primary" href="/demo/evidence/">Explore evidence <span>→</span></a>
             <a className="btn" href="#become-a-peer">Become a peer</a>
           </div>
         </div>
         <div className="h-hero-right">
           <div className="h-orbit-side">
             <HeroOrbit />
-            <div className="h-orbit-stats">
-              {stats.map(s => (
-                <div className="h-orbit-stat" key={s.lab}>
-                  <div className="v">{s.v}</div>
-                  <div className="lab">{s.lab}</div>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       </div>
@@ -282,7 +325,7 @@ function LiveArchive({ counts, pillarCount, topicCount, peerCount, votes, handle
       <div className="h-votes">
         <div className="h-votes-head">
           <span className="h-votes-label"><span className="dot" /> Live consensus · every vote signed &amp; on-chain</span>
-          <a className="h-votes-link" href="/peer-review/?observe=1">Open the full vote history <span aria-hidden="true">→</span></a>
+          <a className="h-votes-link" href="/demo/peer-review/?observe=1">Open the full vote history <span aria-hidden="true">→</span></a>
         </div>
         <div className="h-votes-table" role="table" aria-label="Recent on-chain peer votes">
           <div className="h-vote-row is-head" role="row">
@@ -328,8 +371,8 @@ function BecomePeer({ peerCount }) {
             administrator.{peerCount != null ? ` ${peerCount} verified peers today.` : ''}
           </p>
           <div className="h-peer-cta">
-            <a className="btn btn--primary" href="/peer-review/"><WalletIcon /> Open Peer Review <span>→</span></a>
-            <a className="btn" href="/artefacts/peer-review-engineering.pdf" target="_blank" rel="noopener noreferrer">Read the engineering paper <span aria-hidden="true">↗</span></a>
+            <a className="btn btn--primary" href="/demo/peer-review/"><WalletIcon /> Open Peer Review <span>→</span></a>
+            <a className="btn" href="/demo/artefacts/peer-review-engineering.pdf" target="_blank" rel="noopener noreferrer">Read the engineering paper <span aria-hidden="true">↗</span></a>
           </div>
         </div>
         <div className="h-three">
@@ -365,9 +408,10 @@ function Manifesto() {
             {nots.map(n => <li key={n}>{n}</li>)}
           </ul>
           <p>
-            <strong>The Disclosure Platform</strong> is infrastructure for evidence,
-            not a place to socialise. There is no follower count, no profile photo,
-            no engagement loop. Peers carry handles and signatures, not vanity.
+            <strong>The Disclosure Platform</strong> is a <strong>decentralized
+            science (DeSci) network</strong> — infrastructure for evidence, not a
+            place to socialise. There is no follower count, no profile photo, no
+            engagement loop. Peers carry handles and signatures, not vanity.
           </p>
           <p>
             Submissions are public the instant they land. The contract is the only
@@ -402,7 +446,7 @@ export default function Home() {
   return (
     <div className="shell">
       <Nav />
-      <Hero counts={counts} pillarCount={tax.pillars.length} peerCount={peerCount} />
+      <Hero />
       <Reveal><SimpleIdea /></Reveal>
       <Reveal>
         <LiveArchive

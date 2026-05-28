@@ -76,13 +76,13 @@ function Nav() {
   return (
     <nav className="nav">
       <div className="nav-inner">
-        <a href="/" className="brand">
+        <a href="/demo/" className="brand">
           <span className="brand-text">The Disclosure Platform<small>Public archive — read freely, submit freely</small></span>
         </a>
         <div className="nav-links">
-          <a href="/">Home</a>
+          <a href="/demo/">Home</a>
           <a href="#top" className="is-active">Evidence</a>
-          <a href="/peer-review/">Peer Review</a>
+          <a href="/demo/peer-review/">Peer Review</a>
         </div>
         <div className="nav-right">
           <WalletButton />
@@ -710,7 +710,7 @@ function EmptyArchive({ contractAddr }) {
         You are watching the network&rsquo;s first day.
       </p>
       <div className="ev-archive-empty-cta">
-        <a className="ev-btn ev-btn-primary" href="/peer-review/">Propose the first pillar in Peer Review →</a>
+        <a className="ev-btn ev-btn-primary" href="/demo/peer-review/">Propose the first pillar in Peer Review →</a>
       </div>
       <div className="ev-archive-empty-meta">
         <span>Chain · <b>Binance Smart Chain</b></span>
@@ -921,7 +921,7 @@ function DetailModal({ e, onClose, walletPeer, vote }) {
           <div className="ev-challenge-section">
             {!walletPeer?.isPeer ? (
               <p style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em', color: 'var(--ink-faint)', margin: 0 }}>
-                <a href="/peer-review/" style={{ color: 'var(--accent-2)' }}>Connect as a verified peer →</a>
+                <a href="/demo/peer-review/" style={{ color: 'var(--accent-2)' }}>Connect as a verified peer →</a>
                 {' '}to challenge this evidence.
               </p>
             ) : walletPeer.cooldownSecs > 0 ? (
@@ -968,7 +968,7 @@ function DetailModal({ e, onClose, walletPeer, vote }) {
         {challenged && (
           <div className="ev-challenge-section ev-challenge-filed">
             Challenge filed. Verified peers will vote in{' '}
-            <a href="/peer-review/">Peer Review →</a>
+            <a href="/demo/peer-review/">Peer Review →</a>
             {chainWarning && (
               <p style={{ marginTop: 8, fontSize: 11, fontFamily: 'var(--mono)', letterSpacing: '0.08em', color: 'var(--warn)', opacity: 0.85 }}>
                 ⚠ {chainWarning}

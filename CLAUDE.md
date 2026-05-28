@@ -6,8 +6,9 @@ authoritative — pointers to source, not duplicated content.
 ## On-chain archive — "Evidence"
 
 The project runs a single smart contract on BSC. The public archive is branded
-**Evidence — the Web3 Social Platform** in the UI; the on-chain contract and
-the Supabase tables keep the `EvidenceConsensus` / `evidence` names.
+**Evidence — the DeSci Network** (decentralized science) in the UI; the
+on-chain contract and the Supabase tables keep the `EvidenceConsensus` /
+`evidence` names.
 
 - **`EvidenceConsensus`** — holds the canonical peer set, nominee/revoke
   governance, the **Pillar → Topic taxonomy**, and evidence records under a

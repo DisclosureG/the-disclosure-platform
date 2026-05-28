@@ -1,8 +1,8 @@
 # The Disclosure Platform
 
 A public, on-chain archive of evidence — submitted, reviewed, and attested by a
-verified peer network. The archive is branded **Evidence — the Web3 Social
-Platform** in the UI; the on-chain contract and database keep the
+verified peer network. The archive is branded **Evidence — the DeSci Network**
+(decentralized science) in the UI; the on-chain contract and database keep the
 `EvidenceConsensus` / `evidence` naming.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)

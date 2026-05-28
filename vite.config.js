@@ -4,26 +4,25 @@ import { resolve } from 'path'
 import fs from 'fs'
 import { cp, rm } from 'fs/promises'
 
+// The whole platform is served under /demo/. The site root (/) is a static
+// landing page from landing/index.html, copied into dist/ after the Vite build.
 const multiPageMiddleware = {
   name: 'serve-multi-page',
   apply: 'serve',
   configureServer(server) {
     server.middlewares.use(async (req, res, next) => {
       const url = req.url.split('?')[0]
+      let file = null
       if (url === '/' || url === '') {
-        const file = resolve(__dirname, 'src/index.html')
-        const html = fs.readFileSync(file, 'utf-8')
-        const transformed = await server.transformIndexHtml(url, html)
-        res.setHeader('Content-Type', 'text/html')
-        res.end(transformed)
-      } else if (url.startsWith('/evidence')) {
-        const file = resolve(__dirname, 'src/evidence/index.html')
-        const html = fs.readFileSync(file, 'utf-8')
-        const transformed = await server.transformIndexHtml(url, html)
-        res.setHeader('Content-Type', 'text/html')
-        res.end(transformed)
-      } else if (url.startsWith('/peer-review')) {
-        const file = resolve(__dirname, 'src/peer-review/index.html')
+        file = resolve(__dirname, 'landing/index.html')
+      } else if (url === '/demo' || url === '/demo/') {
+        file = resolve(__dirname, 'src/index.html')
+      } else if (url === '/demo/evidence' || url.startsWith('/demo/evidence/')) {
+        file = resolve(__dirname, 'src/evidence/index.html')
+      } else if (url === '/demo/peer-review' || url.startsWith('/demo/peer-review/')) {
+        file = resolve(__dirname, 'src/peer-review/index.html')
+      }
+      if (file) {
         const html = fs.readFileSync(file, 'utf-8')
         const transformed = await server.transformIndexHtml(url, html)
         res.setHeader('Content-Type', 'text/html')
@@ -35,29 +34,45 @@ const multiPageMiddleware = {
   }
 }
 
+// Vite builds the platform into dist/demo/ (base = '/demo/'). After the build
+// we (1) lift the HTML files out of the dist/demo/src/* nested input tree, and
+// (2) drop the static landing/index.html at dist/index.html.
 const cleanupBuildOutput = {
   name: 'cleanup-build-output',
   apply: 'build',
   async closeBundle() {
     const distDir = resolve(__dirname, 'dist')
-    const srcDir = resolve(distDir, 'src')
+    const demoDir = resolve(distDir, 'demo')
+    const srcDir = resolve(demoDir, 'src')
     try {
-      // Move files from dist/src/* to dist/* and remove dist/src
-      await cp(resolve(srcDir, 'index.html'), resolve(distDir, 'index.html'), { force: true })
-      await cp(resolve(srcDir, 'evidence', 'index.html'), resolve(distDir, 'evidence', 'index.html'), { force: true })
-      await cp(resolve(srcDir, 'peer-review', 'index.html'), resolve(distDir, 'peer-review', 'index.html'), { force: true })
+      await cp(resolve(srcDir, 'index.html'), resolve(demoDir, 'index.html'), { force: true })
+      await cp(resolve(srcDir, 'evidence', 'index.html'), resolve(demoDir, 'evidence', 'index.html'), { force: true })
+      await cp(resolve(srcDir, 'peer-review', 'index.html'), resolve(demoDir, 'peer-review', 'index.html'), { force: true })
       await rm(srcDir, { recursive: true, force: true })
+      await cp(resolve(__dirname, 'landing/index.html'), resolve(distDir, 'index.html'), { force: true })
     } catch (e) {
       console.warn('Cleanup output warning:', e.message)
     }
   }
 }
 
+// emptyOutDir only clears dist/demo (the configured outDir), so stale files
+// from previous root-base builds (dist/index.html, dist/assets/, dist/evidence/,
+// dist/peer-review/, dist/artefacts/) would otherwise persist and ship. Wipe
+// dist/ at build start so the new layout is the only thing left.
+const cleanDistBeforeBuild = {
+  name: 'clean-dist-before-build',
+  apply: 'build',
+  async buildStart() {
+    await rm(resolve(__dirname, 'dist'), { recursive: true, force: true })
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), multiPageMiddleware, cleanupBuildOutput],
-  base: '/',
+  plugins: [react(), multiPageMiddleware, cleanDistBeforeBuild, cleanupBuildOutput],
+  base: '/demo/',
   build: {
-    outDir: 'dist',
+    outDir: 'dist/demo',
     assetsDir: 'assets',
     emptyOutDir: true,
     rollupOptions: {

@@ -27,6 +27,9 @@ blockchain/cache/
 # Supabase CLI temp
 supabase/.temp/
 
+# Remotion launch-video project — local-only, not part of the deploy
+demo/
+
 # LaTeX build artifacts (whitepaper .tex sources + compiled .pdf stay tracked)
 public/artefacts/*.aux
 public/artefacts/*.log

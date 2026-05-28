@@ -111,13 +111,13 @@ function Nav({ wallet, handle, onConnect, onDisconnect, connecting }) {
   return (
     <nav className="nav">
       <div className="nav-inner">
-        <a href="/" className="brand">
+        <a href="/demo/" className="brand">
           <span className="brand-text">The Disclosure Platform<small>Peer Review · Verified peers only</small></span>
         </a>
         <div className="nav-links">
-          <a href="/">Home</a>
-          <a href="/evidence/">Evidence</a>
-          <a href="/peer-review/" className="is-active">Peer Review</a>
+          <a href="/demo/">Home</a>
+          <a href="/demo/evidence/">Evidence</a>
+          <a href="/demo/peer-review/" className="is-active">Peer Review</a>
         </div>
         <div className="nav-right">
           {wallet ? (
