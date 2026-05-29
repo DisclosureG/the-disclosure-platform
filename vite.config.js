@@ -4,8 +4,10 @@ import { resolve } from 'path'
 import fs from 'fs'
 import { cp, rm } from 'fs/promises'
 
-// The whole platform is served under /demo/. The site root (/) is a static
-// landing page from landing/index.html, copied into dist/ after the Vite build.
+// The platform is served from the site root (/). The home page is the SPA's
+// main entry (src/index.html); the Evidence and Peer Review sub-apps live at
+// /evidence/ and /peer-review/. This dev middleware maps those clean URLs to
+// their HTML entry points so deep links resolve before Vite's static handler.
 const multiPageMiddleware = {
   name: 'serve-multi-page',
   apply: 'serve',
@@ -14,12 +16,10 @@ const multiPageMiddleware = {
       const url = req.url.split('?')[0]
       let file = null
       if (url === '/' || url === '') {
-        file = resolve(__dirname, 'landing/index.html')
-      } else if (url === '/demo' || url === '/demo/') {
         file = resolve(__dirname, 'src/index.html')
-      } else if (url === '/demo/evidence' || url.startsWith('/demo/evidence/')) {
+      } else if (url === '/evidence' || url.startsWith('/evidence/')) {
         file = resolve(__dirname, 'src/evidence/index.html')
-      } else if (url === '/demo/peer-review' || url.startsWith('/demo/peer-review/')) {
+      } else if (url === '/peer-review' || url.startsWith('/peer-review/')) {
         file = resolve(__dirname, 'src/peer-review/index.html')
       }
       if (file) {
@@ -34,45 +34,31 @@ const multiPageMiddleware = {
   }
 }
 
-// Vite builds the platform into dist/demo/ (base = '/demo/'). After the build
-// we (1) lift the HTML files out of the dist/demo/src/* nested input tree, and
-// (2) drop the static landing/index.html at dist/index.html.
+// Vite emits the HTML entries into the nested input tree (dist/src/*). Lift them
+// out to the locations the site serves from: the home page at dist/index.html,
+// and the sub-apps at dist/evidence/ and dist/peer-review/.
 const cleanupBuildOutput = {
   name: 'cleanup-build-output',
   apply: 'build',
   async closeBundle() {
     const distDir = resolve(__dirname, 'dist')
-    const demoDir = resolve(distDir, 'demo')
-    const srcDir = resolve(demoDir, 'src')
+    const srcDir = resolve(distDir, 'src')
     try {
-      await cp(resolve(srcDir, 'index.html'), resolve(demoDir, 'index.html'), { force: true })
-      await cp(resolve(srcDir, 'evidence', 'index.html'), resolve(demoDir, 'evidence', 'index.html'), { force: true })
-      await cp(resolve(srcDir, 'peer-review', 'index.html'), resolve(demoDir, 'peer-review', 'index.html'), { force: true })
+      await cp(resolve(srcDir, 'index.html'), resolve(distDir, 'index.html'), { force: true })
+      await cp(resolve(srcDir, 'evidence', 'index.html'), resolve(distDir, 'evidence', 'index.html'), { force: true })
+      await cp(resolve(srcDir, 'peer-review', 'index.html'), resolve(distDir, 'peer-review', 'index.html'), { force: true })
       await rm(srcDir, { recursive: true, force: true })
-      await cp(resolve(__dirname, 'landing/index.html'), resolve(distDir, 'index.html'), { force: true })
     } catch (e) {
       console.warn('Cleanup output warning:', e.message)
     }
   }
 }
 
-// emptyOutDir only clears dist/demo (the configured outDir), so stale files
-// from previous root-base builds (dist/index.html, dist/assets/, dist/evidence/,
-// dist/peer-review/, dist/artefacts/) would otherwise persist and ship. Wipe
-// dist/ at build start so the new layout is the only thing left.
-const cleanDistBeforeBuild = {
-  name: 'clean-dist-before-build',
-  apply: 'build',
-  async buildStart() {
-    await rm(resolve(__dirname, 'dist'), { recursive: true, force: true })
-  }
-}
-
 export default defineConfig({
-  plugins: [react(), multiPageMiddleware, cleanDistBeforeBuild, cleanupBuildOutput],
-  base: '/demo/',
+  plugins: [react(), multiPageMiddleware, cleanupBuildOutput],
+  base: '/',
   build: {
-    outDir: 'dist/demo',
+    outDir: 'dist',
     assetsDir: 'assets',
     emptyOutDir: true,
     rollupOptions: {

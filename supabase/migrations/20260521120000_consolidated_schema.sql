@@ -63,7 +63,7 @@ create table public.pillars (
   tag         text,
   blurb       text,
   ord         integer not null default 0,
-  status      text not null default 'proposed' check (status in ('proposed','ratified','lapsed','retired')),
+  status      text not null default 'proposed' check (status in ('proposed','ratified','lapsed','rejected','retired')),
   meta_hash   text,
   proposed_by text,
   propose_tx  text,
@@ -77,7 +77,7 @@ create table public.topics (
   title       text not null,
   blurb       text,
   ord         integer not null default 0,
-  status      text not null default 'proposed' check (status in ('proposed','ratified','lapsed','retired')),
+  status      text not null default 'proposed' check (status in ('proposed','ratified','lapsed','rejected','retired')),
   meta_hash   text,
   proposed_by text,
   propose_tx  text,
@@ -843,8 +843,8 @@ create view public.vote_log_view with (security_invoker = true) as
   -- Network outcome rows: synthesized from chain_events for each consensus
   -- moment. Binding outcomes (canonized/expelled/lapsed/deprecated/reaffirmed)
   -- carry the evidence + binding via binding_hash; taxonomy outcomes
-  -- (PillarRatified / TopicRatified / NodeRetired / ProposalLapsed) resolve
-  -- the pillar/topic via payload->>'node_hash'. peer_addr is null + peer_handle
+  -- (PillarRatified / TopicRatified / NodeRetired / ProposalLapsed / NodeRejected)
+  -- resolve the pillar/topic via payload->>'node_hash'. peer_addr is null + peer_handle
   -- is 'Network' so the UI renders these as Network actions, not peer votes.
   select ('ce:' || ce.id::text) as id,
          ce.evidence_id,
@@ -866,6 +866,7 @@ create view public.vote_log_view with (security_invoker = true) as
            when 'TopicRatified'     then 'ratified'
            when 'NodeRetired'       then 'retired'
            when 'ProposalLapsed'    then 'lapsed'
+           when 'NodeRejected'      then 'rejected'
          end                 as verdict,
          null::text          as note,
          coalesce(ce.occurred_at, ce.inserted_at) as created_at,
@@ -903,6 +904,6 @@ create view public.vote_log_view with (security_invoker = true) as
    where ce.event_name in (
      'BindingCanonized','BindingExpelled','BindingLapsed',
      'BindingDeprecated','BindingReaffirmed',
-     'PillarRatified','TopicRatified','NodeRetired','ProposalLapsed'
+     'PillarRatified','TopicRatified','NodeRetired','ProposalLapsed','NodeRejected'
    );
 grant select on public.vote_log_view to anon, authenticated;

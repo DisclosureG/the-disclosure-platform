@@ -2,33 +2,27 @@
   command   = "npm run build"
   publish   = "dist"
 
-# Platform SPAs live under /demo/. SPA fallbacks must come first so deep links
-# (e.g. /demo/evidence/foo) resolve to the section's index.html, not the root.
+# The platform SPA is served from the site root. The sub-app SPA fallbacks must
+# come first so deep links (e.g. /evidence/foo) resolve to the section's
+# index.html, and the catch-all serves the home page for everything else.
 
 [[redirects]]
-  from   = "/demo/peer-review/*"
-  to     = "/demo/peer-review/index.html"
+  from   = "/peer-review/*"
+  to     = "/peer-review/index.html"
   status = 200
 
 [[redirects]]
-  from   = "/demo/evidence/*"
-  to     = "/demo/evidence/index.html"
+  from   = "/evidence/*"
+  to     = "/evidence/index.html"
   status = 200
 
-[[redirects]]
-  from   = "/demo/*"
-  to     = "/demo/index.html"
-  status = 200
-
-# Root serves the static landing page (dist/index.html). The catch-all keeps
-# unknown root paths on the landing rather than 404ing.
 [[redirects]]
   from   = "/*"
   to     = "/index.html"
   status = 200
 
 [[headers]]
-  for = "/demo/assets/*"
+  for = "/assets/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
 

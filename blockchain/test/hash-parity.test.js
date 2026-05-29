@@ -86,13 +86,19 @@ describe("hash parity — wallet-impl ↔ edge functions", () => {
     { kind: "pillar", slug: "p2",              parent: "",              title: "é ✓ Σ",              blurb: "",   tag: null },
   ];
 
+  // The wallet hash is now derived from the extracted canonical-JSON builder
+  // (canonicalContentJSON / canonicalMetaJSON) — the SAME string that is both
+  // hashed AND published on-chain to EvidenceArchive. Hashing it here proves the
+  // published string still hashes to the value the edge functions compute.
+  const keccakUtf8 = s => ethers.keccak256(ethers.toUtf8Bytes(s));
+
   it("computeContentHash agrees across wallet-impl, audit-content-hash, and verify-attestation", () => {
-    const w = compile(extractBody(wallet, "computeContentHash"), "{ title, source, year, excerpt, link, tier }");
+    const wCanon = compile(extractBody(wallet, "canonicalContentJSON"), "{ title, source, year, excerpt, link, tier }");
     const a = compile(extractBody(audit,  "computeContentHash"), "payload");
     const v = compile(extractBody(verify, "computeContentHash"), "payload");
     for (const fx of CONTENT_FIXTURES) {
       const label = JSON.stringify(fx);
-      const hw = w(fx).toLowerCase();
+      const hw = keccakUtf8(wCanon(fx)).toLowerCase();
       expect(hw, `wallet shape for ${label}`).to.match(/^0x[0-9a-f]{64}$/);
       expect(a(fx).toLowerCase(), `audit-content-hash vs wallet for ${label}`).to.equal(hw);
       expect(v(fx).toLowerCase(), `verify-attestation vs wallet for ${label}`).to.equal(hw);
@@ -112,11 +118,11 @@ describe("hash parity — wallet-impl ↔ edge functions", () => {
   });
 
   it("computeMetaHash agrees across wallet-impl and audit-content-hash", () => {
-    const w = compile(extractBody(wallet, "computeMetaHash"), "{ kind, slug, parent, title, blurb, tag }");
+    const wCanon = compile(extractBody(wallet, "canonicalMetaJSON"), "{ kind, slug, parent, title, blurb, tag }");
     const a = compile(extractBody(audit,  "computeMetaHash"), "node");
     for (const fx of META_FIXTURES) {
       const label = JSON.stringify(fx);
-      const hw = w(fx).toLowerCase();
+      const hw = keccakUtf8(wCanon(fx)).toLowerCase();
       expect(hw, `wallet shape for ${label}`).to.match(/^0x[0-9a-f]{64}$/);
       expect(a(fx).toLowerCase(), `audit-content-hash vs wallet for ${label}`).to.equal(hw);
     }
@@ -131,13 +137,13 @@ describe("hash parity — wallet-impl ↔ edge functions", () => {
   });
 
   it("pins the canonical content/slug/meta bytes (tripwire for any silent canon change)", () => {
-    const content = compile(extractBody(wallet, "computeContentHash"), "{ title, source, year, excerpt, link, tier }");
-    const slug    = compile(extractBody(wallet, "slugToBytes32"), "slug");
-    const meta    = compile(extractBody(wallet, "computeMetaHash"), "{ kind, slug, parent, title, blurb, tag }");
-    expect(content({ title: "Roswell", source: "AAF", year: "1947", excerpt: "debris", link: "https://x", tier: 1 }).toLowerCase())
+    const contentCanon = compile(extractBody(wallet, "canonicalContentJSON"), "{ title, source, year, excerpt, link, tier }");
+    const slug         = compile(extractBody(wallet, "slugToBytes32"), "slug");
+    const metaCanon    = compile(extractBody(wallet, "canonicalMetaJSON"), "{ kind, slug, parent, title, blurb, tag }");
+    expect(keccakUtf8(contentCanon({ title: "Roswell", source: "AAF", year: "1947", excerpt: "debris", link: "https://x", tier: 1 })).toLowerCase())
       .to.equal(GOLDEN_CONTENT);
     expect(slug("pillar-default").toLowerCase()).to.equal(GOLDEN_SLUG);
-    expect(meta({ kind: "pillar", slug: "pillar-default", parent: "", title: "Default Pillar", blurb: "b", tag: "t" }).toLowerCase())
+    expect(keccakUtf8(metaCanon({ kind: "pillar", slug: "pillar-default", parent: "", title: "Default Pillar", blurb: "b", tag: "t" })).toLowerCase())
       .to.equal(GOLDEN_META);
   });
 });

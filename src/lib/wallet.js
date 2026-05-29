@@ -92,6 +92,7 @@ export const getProposedNodesAggregated     = (...a) => impl().then(m => m.getPr
 export const proposePillarOnChain           = (...a) => impl().then(m => m.proposePillarOnChain(...a));
 export const proposeTopicOnChain            = (...a) => impl().then(m => m.proposeTopicOnChain(...a));
 export const endorseNodeOnChain             = (...a) => impl().then(m => m.endorseNodeOnChain(...a));
+export const rejectNodeOnChain              = (...a) => impl().then(m => m.rejectNodeOnChain(...a));
 export const motionRetireNodeOnChain        = (...a) => impl().then(m => m.motionRetireNodeOnChain(...a));
 export const voteRetireNodeOnChain          = (...a) => impl().then(m => m.voteRetireNodeOnChain(...a));
 export const cancelStaleRetireOnChain       = (...a) => impl().then(m => m.cancelStaleRetireOnChain(...a));
@@ -119,6 +120,11 @@ export const motionForceRenounce            = (...a) => impl().then(m => m.motio
 export const voteForceRenounce              = (...a) => impl().then(m => m.voteForceRenounce(...a));
 export const submitEvidenceOnChain          = (...a) => impl().then(m => m.submitEvidenceOnChain(...a));
 export const fileBindingOnChain             = (...a) => impl().then(m => m.fileBindingOnChain(...a));
+// EvidenceArchive: publish readable content / node meta / note text on-chain.
+export const publishEvidenceContentOnChain  = (...a) => impl().then(m => m.publishEvidenceContentOnChain(...a));
+export const publishNodeMetaOnChain         = (...a) => impl().then(m => m.publishNodeMetaOnChain(...a));
+export const publishNoteOnChain             = (...a) => impl().then(m => m.publishNoteOnChain(...a));
+export const publishNotesOnChain            = (...a) => impl().then(m => m.publishNotesOnChain(...a));
 export const castReviewVoteOnChain          = (...a) => impl().then(m => m.castReviewVoteOnChain(...a));
 export const castReviewVoteBatchOnChain     = (...a) => impl().then(m => m.castReviewVoteBatchOnChain(...a));
 export const openChallengeOnChain           = (...a) => impl().then(m => m.openChallengeOnChain(...a));

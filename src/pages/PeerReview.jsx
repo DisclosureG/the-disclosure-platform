@@ -19,11 +19,11 @@ import {
   useTaxonomy, usePendingTaxonomy,
   deprecateThreshold, canonizeThreshold, bundleThreshold,
   PENDING_WINDOW_DAYS, CHALLENGE_WINDOW_DAYS, daysRemaining,
-  usePendingBindings, useContestedBindings, useAttestationLog, useDerivedConsensusRejects, usePeerRegistryLog,
+  usePendingBindings, useContestedBindings, useAttestationLog, usePeerRegistryLog,
   useQueuedBindings, useMyReviewCount, usePeerHandleMap, fetchBindingPreview,
   useSystemHealth, useTamperAlertCount,
   castReviewVote, castChallengeVote, finalizeChallengeSupabase,
-  proposeTaxonomyBundle, endorseNodeSupabase, rejectNodeSupabase, fetchMyTaxonomyRejects, fetchTaxonomyDissentCounts,
+  proposeTaxonomyBundle, endorseNodeSupabase, rejectNodeSupabase, fetchMyTaxonomyRejects,
   castRevocationKeep, castRevocationDiscard, castNomineeEndorse, castNominate, castGovNote,
   fetchMyRevocationKeeps, fetchRevocationKeepCounts,
 } from '../evidence-data';
@@ -47,12 +47,14 @@ import {
   getActivePeersAggregated, getNomineesAggregated,
   computeContentHash, computeMetaHash,
   getProposedNodesAggregated, hasEndorsedNode, getTaxonomyThreshold,
-  endorseNodeOnChain, proposePillarOnChain, proposeTopicOnChain, slugToBytes32, bindingKey,
+  endorseNodeOnChain, rejectNodeOnChain, proposePillarOnChain, proposeTopicOnChain, slugToBytes32, bindingKey,
   getRetireThreshold, isRetireActive, getRetireVoteCount, getRetireMotionAt, hasVotedForRetire,
   motionRetireNodeOnChain, voteRetireNodeOnChain, cancelStaleRetireOnChain,
   prefetchWallet,
 } from '../lib/wallet';
 import { cachedAddr, cacheAddr, cachedHandle, cacheHandle, cachedPeer, cachePeer } from '../lib/wallet-cache';
+import { BrandSigil } from '../components/Sparkle';
+import { fireConfetti } from '../lib/confetti';
 import metamaskFox from '../assets/metamask-fox.svg';
 import '../styles/shared.css';
 import '../styles/peer-review.css';
@@ -111,13 +113,14 @@ function Nav({ wallet, handle, onConnect, onDisconnect, connecting }) {
   return (
     <nav className="nav">
       <div className="nav-inner">
-        <a href="/demo/" className="brand">
-          <span className="brand-text">The Disclosure Platform<small>Peer Review · Verified peers only</small></span>
+        <a href="/" className="brand">
+          <BrandSigil />
+          <span className="brand-text">The Disclosure Platform<small>DeSci · Evidence Network</small></span>
         </a>
         <div className="nav-links">
-          <a href="/demo/">Home</a>
-          <a href="/demo/evidence/">Evidence</a>
-          <a href="/demo/peer-review/" className="is-active">Peer Review</a>
+          <a href="/">Home</a>
+          <a href="/evidence/">Evidence</a>
+          <a href="/peer-review/" className="is-active">Peer Review</a>
         </div>
         <div className="nav-right">
           {wallet ? (
@@ -125,9 +128,9 @@ function Nav({ wallet, handle, onConnect, onDisconnect, connecting }) {
               <Jazz addr={wallet} size={16} /> {handle || SHORT(wallet)}
             </button>
           ) : (
-            <button className="btn btn--primary btn--sm" onClick={onConnect} disabled={connecting}>
+            <button className="btn btn--primary btn--sm" onClick={onConnect} disabled={connecting} title="Sign in with a secure crypto wallet (e.g. MetaMask)">
               <img className="wallet-icon" src={metamaskFox} alt="" width="14" height="14" />
-              {connecting ? 'Connecting…' : 'Connect wallet'}
+              {connecting ? 'Signing in…' : 'Sign in securely'}
             </button>
           )}
         </div>
@@ -158,7 +161,7 @@ function ConnectScreen({ onConnect, onObserve, connecting, peerCount }) {
   const stats = [
     { v: peerCount ?? '—',         lab: 'Verified peers' },
     { v: nominees ?? '—',          lab: 'In nomination' },
-    { v: fmtCount(attestations),   lab: 'Attestations' },
+    { v: fmtCount(attestations),   lab: 'Signed votes' },
   ];
   return (
     <div className="pr-connect">
@@ -166,15 +169,15 @@ function ConnectScreen({ onConnect, onObserve, connecting, peerCount }) {
         <span className="eyebrow">Peer Review · Named peers verify the record</span>
         <h1 className="display" style={{ marginTop: 24 }}>A named<br />peer network<br /><em>signs the record.</em></h1>
         <p className="lead" style={{ maxWidth: '50ch', marginTop: 24 }}>
-          Verified peers review evidence submissions, challenge decisions, and grow the taxonomy through consensus.
-          Peers are wallet-signed, identifiable, and accountable. Every vote is signed and on-chain.
+          Verified peers review new evidence, weigh in on challenges, and grow the archive together.
+          Every peer is named and accountable, and every vote is signed and saved to a permanent public record.
         </p>
         <div style={{ display: 'flex', gap: 12, marginTop: 32, flexWrap: 'wrap' }}>
-          <button className="btn btn--primary btn--lg" onClick={onConnect} disabled={connecting}>
+          <button className="btn btn--primary btn--lg" onClick={onConnect} disabled={connecting} title="Sign in with a secure crypto wallet (e.g. MetaMask)">
             <img src={metamaskFox} alt="" width="18" height="18" style={{ display: 'inline', verticalAlign: 'middle' }} />
-            {connecting ? 'Connecting…' : 'Connect with MetaMask'}
+            {connecting ? 'Signing in…' : 'Sign in with your wallet'}
           </button>
-          <button className="btn btn--ghost btn--lg" onClick={onObserve}>Browse as observer →</button>
+          <button className="btn btn--ghost btn--lg" onClick={onObserve}>Look around first →</button>
         </div>
       </div>
 
@@ -709,10 +712,11 @@ function NominateModal({ me, onClose, onDone, setToast, seed = false }) {
 // casts ONE signed vote on the whole bundle:
 //   • Accept (endorse) → at threshold the node (and, for a pillar, its founding
 //     topic) ratifies and the founding evidence canonizes atomically on-chain.
-//   • Reject → a signed dissent recorded off-chain (no on-chain reject exists);
-//     the node simply lapses if endorsements never reach threshold.
-// Either way we preview the bundle and sign an EIP-712 attestation; an accept
-// also sends the on-chain endorseNode tx.
+//   • Reject → a signed dissent cast on-chain (Vote phase 2, support=false); once
+//     dissent makes ratification impossible the node is rejected outright,
+//     otherwise it lapses if endorsements never reach threshold.
+// Either way we preview the bundle and sign; both accept and reject send an
+// on-chain tx (endorseNode / rejectNode) — dev mode falls back to a bare sig.
 function BundleVoteModal({ payload, onCancel, onSign }) {
   const [note, setNote] = useState('');
   if (!payload) return null;
@@ -725,7 +729,7 @@ function BundleVoteModal({ payload, onCancel, onSign }) {
         <h3>{reject ? 'Reject' : 'Accept'} {kind === 'pillar' ? 'pillar bundle' : 'topic bundle'}</h3>
         <p className="sub">
           {reject
-            ? <>One signed dissent on the whole bundle. Recorded off-chain on the public log; the proposal lapses if endorsements never reach threshold.</>
+            ? <>One signed vote against the whole bundle — cast on-chain. Once dissent makes ratification impossible the proposal is rejected outright (otherwise it lapses if endorsements never reach threshold).</>
             : <>One signed vote on the whole bundle. At threshold the {kind === 'pillar' ? 'pillar, its founding topic,' : 'topic'} and the founding evidence ratify together — atomically, on-chain.</>}
         </p>
         <div className="preview">
@@ -764,8 +768,7 @@ function useTaxonomyReview(me) {
   const { pillars: rawPillars, topics: pTopics, refetch: refetchPending } = usePendingTaxonomy();
   const [chain, setChain] = useState({ threshold: 1, peerCount: 0, byHash: {}, mineByHash: {} });
   const [founding, setFounding] = useState({});            // founding binding+evidence, keyed by topic slug
-  const [myRejects, setMyRejects] = useState(() => new Set()); // founding binding ids I rejected off-chain
-  const [dissents, setDissents] = useState(() => new Map());   // founding binding id -> total off-chain reject count
+  const [myRejects, setMyRejects] = useState(() => new Set()); // founding binding ids I rejected (chain-backed mirror)
 
   // A proposed topic whose parent pillar is ITSELF still proposed is a pillar
   // bundle's founding topic — it ratifies with its pillar, never on its own, so
@@ -821,48 +824,17 @@ function useTaxonomyReview(me) {
   }, [me]);
   useEffect(() => { loadRejects(); }, [loadRejects, rawPillars.length, pTopics.length]);
 
-  // Total off-chain dissent count per founding binding — used to hide proposals
-  // whose ratification has become mathematically impossible.
-  const loadDissents = useCallback(() => {
-    const bindingIds = Object.values(founding).map(f => f?.bindingId).filter(Boolean);
-    return fetchTaxonomyDissentCounts(bindingIds).then(setDissents);
-  }, [founding]);
-  useEffect(() => { loadDissents(); }, [loadDissents]);
-
-  // A proposal is mathematically dead when remaining eligible endorsers
-  // (activePeers − current endorsements − dissents) is less than the
-  // endorsements still needed to reach bundleThreshold(tier). The contract
-  // has no on-chain reject, so the on-chain row stays Proposed until the
-  // 30-day window lapses — but we hide it from the vote queue so peers stop
-  // being asked to act on a dead proposal.
-  const deadHashes = useMemo(() => {
-    const dead = new Set();
-    const peers = chain.peerCount;
-    if (!peers) return dead;
-    const consider = (node, foundingTopic) => {
-      if (!foundingTopic) return;
-      const f = founding[foundingTopic.id];
-      if (!f || !f.bindingId || !f.tier) return;
-      const onchain = chain.byHash[node.node_hash];
-      const endorsements = Number(onchain?.endorsements ?? 1); // proposer counts as #1
-      const need = bundleThreshold(Number(f.tier), peers);
-      const noCount = dissents.get(f.bindingId) || 0;
-      const eligible = peers - endorsements - noCount;
-      if (eligible < need - endorsements) dead.add(node.node_hash);
-    };
-    for (const p of rawPillars) consider(p, foundingTopicByPillar[p.id]);
-    for (const t of rawStandaloneTopics) consider(t, t);
-    return dead;
-  }, [chain.peerCount, chain.byHash, rawPillars, rawStandaloneTopics, foundingTopicByPillar, founding, dissents]);
-
-  const pPillars = useMemo(
-    () => rawPillars.filter(p => !deadHashes.has(p.node_hash)),
-    [rawPillars, deadHashes],
-  );
-  const standaloneTopics = useMemo(
-    () => rawStandaloneTopics.filter(t => !deadHashes.has(t.node_hash)),
-    [rawStandaloneTopics, deadHashes],
-  );
+  // No client-side "ratification impossible" greying: the contract freezes each
+  // proposal's electorate at propose-time (`nodeSnapshot`) and settles it to
+  // terminal Rejected the instant rejections cross `rejections +
+  // bundleThreshold(tier) > snapshot` — synchronously, inside the reject tx. So a
+  // node still in the proposed set can never be mathematically dead, and a later
+  // peer-set SHRINK can no longer strand one (the frozen bar doesn't move).
+  // (The old live-count estimate here pre-dated the snapshot fix and would now
+  // only ever FALSE-positive after a shrink.) Rejected proposals leave this list
+  // once the indexer flips their row, so render the proposed set as-is.
+  const pPillars = rawPillars;
+  const standaloneTopics = rawStandaloneTopics;
 
   // Flat list of independently-endorsable proposals (proposed pillars +
   // standalone topics), each carrying its founding topic + evidence.
@@ -873,13 +845,18 @@ function useTaxonomyReview(me) {
   [pPillars, standaloneTopics, foundingTopicByPillar, founding]);
 
   // node_hash -> 'endorse' | 'reject' | undefined (this peer's position).
+  // `hasEndorsedNode` (mineByHash) is the on-chain "acted this round" bit — set by
+  // BOTH endorse and reject (one act per round) — so it authoritatively answers
+  // "have I voted?" but not the direction. The direction comes from the
+  // chain-backed reject mirror (myRejects), so check reject FIRST: acted + in
+  // myRejects = reject; acted + not = endorse.
   const voteStatus = useMemo(() => {
     const m = {};
     for (const o of openProposals) {
       const nh = o.node.node_hash;
       const fb = o.foundingTopic ? founding[o.foundingTopic.id]?.bindingId : null;
-      if (chain.mineByHash[nh]) m[nh] = 'endorse';
-      else if (fb && myRejects.has(fb)) m[nh] = 'reject';
+      if (fb && myRejects.has(fb)) m[nh] = 'reject';
+      else if (chain.mineByHash[nh]) m[nh] = 'endorse';
     }
     return m;
   }, [openProposals, chain.mineByHash, founding, myRejects]);
@@ -889,8 +866,8 @@ function useTaxonomyReview(me) {
     [openProposals, voteStatus],
   );
 
-  const refetch = useCallback(() => Promise.all([refetchPending(), loadChain(), loadRejects(), loadDissents()]),
-    [refetchPending, loadChain, loadRejects, loadDissents]);
+  const refetch = useCallback(() => Promise.all([refetchPending(), loadChain(), loadRejects()]),
+    [refetchPending, loadChain, loadRejects]);
 
   return {
     pPillars, standaloneTopics, foundingTopicByPillar, founding, chain,
@@ -972,18 +949,26 @@ function TaxonomyTab({ me, setToast, onPropose, review }) {
     const reject = verdict === 'reject';
     try {
       if (reject) {
-        // Off-chain dissent only — the contract has no reject-node call, so this
-        // stays an EIP-712 Attestation signed in the browser.
-        let sig;
+        // Reject is the on-chain by-sig Vote (phase 2, support=false): the
+        // signature the chain recovers IS the off-chain record, and once dissent
+        // makes ratification impossible the node flips to Rejected on-chain. Dev
+        // mode (no contract) falls back to an Attestation so the note is captured.
+        let txHash = null, sig = null, noteHash = null, round = null;
         try {
-          sig = await signAttestation({ evidenceId: evidence.evidenceId, topicId: topicSlug, phase: 'taxonomy', verdict, note }, me.addr);
-        } catch (e) { if (e?.code === 4001) return; setToast({ type: 'err', msg: 'Signature rejected' }); return; }
+          if (CONSENSUS_ADDR) {
+            ({ txHash, sig, noteHash, round } = await rejectNodeOnChain(node.node_hash, note));
+            await waitForTx(txHash);
+          } else {
+            sig = await signAttestation({ evidenceId: evidence.evidenceId, topicId: topicSlug, phase: 'taxonomy', verdict, note }, me.addr);
+          }
+        } catch (e) { if (e?.code === 4001) return; setToast({ type: 'err', msg: e?.message || 'Reject failed' }); return; }
         await rejectNodeSupabase({
           nodeHash: node.node_hash, evidenceId: evidence.evidenceId, topicId: topicSlug,
-          bindingId: evidence.bindingId, peerAddr: me.addr, peerHandle: me.handle, note, sig,
+          bindingId: evidence.bindingId, peerAddr: me.addr, peerHandle: me.handle, note, sig, txHash,
+          round, noteHash,
         });
         setToast({ type: 'info', msg: `Rejected “${node.title}”` });
-        loadRejects(); refetch();
+        loadChain(); loadRejects(); refetch();
       } else {
         // Endorse is the on-chain by-sig Vote (phase 2): the signature the chain
         // recovers IS the off-chain record. Dev mode (no contract) falls back to
@@ -1052,7 +1037,13 @@ function TaxonomyTab({ me, setToast, onPropose, review }) {
   const renderProposal = (node, kind, foundingTopic, evidence) => {
     const c = chain.byHash[node.node_hash];
     const endorsements = c?.endorsements ?? 1;
-    const threshold = chain.threshold || 1;
+    // The ratify gate is bundleThreshold(tier) = max(taxonomy majority, tier
+    // canonize) — frozen on-chain at propose-time. Show the live estimate
+    // (it equals the frozen gate unless the active set changed since the proposal
+    // opened) and INCLUDE the tier-canonize component the bare taxonomy threshold
+    // omits, so the bar can't read 100% while the proposal is still short of canon.
+    const tier = Number(evidence?.tier) || 0;
+    const threshold = tier ? bundleThreshold(tier, chain.peerCount || 1) : (chain.threshold || 1);
     const pct = Math.min(100, (endorsements / threshold) * 100);
     const myVote = voteStatus[node.node_hash];   // 'endorse' | 'reject' | undefined
     const pillar = kind === 'pillar' ? node : null;
@@ -1736,9 +1727,9 @@ function LogRow({ r, tax, onOpen, handleMap, onLinkback }) {
   const topicRetired  = !ratifiedTopic && !proposedTopic && !!r.topic_title;
 
   return (
-    <div className={`pr-log-row ${showNote ? 'is-noted' : ''} ${r.derived ? 'is-derived' : ''}`}>
+    <div className={`pr-log-row ${showNote ? 'is-noted' : ''}`}>
       <span className="t">{ago(r.created_at)}</span>
-      <span className={`verdict ${displayVerdict(r.verdict)}`}>{r.derived ? 'Consensus reject' : displayVerdict(r.verdict)}</span>
+      <span className={`verdict ${displayVerdict(r.verdict)}`}>{displayVerdict(r.verdict)}</span>
       <span className="pillar">
         <span
           className={`pr-log-node ${pillarRetired ? 'is-retired' : pillarPending ? 'is-proposed' : ''}`}
@@ -1763,9 +1754,7 @@ function LogRow({ r, tax, onOpen, handleMap, onLinkback }) {
         {isNetworkRow ? (
           <span
             className="pr-log-network"
-            title={r.derived
-              ? `Derived consensus outcome — computed from ${r.derived_dissents} signed dissents (no on-chain reject exists for taxonomy proposals).`
-              : 'Network consensus outcome — the chain emitted this when the vote tally crossed threshold'}
+            title="Network consensus outcome — the chain emitted this when the vote tally crossed threshold"
           >
             <span className="pr-log-network-dot" aria-hidden="true" />
             Network
@@ -1873,30 +1862,20 @@ function SystemHealthStrip() {
   );
 }
 
-function LogTab({ initialQuery = '', peerCount }) {
+function LogTab({ initialQuery = '' }) {
   const [q, setQ] = useState(initialQuery);
   const [debounced, setDebounced] = useState(initialQuery);
   const [verdict, setVerdict] = useState('');
   const [pillar, setPillar] = useState('');
   const [preview, setPreview] = useState(null);
   useEffect(() => { const t = setTimeout(() => setDebounced(q), 250); return () => clearTimeout(t); }, [q]);
+  // The log reads the unified vote_log_view, which already projects the
+  // "Network rejected by consensus" row straight from the on-chain NodeRejected
+  // event (verdict 'rejected') — no client-side synthesis needed.
   const { log, loading, hasMore, loadMore, total } = useAttestationLog(30, debounced, verdict);
-  // Synthetic "Network rejected by consensus" rows derived from the signed
-  // reject_node attestations — the contract has no on-chain reject for taxonomy
-  // proposals, so the public log gets a clearly-labelled Derived row at the
-  // moment cumulative dissents make ratification arithmetically impossible.
-  const derived = useDerivedConsensusRejects(peerCount, debounced, verdict);
   const tax = useTaxonomy();
   const handleMap = usePeerHandleMap();
-  // Merge derived rows with the loaded page and re-sort by time. Pillar filter
-  // applies to both — derived rows carry the same pillar_id as the underlying
-  // dissents. The total stat counts only real signed votes; derived rows are a
-  // projection of those, not a separate vote.
-  const merged = useMemo(() => {
-    const all = [...derived, ...log];
-    return all.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
-  }, [derived, log]);
-  const shown = pillar ? merged.filter(r => r.pillar_id === pillar) : merged;
+  const shown = pillar ? log.filter(r => r.pillar_id === pillar) : log;
 
   const openPreview = async (r) => {
     const p = await fetchBindingPreview({ bindingId: r.binding_id, evidenceId: r.evidence_id, pillarId: r.pillar_id, topicId: r.topic_id });
@@ -2434,7 +2413,7 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
         if (CONSENSUS_ADDR) {
           ({ txHash, sig, noteHash, round, bindingHash } =
             await castReviewVoteOnChain(b.id, topicHash, verdict === 'approve', note));
-          setChainPending('Confirming on-chain…'); await waitForTx(txHash); setChainPending(null);
+          setChainPending('Saving to the public record…'); await waitForTx(txHash); setChainPending(null);
         } else {
           ({ sig, noteHash, round, bindingHash } =
             await signVoteOnly(b.id, topicHash, 0, verdict === 'approve', note));
@@ -2451,7 +2430,7 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
         } catch (e) {
           if (!txHash) throw e;   // no contract: the off-chain write IS the vote
           console.warn('Off-chain attestation write failed (on-chain vote stands):', e);
-          setToast({ type: 'warn', msg: 'Vote cast on-chain — record will sync shortly' });
+          setToast({ type: 'warn', msg: 'Vote saved — the record will sync shortly' });
         }
         setMyVotes(v => ({ ...v, [b.bindingId]: verdict }));
         refetchQueue();
@@ -2474,7 +2453,7 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
         if (CONSENSUS_ADDR) {
           ({ txHash, sig, noteHash, round, bindingHash } =
             await castChallengeVoteOnChain(b.id, topicHash, support, note));
-          setChainPending('Confirming on-chain…'); await waitForTx(txHash); setChainPending(null);
+          setChainPending('Saving to the public record…'); await waitForTx(txHash); setChainPending(null);
         } else {
           ({ sig, noteHash, round, bindingHash } =
             await signVoteOnly(b.id, topicHash, 1, support, note));
@@ -2767,7 +2746,7 @@ function VerifiedWorkspace({ me, isGenesis, peerCount, setToast }) {
         </section>
       )}
 
-      {tab === 'log' && <LogTab key={logQuery} initialQuery={logQuery} peerCount={peerCount} />}
+      {tab === 'log' && <LogTab key={logQuery} initialQuery={logQuery} />}
       {tab === 'taxonomy' && <TaxonomyTab me={me} setToast={setToast} onPropose={() => setShowPropose(true)} review={taxReview} />}
       {tab === 'peers' && <PeersTab me={me} peerCount={peerCount} onNominate={() => setShowNominate(true)} onSeed={() => setShowSeed(true)} reloadSignal={reloadPeers} setToast={setToast} onPeerHistory={seePeerHistory} onRevocationChange={revGate.refetch} />}
 
@@ -2816,7 +2795,7 @@ function ObserverWorkspace({ wallet, peerCount, setToast }) {
 
       <SystemHealthStrip />
 
-      {tab === 'log'   && <LogTab key={logQuery} initialQuery={logQuery} peerCount={peerCount} />}
+      {tab === 'log'   && <LogTab key={logQuery} initialQuery={logQuery} />}
       {tab === 'peers' && <PeersTab me={null} peerCount={peerCount} onNominate={() => {}} setToast={setToast} onPeerHistory={seePeerHistory} />}
     </div>
   );
@@ -2842,6 +2821,15 @@ export default function PeerReview() {
   });
   const [peerCount, setPeerCount] = useState(1);
   const [toast, setToast] = useState(null);
+
+  // A short confetti burst on a genuine win — a signed vote, an endorsement, a
+  // proposal, a ratified bundle. Skip the routine "Heartbeat sent" notice (not a
+  // win) and any error/warning toast. fireConfetti() no-ops under reduced-motion.
+  useEffect(() => {
+    if (toast?.type === 'info' && !/heartbeat|liveness|cleared|pruned/i.test(toast.msg || '')) {
+      fireConfetti();
+    }
+  }, [toast]);
 
   const me = wallet ? { addr: wallet.toLowerCase(), handle: peerHandle } : null;
 

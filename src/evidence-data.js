@@ -1206,103 +1206,12 @@ export function useAttestationLog(pageSize = ATTESTATION_PAGE, query = '', verdi
   return { log, loading, hasMore, loadMore, total, refetch };
 }
 
-// ── Derived "consensus-reject" outcome rows ──────────────────────────────────
-//
-// The contract has no on-chain reject for taxonomy proposals — a node either
-// ratifies at endorse threshold or sits Proposed until its 30-day window lapses.
-// That leaves the public log without a "the network rejected this" moment, even
-// when peers have signed enough off-chain dissents to make ratification
-// arithmetically impossible.
-//
-// This hook fills that gap *honestly*: it derives a synthetic row from the
-// real signed reject_node attestations. A proposal is considered consensus-
-// rejected the moment its cumulative dissents reach `peers - need + 1`, where
-// `need = bundleThreshold(tier, peers)` — i.e. fewer eligible endorsers remain
-// than the threshold requires, so ratification is impossible regardless of how
-// many of them later endorse. The synthetic row carries `derived: true` so the
-// proof badge reads "Derived ✓" (not "On-chain" / "EIP-712"), and the timestamp
-// is the crossing dissent's, so it sits at the moment consensus was reached.
-//
-// Nothing is fabricated: each dissent that produces this outcome remains an
-// independently-verifiable row in the same log; this is a projection of them.
-export function useDerivedConsensusRejects(activePeers, query = '', verdict = '') {
-  const [rows, setRows] = useState([]);
-
-  const terms = query.trim().replace(/[,()*"%\\]/g, '').split(/\s+/).filter(Boolean);
-  const termsKey = terms.join(' ');
-  const v = ['approve', 'reject', 'challenge', 'defend'].includes(verdict) ? verdict : '';
-
-  useEffect(() => {
-    if (!activePeers || activePeers < 1) { setRows([]); return; }
-    // The verdict filter narrows the public log; reject-only filters keep our
-    // row, approve/challenge/defend hide it.
-    if (v && v !== 'reject') { setRows([]); return; }
-    let cancelled = false;
-    (async () => {
-      const { data } = await supabase
-        .from('vote_log_view')
-        .select('*')
-        .eq('phase', 'taxonomy')
-        .eq('verdict', 'reject')
-        .order('binding_hash', { ascending: true })
-        .order('created_at',   { ascending: true });
-      if (cancelled) return;
-      const byBinding = new Map();
-      for (const r of data || []) {
-        const k = r.binding_hash;
-        if (!k) continue;
-        const arr = byBinding.get(k) || [];
-        arr.push(r);
-        byBinding.set(k, arr);
-      }
-      const haystack = (r) => [
-        r.peer_handle, r.peer_addr, r.evidence_title, r.evidence_source,
-        r.evidence_excerpt, r.evidence_link, r.pillar_title, r.topic_title,
-        r.evidence_id != null ? String(r.evidence_id) : '',
-      ].filter(Boolean).join(' ').toLowerCase();
-      const out = [];
-      for (const [bindingHash, dissents] of byBinding) {
-        const tier = dissents.find(d => d.evidence_tier != null)?.evidence_tier;
-        if (tier == null) continue;
-        const need = bundleThreshold(Number(tier), activePeers);
-        const rejectThreshold = activePeers - need + 1;
-        if (rejectThreshold < 1 || dissents.length < rejectThreshold) continue;
-        const crossing = dissents[rejectThreshold - 1];
-        if (terms.length) {
-          const hs = haystack(crossing);
-          if (!terms.every(t => hs.includes(t.toLowerCase()))) continue;
-        }
-        out.push({
-          ...crossing,
-          id: `derived:${bindingHash}`,
-          created_at: crossing.created_at,
-          peer_addr: null,
-          peer_handle: 'Network',
-          verdict: 'reject',
-          phase: 'taxonomy',
-          eip712_sig: null,
-          tx_hash: null,
-          note: null,
-          note_hash: null,
-          round: null,
-          proof_type: 'derived',
-          derived: true,
-          derived_dissents: dissents.length,
-          derived_peers: activePeers,
-          derived_need: need,
-          derived_threshold: rejectThreshold,
-        });
-      }
-      out.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
-      setRows(out);
-    })();
-    return () => { cancelled = true; };
-  // termsKey + v close over the filter values used inside
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePeers, termsKey, v]);
-
-  return rows;
-}
+// The "Network rejected by consensus" vote-log row is sourced authoritatively
+// from the on-chain `NodeRejected` event (projected by `vote_log_view`, verdict
+// 'rejected') — exactly like ratified/retired/lapsed outcomes — so there is no
+// client-side recomputation: it appears iff the chain actually rejected the node,
+// pinned to the real settle moment + tx. Its proof descriptor is the 'rejected'
+// case in getVoteLogDerivation (signers read from the NodeRejectVoteCast events).
 
 // ── Network-row derivation descriptors ───────────────────────────────────────
 //
@@ -1469,6 +1378,23 @@ export function getVoteLogDerivation(row) {
         thresholdFormula: fmtBundleFormula(null),
         moment: { txHash, events: ['PillarRatified', 'TopicRatified'] },
         signers: { events: ['NodeEndorsed'], matchFromChainPayload: 'node_hash', peerFrom: 'payload.endorser' },
+        filterTerm: row.topic_id || row.pillar_id || nodeHash,
+      } : null;
+    case 'rejected':
+      // A taxonomy proposal a peer consensus voted down: rejections crossed
+      // `peers − bundleThreshold`, so ratification became impossible and the
+      // contract settled it to terminal Rejected. The terminal NodeRejected
+      // carries the final reject tally; the per-vote NodeRejectVoteCast events
+      // (indexed into chain_events) are the authoritative signed rejecters.
+      return nodeHash ? {
+        kind: 'rejected',
+        outcomeLabel: 'Rejected by consensus',
+        question: 'How many peers rejected this proposal?',
+        chainCount: { events: ['NodeRejected'], countField: 'rejections', label: 'On-chain rejects' },
+        thresholdLabel: 'Rejects that make ratification impossible',
+        thresholdFormula: 'rejects + bundleThreshold > peers',
+        moment: { txHash, events: ['NodeRejected'] },
+        signers: { events: ['NodeRejectVoteCast'], match: { 'payload->>node_hash': nodeHash }, peerFrom: 'payload.rejecter' },
         filterTerm: row.topic_id || row.pillar_id || nodeHash,
       } : null;
     case 'retired':
@@ -2114,32 +2040,40 @@ export async function endorseNodeSupabase({ nodeHash, evidenceId, topicId, bindi
 
 // ── Taxonomy rejection: a signed vote AGAINST a proposed pillar/topic bundle ──
 //
-// The contract has no on-chain "reject node" — a node ratifies at threshold
-// endorsements and otherwise lapses at the proposal window. So a rejection is a
-// first-class, EIP-712-signed dissent recorded purely off-chain (phase
-// 'taxonomy', verdict 'reject', NO tx_hash). It carries no on-chain weight and
-// the vote-counter trigger ignores taxonomy rows, so it never touches the
-// founding binding's tallies — but it gives a peer a definite position on every
-// proposal (so the peer-review gate can clear) and puts that dissent, with its
-// deliberation note, on the public record next to the endorsements.
+// Reject is now the on-chain dissent mirror of endorse: the same by-sig `Vote`
+// (phase 2, bindingId = node_hash) but support=false, recovered on-chain by
+// `rejectNode`. The signature the chain recovers IS the off-chain record; this
+// writes the first-class attestation (phase 'taxonomy', verdict 'reject') after
+// the tx confirms. When enough peers reject that ratification is impossible the
+// contract flips the node to terminal Rejected; the vote-counter trigger ignores
+// taxonomy rows, so it never touches the founding binding's tallies.
 //
 // Like an endorsement it targets the proposal's FOUNDING binding, so a peer has
 // at most one taxonomy attestation per proposal (unique binding_id+peer+phase):
-// a later endorseNode upsert simply overwrites a prior reject.
-export async function rejectNodeSupabase({ nodeHash, evidenceId, topicId, bindingId, peerAddr, peerHandle, note, sig }) {
+// endorse and reject are mutually exclusive per round, so a later endorse on a
+// re-proposed round upserts over a prior reject. Dev mode (no contract) omits
+// txHash/round/noteHash and falls back to a legacy Attestation signature.
+export async function rejectNodeSupabase({ nodeHash, evidenceId, topicId, bindingId, peerAddr, peerHandle, note, sig, txHash = null, round = null, noteHash = null }) {
   await withRetry(() => insertAttestation({
     evidence_id: evidenceId, topic_id: topicId, binding_id: bindingId,
     node_hash: nodeHash,
     peer_addr: peerAddr, peer_handle: peerHandle,
     phase: 'taxonomy', verdict: 'reject', note: note || null,
-    eip712_sig: sig || null, tx_hash: null,
+    eip712_sig: sig || null, tx_hash: txHash || null,
+    // Vote-reconstruction surface: the on-chain reject signs a Vote(phase 2,
+    // bindingId = node_hash, support=false, round, noteHash). Sent so
+    // verify-attestation can recover the SAME Vote. Absent in dev mode.
+    round: round ?? null, note_hash: noteHash ?? null,
     action: 'reject_node',
   }));
 }
 
-// This peer's off-chain taxonomy rejections, as a Set of founding binding ids.
-// Endorsements are read on-chain (hasEndorsedNode); rejections live only here,
-// so the taxonomy gate combines both to know which proposals a peer has acted on.
+// This peer's taxonomy rejections, as a Set of founding binding ids. Used only to
+// resolve the DIRECTION of this peer's vote in the UI: the on-chain `hasEndorsedNode`
+// bit says whether a peer acted this round but not which way (endorse and reject
+// share it), so the chain-backed reject mirror (every row is written only after a
+// verified on-chain reject Vote) distinguishes the two. The aggregate rejection
+// COUNT that gates the queue is read straight from the chain (Lens getProposedNodes).
 export async function fetchMyTaxonomyRejects(peerAddr) {
   if (!peerAddr) return new Set();
   const { data } = await supabase
@@ -2149,26 +2083,6 @@ export async function fetchMyTaxonomyRejects(peerAddr) {
     .eq('phase', 'taxonomy')
     .eq('verdict', 'reject');
   return new Set((data || []).map(r => r.binding_id).filter(Boolean));
-}
-
-// Off-chain reject count per founding binding — used to hide proposals from the
-// vote queue once dissent makes ratification mathematically impossible (the
-// contract has no on-chain reject, so the proposal sits Proposed until the
-// 30-day window lapses, but the UI shouldn't keep soliciting votes on a dead
-// one). Each peer has at most one taxonomy attestation per founding binding
-// (a later endorseNode upserts over a prior reject), so a row count is the
-// current dissent count.
-export async function fetchTaxonomyDissentCounts(bindingIds) {
-  if (!bindingIds || bindingIds.length === 0) return new Map();
-  const { data } = await supabase
-    .from('attestations')
-    .select('binding_id')
-    .in('binding_id', bindingIds)
-    .eq('phase', 'taxonomy')
-    .eq('verdict', 'reject');
-  const m = new Map();
-  for (const r of data || []) m.set(r.binding_id, (m.get(r.binding_id) || 0) + 1);
-  return m;
 }
 
 // ── Peer revocation: off-chain signed "keep" position ────────────────────────

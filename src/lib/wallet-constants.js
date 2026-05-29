@@ -22,6 +22,10 @@ export const CONSENSUS_ADDR     = import.meta.env.VITE_CONSENSUS_ADDR || null;
 // Read-only Lens sidecar holding the peer/nominee/proposal aggregation views
 // moved off the core for EIP-170 headroom. Deployed alongside the core.
 export const CONSENSUS_LENS_ADDR = import.meta.env.VITE_CONSENSUS_LENS_ADDR || null;
+// EvidenceArchive sidecar: on-chain home for the readable strings the core only
+// commits as hashes (evidence content, node meta, note text), each verified
+// against the core's hash. Makes the chain a complete backup of the off-chain DB.
+export const CONTENT_ARCHIVE_ADDR = import.meta.env.VITE_CONTENT_ARCHIVE_ADDR || null;
 // PeerGovernance sidecar holding the nominee + revocation flows (and their
 // state/views) moved off the core for EIP-170 headroom. The core only exposes
 // gAddPeer/gRemovePeer to it; all nominate/endorse/revoke calls target this.
@@ -43,9 +47,9 @@ export const CONSENSUS_ABI = [
   "function getBinding(bytes32 id, bytes32 topicId) view returns (tuple(uint8 state, bytes32 evidenceId, bytes32 topicId, uint32 approveCount, uint32 rejectCount, uint32 challengeVotes, uint32 defenseVotes, uint48 submittedAt, uint48 canonAt, uint48 challengedAt, uint32 challengeRound, uint32 reviewRound, uint32 peerSnapshot))",
   "function evidenceReserved(bytes32) view returns (bool)",
   "function pendingProposals(address) view returns (uint32)",
-  "function canonizeThreshold(uint8 tier) view returns (uint256)",
-  "function expelThreshold() view returns (uint256)",
-  "function deprecateThreshold(uint8 tier) view returns (uint256)",
+  // NB: canonize/expel/deprecate/bundle threshold getters were removed from the
+  // core (EIP-170 headroom); the frontend mirrors the formulas in evidence-data.js
+  // (canonizeThreshold/expelThreshold/deprecateThreshold/bundleThreshold).
   // Views — submission queue
   "function reviewCapacity() view returns (uint256)",
   "function activeReviewCount() view returns (uint256)",
@@ -56,11 +60,11 @@ export const CONSENSUS_ABI = [
   "function forceRenounceActive() view returns (bool)",
   "function forceRenounceVotes() view returns (uint32)",
   "function forceRenounceRound() view returns (uint32)",
-  // Views — taxonomy
+  // Views — taxonomy (taxonomyThreshold/retireThreshold are read on-chain by
+  // wallet-impl; bundleThreshold is mirrored off-chain in evidence-data.js).
   "function taxonomyThreshold() view returns (uint256)",
   "function retireThreshold() view returns (uint256)",
-  "function bundleThreshold(uint8 tier) view returns (uint256)",
-  "function getTaxonomyNode(bytes32) view returns (tuple(uint8 kind, uint8 state, bytes32 parent, bytes32 metaHash, address proposedBy, uint48 proposedAt, uint32 endorsements))",
+  "function getTaxonomyNode(bytes32) view returns (tuple(uint8 kind, uint8 state, bytes32 parent, bytes32 metaHash, address proposedBy, uint48 proposedAt, uint32 endorsements, uint32 rejections))",
   "function hasEndorsedNode(bytes32, address) view returns (bool)",
   "function nodeRound(bytes32) view returns (uint32)",
   "function getPillars() view returns (bytes32[] ids, bytes32[] metaHashes)",
@@ -82,11 +86,15 @@ export const CONSENSUS_ABI = [
   "function motionForceRenounce(bytes32 noteHash, bytes sig)",
   "function voteForceRenounce(bytes32 noteHash, bytes sig)",
   // Writes — taxonomy (every node is bootstrapped with a founding evidence).
-  // propose/endorse are EIP-712 Vote-by-signature (phase 2), recovered on-chain;
-  // the proposer is endorsement #1, so a propose signs the node's next round.
+  // propose/endorse/reject are EIP-712 Vote-by-signature (phase 2), recovered
+  // on-chain; the proposer is endorsement #1, so a propose signs the node's next
+  // round. endorse signs support=true, reject signs support=false. A proposal
+  // resolves three ways: ratified (gate reached), Rejected (rejections make
+  // ratification impossible), or Lapsed (timed out — lapseProposal GCs it).
   "function proposePillar(bytes32 id, bytes32 metaHash, bytes32 topicId, bytes32 topicMetaHash, bytes32 evidenceId, uint8 tier, bytes32 contentHash, bytes32 noteHash, bytes sig)",
   "function proposeTopic(bytes32 id, bytes32 parentPillar, bytes32 metaHash, bytes32 evidenceId, uint8 tier, bytes32 contentHash, bytes32 noteHash, bytes sig)",
   "function endorseNode(bytes32 id, bytes32 noteHash, bytes sig)",
+  "function rejectNode(bytes32 id, bytes32 noteHash, bytes sig)",
   "function lapseProposal(bytes32 id)",
   // Writes — taxonomy retirement. motion/vote are EIP-712 Vote-by-signature
   // (phase 3), recovered on-chain.
@@ -116,7 +124,21 @@ export const CONSENSUS_LENS_ABI = [
   "function boostCooldownRemaining(address) view returns (uint256)",
   "function getActivePeers() view returns (address[] addrs, string[] handles, bool[] revActive, uint32[] revVotes, uint48[] lastActives)",
   "function getNominees() view returns (address[] addrs, string[] handles, uint32[] endorsements)",
-  "function getProposedNodes() view returns (bytes32[] ids, uint8[] kinds, bytes32[] parents, bytes32[] metaHashes, address[] proposers, uint32[] endorsements)",
+  "function getProposedNodes() view returns (bytes32[] ids, uint8[] kinds, bytes32[] parents, bytes32[] metaHashes, address[] proposers, uint32[] endorsements, uint32[] rejections)",
+];
+
+// EvidenceArchive sidecar ABI — publishes/reads the readable strings the core
+// only commits as hashes. Writes verify against the core's hash on-chain.
+export const ARCHIVE_ABI = [
+  "function evidenceContent(bytes32) view returns (string)",
+  "function evidenceExtra(bytes32) view returns (string)",
+  "function nodeMeta(bytes32) view returns (string)",
+  "function noteText(bytes32) view returns (string)",
+  "function publishEvidenceContent(bytes32 id, string canonical, string extra)",
+  "function publishNodeMeta(bytes32 id, string canonical)",
+  "function publishNodeMetas(bytes32[] ids, string[] canonicals)",
+  "function publishNote(string text)",
+  "function publishNotes(string[] texts)",
 ];
 
 // PeerGovernance sidecar ABI — the nominee + revocation flows (+ their views)
@@ -197,8 +219,10 @@ export const ATTESTATION_TYPES = {
 // from this signature by EvidenceConsensus, so the fields + order MUST match the
 // contract's `keccak256("Vote(bytes32 bindingId,uint8 phase,bool support,uint32 round,bytes32 noteHash)")`
 // byte-for-byte. phase: 0 = review, 1 = challenge. The verify-attestation edge
-// function recovers the same typed data. Taxonomy endorse/reject still use the
-// Attestation type above (those are off-chain governance, not by-sig votes).
+// function recovers the same typed data. Taxonomy endorse (support=true) and
+// reject (support=false) also ride this Vote at phase 2 (bindingId = node id) and
+// are recovered on-chain; the legacy Attestation type above is only the dev-mode
+// (no-contract) fallback.
 export const VOTE_TYPES = {
   Vote: [
     { name: 'bindingId', type: 'bytes32' },
@@ -216,7 +240,7 @@ export const VOTE_TYPES = {
 export const VOTE_PHASE = {
   review:        0,
   challenge:     1,
-  taxonomy:      2, // proposePillar / proposeTopic / endorseNode (bindingId = node id)
+  taxonomy:      2, // proposePillar / proposeTopic / endorseNode (support=true) / rejectNode (support=false) (bindingId = node id)
   retire:        3, // motionRetireNode / voteRetireNode          (bindingId = node id)
   forceRenounce: 4, // motionForceRenounce / voteForceRenounce    (bindingId = sentinel)
 };

@@ -83,15 +83,15 @@ export default function WalletButton() {
 
   if (addr) {
     return (
-      <button className="btn btn--ghost btn--sm" onClick={disconnect} title="Disconnect">
+      <button className="btn btn--ghost btn--sm" onClick={disconnect} title="Sign out">
         <Jazz addr={addr} size={16} /> {handle || SHORT(addr)}
       </button>
     );
   }
   return (
-    <button className="btn btn--primary btn--sm" onClick={connect} disabled={connecting}>
+    <button className="btn btn--primary btn--sm" onClick={connect} disabled={connecting} title="Sign in with a secure crypto wallet (e.g. MetaMask)">
       <img className="wallet-icon" src={metamaskFox} alt="" width="14" height="14" aria-hidden="true" />
-      {connecting ? 'Connecting…' : 'Connect wallet'}
+      {connecting ? 'Signing in…' : 'Sign in securely'}
     </button>
   );
 }

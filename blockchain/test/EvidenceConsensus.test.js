@@ -17,6 +17,18 @@ const State = {
   Queued:     8,
 };
 
+// JS mirrors of the contract's internal threshold formulas (`_canonizeThresholdAt`
+// etc.).  The standalone percentage getters were removed from the core for EIP-170
+// headroom — the frontend computes them off-chain (src/evidence-data.js) and the
+// behavioural tests exercise the on-chain `_*At` helpers indirectly; these mirrors
+// drive vote loops and pin the expected numbers.
+const ceilPct  = (n, pct) => Math.max(1, Math.ceil((n * pct) / 100));
+const canonT   = (tier, n) => ceilPct(n, tier === 1 ? 60 : tier === 2 ? 55 : 51);
+const expelT   = (n) => ceilPct(n, 25);
+const deprecT  = (tier, n) => ceilPct(n, tier === 1 ? 65 : tier === 2 ? 60 : 55);
+const taxT     = (n) => Math.floor(n / 2) + 1;
+const bundleT  = (tier, n) => Math.max(taxT(n), canonT(tier, n));
+
 const DAY  = 24 * 60 * 60;
 const PENDING_WINDOW      = 30 * DAY;
 const CHALLENGE_WINDOW    = 21 * DAY;
@@ -49,7 +61,7 @@ function bindingId(id, topicId) {
 }
 
 const NodeKind  = { Pillar: 0, Topic: 1 };
-const NodeState = { None: 0, Proposed: 1, Ratified: 2, Retired: 3 };
+const NodeState = { None: 0, Proposed: 1, Ratified: 2, Retired: 3, Rejected: 4 };
 
 // Sign a Vote(bindingId, phase, support, noteHash) EIP-712 typed message with the
 // voting signer; the contract recovers this signer on-chain and attributes the
@@ -160,6 +172,14 @@ async function endorseNodeSigned(contract, signer, id, noteHash = ZERO_HASH) {
   const round   = await contract.nodeRound(id);
   const sig     = await signVote(signer, await contract.getAddress(), chainId, id, VP_TAXONOMY, true, round, noteHash);
   return contract.connect(signer).endorseNode(id, noteHash, sig);
+}
+// A taxonomy reject reuses the taxonomy phase with support=false over the node's
+// current round.
+async function rejectNodeSigned(contract, signer, id, noteHash = ZERO_HASH) {
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const round   = await contract.nodeRound(id);
+  const sig     = await signVote(signer, await contract.getAddress(), chainId, id, VP_TAXONOMY, false, round, noteHash);
+  return contract.connect(signer).rejectNode(id, noteHash, sig);
 }
 async function motionRetireSigned(contract, signer, id, noteHash = ZERO_HASH) {
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
@@ -328,32 +348,35 @@ describe("EvidenceConsensus — deployment", () => {
 describe("EvidenceConsensus — thresholds", () => {
   it("floors all thresholds at 1 with one peer", async () => {
     const { contract, gov } = await deploy(0, 1, false);
-    expect(await contract.canonizeThreshold(1)).to.equal(1n);
-    expect(await contract.canonizeThreshold(2)).to.equal(1n);
-    expect(await contract.canonizeThreshold(3)).to.equal(1n);
-    expect(await contract.expelThreshold()).to.equal(1n);
-    expect(await contract.deprecateThreshold(1)).to.equal(1n);
+    // Percentage gates (no on-chain getter) — pinned via the JS mirror.
+    expect(canonT(1, 1)).to.equal(1);
+    expect(canonT(3, 1)).to.equal(1);
+    expect(expelT(1)).to.equal(1);
+    expect(deprecT(1, 1)).to.equal(1);
+    expect(bundleT(1, 1)).to.equal(1);
+    // On-chain getters that survive (used by the frontend read path / gov).
+    expect(await contract.taxonomyThreshold()).to.equal(1n);
+    expect(await contract.retireThreshold()).to.equal(1n);
     expect(await gov.nomineeThreshold()).to.equal(1n);
     expect(await gov.revokeThreshold()).to.equal(1n);
-    expect(await contract.bundleThreshold(1)).to.equal(1n);
   });
 
   it("scales correctly for n=10 peers", async () => {
     const { contract, gov } = await deploy(0, 10, false);
     expect(await contract.activePeerCount()).to.equal(10n);
-    expect(await contract.canonizeThreshold(1)).to.equal(6n);  // ceil(10*0.60)
-    expect(await contract.canonizeThreshold(2)).to.equal(6n);  // ceil(10*0.55)
-    expect(await contract.canonizeThreshold(3)).to.equal(6n);  // ceil(10*0.51)
-    expect(await contract.expelThreshold()).to.equal(3n);
-    expect(await contract.deprecateThreshold(1)).to.equal(7n);
-    expect(await contract.deprecateThreshold(2)).to.equal(6n);
-    expect(await contract.deprecateThreshold(3)).to.equal(6n);
+    expect(canonT(1, 10)).to.equal(6);  // ceil(10*0.60)
+    expect(canonT(2, 10)).to.equal(6);  // ceil(10*0.55)
+    expect(canonT(3, 10)).to.equal(6);  // ceil(10*0.51)
+    expect(expelT(10)).to.equal(3);
+    expect(deprecT(1, 10)).to.equal(7);
+    expect(deprecT(2, 10)).to.equal(6);
+    expect(deprecT(3, 10)).to.equal(6);
     expect(await gov.nomineeThreshold()).to.equal(4n);    // floor(10/3)+1
     expect(await contract.taxonomyThreshold()).to.equal(6n);   // floor(10/2)+1 (decoupled majority)
     expect(await gov.revokeThreshold()).to.equal(5n);
     // Founding-evidence gate is max(taxonomy majority, tier canonize) — now a majority.
-    expect(await contract.bundleThreshold(1)).to.equal(6n);    // max(6, 6)
-    expect(await contract.bundleThreshold(3)).to.equal(6n);    // max(6, 6)
+    expect(bundleT(1, 10)).to.equal(6);    // max(6, 6)
+    expect(bundleT(3, 10)).to.equal(6);    // max(6, 6)
   });
 
   it("ramps the admission threshold as floor(n/3)+1 (strictly > 1/3) with no cap", async () => {
@@ -986,7 +1009,7 @@ describe("EvidenceConsensus — challenge lifecycle", () => {
       await contract.fileBinding(id, topicId);
     }
     const n = Number(await contract.activePeerCount());
-    const threshold = Number(await contract.canonizeThreshold(tier));
+    const threshold = canonT(tier, n);
     for (let i = 0; i < threshold && i < n; i++) {
       await reviewVote(contract, signers[i], id, topicId, true);
     }
@@ -1472,8 +1495,8 @@ describe("EvidenceConsensus — taxonomy governance", () => {
     // → bundle gate = max(8, 9) = 9, strictly above the bare taxonomy majority.
     const { contract, signers } = await deploy(0, 15, false);
     expect(await contract.taxonomyThreshold()).to.equal(8n);
-    expect(await contract.canonizeThreshold(1)).to.equal(9n);
-    expect(await contract.bundleThreshold(1)).to.equal(9n);
+    expect(canonT(1, 15)).to.equal(9);
+    expect(bundleT(1, 15)).to.equal(9);
     await proposePillarSigned(contract, contract.runner,PILLAR, META_P, FT, META_FT, EV_FP, 1, CH); // proposer = #1
     for (let i = 1; i <= 7; i++) await endorseNodeSigned(contract, signers[i], PILLAR); // → 8
     expect((await contract.getTaxonomyNode(PILLAR)).state).to.equal(NodeState.Proposed); // 8 (taxonomy) < 9 (bundle)
@@ -1491,16 +1514,22 @@ describe("EvidenceConsensus — taxonomy governance", () => {
   it("getProposedNodes (Lens) lists only the proposed node (not the bundled topic) and clears on ratify", async () => {
     const { contract, lens, signers } = await deploy(0, 4, false); // threshold 3
     await propPillar(contract);
-    const [ids, kinds, parents, metas, proposers, ends] = await lens.getProposedNodes();
+    const [ids, kinds, parents, metas, proposers, ends, rejs] = await lens.getProposedNodes();
     expect(ids).to.deep.equal([PILLAR]);            // the bundled FT is not a pending proposal
     expect(kinds.map(Number)).to.deep.equal([NodeKind.Pillar]);
     expect(parents[0]).to.equal(ZERO_HASH);
     expect(metas[0]).to.equal(META_P);
     expect(proposers[0]).to.equal(signers[0].address);
     expect(ends.map(Number)).to.deep.equal([1]);
+    expect(rejs.map(Number)).to.deep.equal([0]);    // no dissent yet
 
-    await endorseNodeSigned(contract, signers[1], PILLAR);
-    await endorseNodeSigned(contract, signers[2], PILLAR); // → 3 → ratifies & clears
+    // A reject vote is reflected in the Lens rejection count (queue-gate source).
+    await rejectNodeSigned(contract, signers[1], PILLAR);
+    const [, , , , , , rejs2] = await lens.getProposedNodes();
+    expect(rejs2.map(Number)).to.deep.equal([1]);
+
+    await endorseNodeSigned(contract, signers[2], PILLAR);
+    await endorseNodeSigned(contract, signers[3], PILLAR); // → 3 endorsements → ratifies & clears
     const after = await lens.getProposedNodes();
     expect(after[0].length).to.equal(0);
   });
@@ -1521,6 +1550,109 @@ describe("EvidenceConsensus — taxonomy governance", () => {
     const { contract } = await deploy(0, 1, false);
     await contract.pause();
     await expect(propPillar(contract)).to.be.revertedWith("paused");
+  });
+
+  // ── Reject path: a proposal is no longer doomed to merely time out — once
+  // peers reject it past the point where ratification is still reachable, it is
+  // settled as terminal Rejected, mirroring the binding review's early expulsion.
+  it("rejectNode flips a proposal to Rejected once ratification is impossible, and burns the id", async () => {
+    const { contract, signers } = await deploy(0, 4, false); // bundleThreshold(2)@4 = 3
+    await propPillar(contract);                               // proposer signers[0] = endorsement #1
+    expect((await contract.getTaxonomyNode(PILLAR)).state).to.equal(NodeState.Proposed);
+    expect(await contract.topicReserved(FT)).to.equal(true);
+    expect(await contract.evidenceReserved(EV_FP)).to.equal(true);
+
+    // One reject still leaves ratification reachable (max endorsements 3 == gate).
+    await expect(rejectNodeSigned(contract, signers[1], PILLAR))
+      .to.emit(contract, "NodeRejectVoteCast").withArgs(PILLAR, signers[1].address, 1n, 3n)
+      .and.to.not.emit(contract, "NodeRejected");
+    expect((await contract.getTaxonomyNode(PILLAR)).state).to.equal(NodeState.Proposed);
+
+    // The second reject makes ratification arithmetically impossible → Rejected.
+    await expect(rejectNodeSigned(contract, signers[2], PILLAR))
+      .to.emit(contract, "NodeRejected").withArgs(PILLAR, 2n);
+    const node = await contract.getTaxonomyNode(PILLAR);
+    expect(node.state).to.equal(NodeState.Rejected);
+    expect(node.rejections).to.equal(2n);
+
+    // Reservations freed; the bundled topic/evidence never materialized.
+    expect(await contract.topicReserved(FT)).to.equal(false);
+    expect(await contract.evidenceReserved(EV_FP)).to.equal(false);
+    expect((await contract.getTaxonomyNode(FT)).state).to.equal(NodeState.None);
+    expect((await contract.getEvidence(EV_FP)).exists).to.equal(false);
+    expect(await contract.pillarIds()).to.deep.equal([]);
+
+    // Terminal: a Rejected id can't be re-proposed, endorsed, rejected, or lapsed.
+    await expect(propPillar(contract)).to.be.revertedWith("node exists");
+    await expect(endorseNodeSigned(contract, signers[1], PILLAR)).to.be.revertedWith("not proposed");
+    await expect(rejectNodeSigned(contract, signers[3], PILLAR)).to.be.revertedWith("not proposed");
+  });
+
+  it("a peer casts one taxonomy act per round — endorse and reject are mutually exclusive", async () => {
+    const { contract, signers } = await deploy(0, 4, false);
+    await propPillar(contract);
+    // The proposer already endorsed as #1, so it cannot also reject.
+    await expect(rejectNodeSigned(contract, contract.runner, PILLAR)).to.be.revertedWith("already voted");
+    // A peer that endorses cannot then reject…
+    await endorseNodeSigned(contract, signers[1], PILLAR);
+    await expect(rejectNodeSigned(contract, signers[1], PILLAR)).to.be.revertedWith("already voted");
+    // …and a peer that rejects cannot then endorse.
+    await rejectNodeSigned(contract, signers[2], PILLAR);
+    await expect(endorseNodeSigned(contract, signers[2], PILLAR)).to.be.revertedWith("already endorsed");
+  });
+
+  it("rejectNode requires a live proposal and an active peer", async () => {
+    const { contract, signers } = await deploy(0, 4, false);
+    await expect(rejectNodeSigned(contract, signers[0], PILLAR)).to.be.revertedWith("not proposed");
+    await propPillar(contract);
+    await expect(rejectNodeSigned(contract, signers[5], PILLAR)).to.be.revertedWith("not an active peer");
+  });
+
+  it("a minority reject does not block ratification", async () => {
+    const { contract, signers } = await deploy(0, 5, false); // bundleThreshold(2)@5 = 3
+    await propPillar(contract);                              // signers[0] endorses (#1)
+    await rejectNodeSigned(contract, signers[1], PILLAR);    // 1 reject — not enough to block
+    await endorseNodeSigned(contract, signers[2], PILLAR);   // → 2 endorsements
+    await expect(endorseNodeSigned(contract, signers[3], PILLAR)) // → 3 → ratifies past the dissent
+      .to.emit(contract, "PillarRatified").withArgs(PILLAR, META_P);
+    expect((await contract.getTaxonomyNode(PILLAR)).state).to.equal(NodeState.Ratified);
+  });
+
+  it("rejects a topic proposal once ratification is impossible (parent pillar untouched)", async () => {
+    const { contract, signers } = await deploy(0, 5, false); // bundleThreshold(2)@5 = 3
+    // Ratify the parent pillar first (3 endorsements).
+    await propPillar(contract);
+    await endorseNodeSigned(contract, signers[1], PILLAR);
+    await endorseNodeSigned(contract, signers[2], PILLAR);
+    expect((await contract.getTaxonomyNode(PILLAR)).state).to.equal(NodeState.Ratified);
+
+    // Propose a topic under it, then reject to impossibility (needs 3 rejects).
+    await propTopic(contract); // signers[0] endorses #1
+    await rejectNodeSigned(contract, signers[1], TOPIC);
+    await rejectNodeSigned(contract, signers[2], TOPIC);
+    await expect(rejectNodeSigned(contract, signers[3], TOPIC))
+      .to.emit(contract, "NodeRejected").withArgs(TOPIC, 3n);
+    expect((await contract.getTaxonomyNode(TOPIC)).state).to.equal(NodeState.Rejected);
+    expect(await contract.evidenceReserved(EV_T)).to.equal(false);
+    expect((await contract.getEvidence(EV_T)).exists).to.equal(false);
+    // The parent pillar and its founding topic are unaffected.
+    expect((await contract.getTaxonomyNode(PILLAR)).state).to.equal(NodeState.Ratified);
+    expect(await contract.topicIds(PILLAR)).to.deep.equal([FT]);
+  });
+
+  it("a timed-out proposal with non-blocking rejections Lapses (re-filable), not Rejected", async () => {
+    const { contract, signers } = await deploy(0, 5, false); // bundle 3 — impossible needs 3 rejects
+    await propPillar(contract);
+    await rejectNodeSigned(contract, signers[1], PILLAR);    // 1 reject — ratification still reachable
+    expect((await contract.getTaxonomyNode(PILLAR)).state).to.equal(NodeState.Proposed);
+
+    await time.increase(PROPOSAL_WINDOW + 1);
+    await expect(contract.lapseProposal(PILLAR))
+      .to.emit(contract, "ProposalLapsed").withArgs(PILLAR)
+      .and.to.not.emit(contract, "NodeRejected");
+    // A Lapse fully GCs the node (back to None) — the id is NOT terminally burned.
+    expect((await contract.getTaxonomyNode(PILLAR)).state).to.equal(NodeState.None);
+    await expect(propPillar(contract)).to.not.be.reverted; // re-filable
   });
 });
 
@@ -1877,3 +2009,148 @@ function anyUint() {
   const { anyValue } = require("@nomicfoundation/hardhat-chai-matchers/withArgs");
   return anyValue;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Audit fixes: electorate snapshots (H1) + liveness on every peer act (H2).
+// These exercise the scenarios the audit flagged as previously untested —
+// a vote tally judged against a CHANGED peer set.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("AUDIT FIX — frozen electorate snapshots (H1) + governance liveness (H2)", () => {
+  const INACT = 30 * DAY;
+
+  it("H1: a taxonomy proposal's ratify gate is FROZEN at propose-time (peer-set growth can't raise it)", async () => {
+    // n=4 → bundle gate = max(taxonomy 3, canonize(1) 3) = 3. Grow to 12 (live
+    // gate would be max(7, 8) = 8). Reaching 3 endorsements must still ratify,
+    // proving the gate is judged against the frozen snapshot, not the live count.
+    const { contract, genesis } = await deploy(OPEN_SEED, 4, false);
+    const P = nodeId("frozen-grow"), FT = nodeId("frozen-grow-ft");
+    await proposePillarSigned(contract, genesis[0], P, contentHash("m"), FT, contentHash("mft"), evidenceId(80101), 1, contentHash("c"));
+    await padPeers(contract, 12);
+    expect(await contract.activePeerCount()).to.equal(12n);
+
+    await endorseNodeSigned(contract, genesis[1], P); // endorsements = 2
+    expect((await contract.getTaxonomyNode(P)).state).to.equal(NodeState.Proposed);
+    await endorseNodeSigned(contract, genesis[2], P); // endorsements = 3 == frozen gate
+    expect((await contract.getTaxonomyNode(P)).state).to.equal(NodeState.Ratified);
+  });
+
+  it("H1: terminal reject (burn) is judged against the FROZEN snapshot, not a (grown) live count", async () => {
+    // n=4: ratify-impossible ⇔ rejections + gate(3) > snapshot(4) ⇔ rejections ≥ 2.
+    // Grow to 20 (live burn bar would need rejections ≥ ~9). Two rejects must
+    // still burn the id terminally, against the frozen electorate of 4.
+    const { contract, genesis } = await deploy(OPEN_SEED, 4, false);
+    const P = nodeId("frozen-burn"), FT = nodeId("frozen-burn-ft");
+    await proposePillarSigned(contract, genesis[0], P, contentHash("m"), FT, contentHash("mft"), evidenceId(80201), 1, contentHash("c"));
+    await padPeers(contract, 20);
+
+    await rejectNodeSigned(contract, genesis[1], P); // rejections = 1
+    expect((await contract.getTaxonomyNode(P)).state).to.equal(NodeState.Proposed);
+    await rejectNodeSigned(contract, genesis[2], P); // rejections = 2 → burn
+    expect((await contract.getTaxonomyNode(P)).state).to.equal(NodeState.Rejected);
+
+    // The burned id is terminal — it cannot be re-proposed.
+    await expect(
+      proposePillarSigned(contract, genesis[0], P, contentHash("m"), nodeId("ft2"), contentHash("mft"), evidenceId(80202), 1, contentHash("c")),
+    ).to.be.revertedWith("node exists");
+  });
+
+  it("H1: a retire motion's 2/3 bar is FROZEN at motion-open (growth can't raise it)", async () => {
+    // n=4 → retire bar ceil(2·4/3)=3. Grow to 20 (live bar would be ceil(40/3)=14).
+    // Three votes must still retire the topic, against the frozen electorate.
+    const { contract, genesis } = await deploy(OPEN_SEED, 4, true);
+    await motionRetireSigned(contract, genesis[0], DEFAULT_TOPIC_2); // votes = 1, snapshot = 4
+    await padPeers(contract, 20);
+
+    await voteRetireSigned(contract, genesis[1], DEFAULT_TOPIC_2);    // votes = 2
+    expect((await contract.getTaxonomyNode(DEFAULT_TOPIC_2)).state).to.equal(NodeState.Ratified);
+    await voteRetireSigned(contract, genesis[2], DEFAULT_TOPIC_2);    // votes = 3 == frozen bar
+    expect((await contract.getTaxonomyNode(DEFAULT_TOPIC_2)).state).to.equal(NodeState.Retired);
+  });
+
+  it("H2: taxonomy propose/endorse refresh the caller's liveness clock (no longer prunable)", async () => {
+    const { contract, genesis } = await deploy(5, 8, false); // 8 peers > seedPhaseK 5 → prune allowed
+    await time.increase(INACT + 1); // every peer's admission clock is now stale
+
+    const P = nodeId("touch-pillar");
+    await proposePillarSigned(contract, genesis[1], P, contentHash("m"), nodeId("touch-ft"), contentHash("mft"), evidenceId(80301), 3, contentHash("c"));
+    await endorseNodeSigned(contract, genesis[2], P);
+
+    // The proposer and endorser just acted → still active; an idle peer is prunable.
+    await expect(contract.pruneInactivePeer(genesis[1].address)).to.be.revertedWith("still active");
+    await expect(contract.pruneInactivePeer(genesis[2].address)).to.be.revertedWith("still active");
+    await expect(contract.pruneInactivePeer(genesis[3].address)).to.emit(contract, "PeerRemoved");
+  });
+
+  it("H2: retire / force-renounce votes refresh the caller's liveness clock", async () => {
+    const { contract, genesis } = await deploy(5, 8, true);
+    await time.increase(INACT + 1);
+    await motionRetireSigned(contract, genesis[1], DEFAULT_TOPIC_2);           // retire act
+    await motionForceRenounceSigned(contract, genesis[2]);                     // force-renounce act
+    await expect(contract.pruneInactivePeer(genesis[1].address)).to.be.revertedWith("still active");
+    await expect(contract.pruneInactivePeer(genesis[2].address)).to.be.revertedWith("still active");
+  });
+
+  it("GOV H-1/M-1: nominee admission gate is FROZEN at nomination (a shrink can't lower it)", async () => {
+    // Nominate at n=9 (nominationsOpen since seedPhaseK=0): frozen gate floor(9/3)+1 = 4.
+    // Shrink the set to 3 via inactivity GC (live gate would fall to 2). A second
+    // endorsement reaches the LIVE gate but NOT the frozen gate → still no admission.
+    const { contract, gov, genesis, signers } = await deploy(0, 9, false);
+    const nominee = signers[10].address;
+    await nominateSigned(gov, genesis[0], nominee, "N");      // snapshot 9 → frozen gate 4
+    await endorseNomineeSigned(gov, genesis[1], nominee);     // endorsements = 1
+
+    await time.increase(INACT + 1);
+    for (let i = 3; i <= 8; i++) await contract.pruneInactivePeer(genesis[i].address); // 9 → 3
+    expect(await contract.activePeerCount()).to.equal(3n);
+    expect(await gov.nomineeThreshold()).to.equal(2n);        // live gate floor(3/3)+1 = 2
+
+    await endorseNomineeSigned(gov, genesis[2], nominee);     // endorsements = 2 == LIVE gate
+    expect(await contract.isActivePeer(nominee)).to.equal(false); // frozen gate (4) still holds
+  });
+
+  it("GOV H-1: revocation majority is FROZEN at motion-open (growth can't raise it)", async () => {
+    const { contract, gov, genesis } = await deploy(OPEN_SEED, 5, false);
+    const target = genesis[4].address;
+    await motionRevokeSigned(gov, genesis[0], target);        // snapshot 5 → bar ceil(5/2)=3, votes 1
+    await padPeers(contract, 30);
+    expect(await gov.revokeThreshold()).to.equal(15n);        // live bar would be (30+1)/2 = 15
+
+    await voteRevokeSigned(gov, genesis[1], target);          // 2
+    expect(await contract.isActivePeer(target)).to.equal(true);
+    await voteRevokeSigned(gov, genesis[2], target);          // 3 == frozen bar → removed
+    expect(await contract.isActivePeer(target)).to.equal(false);
+  });
+
+  it("GOV H-2: a stale revocation tally is cleared when an address is re-admitted", async () => {
+    const { contract, gov, genesis } = await deploy(2, 6, false); // seedPhaseK 2, 6 peers
+    const peer = genesis[5].address;
+    await motionRevokeSigned(gov, genesis[0], peer);          // revocationActive, votes = 1 (bar 3)
+    expect(await gov.revocationActive(peer)).to.equal(true);
+
+    // Remove the peer by a DIFFERENT path (inactivity GC) — leaves the gov-side
+    // revoke tally orphaned, the H-2 vector.
+    await time.increase(INACT + 1);
+    await contract.pruneInactivePeer(peer);
+    expect(await contract.isActivePeer(peer)).to.equal(false);
+    expect(await gov.revocationActive(peer)).to.equal(true);  // still lingering pre-readmit
+
+    // Re-admit via the nominee path: admission must wipe the stale tally clean.
+    await nominateSigned(gov, genesis[0], peer, "re");
+    await endorseNomineeSigned(gov, genesis[1], peer);        // gate floor(5/3)+1 = 2
+    await endorseNomineeSigned(gov, genesis[2], peer);
+    expect(await contract.isActivePeer(peer)).to.equal(true);
+    expect(await gov.revocationActive(peer)).to.equal(false);
+    expect(await gov.revokeVoteCount(peer)).to.equal(0n);
+  });
+
+  it("M2: the Lens paginates the active-peer set and exposes counts", async () => {
+    const { contract, lens } = await deploy(OPEN_SEED, 3, false);
+    await padPeers(contract, 9);
+    expect(await lens.peerCount()).to.equal(9n);
+    const page = await lens.getActivePeersPage(2, 4);
+    expect(page.addrs.length).to.equal(4);
+    // A window past the end clamps instead of reverting.
+    const tail = await lens.getActivePeersPage(7, 100);
+    expect(tail.addrs.length).to.equal(2);
+  });
+});

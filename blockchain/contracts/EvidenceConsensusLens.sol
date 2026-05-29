@@ -99,7 +99,8 @@ contract EvidenceConsensusLens {
         bytes32[] memory parents,
         bytes32[] memory metaHashes,
         address[] memory proposers,
-        uint32[]  memory endorsements
+        uint32[]  memory endorsements,
+        uint32[]  memory rejections
     ) {
         ids = core.proposedNodeIds();
         uint256 n = ids.length;
@@ -108,6 +109,7 @@ contract EvidenceConsensusLens {
         metaHashes   = new bytes32[](n);
         proposers    = new address[](n);
         endorsements = new uint32[](n);
+        rejections   = new uint32[](n);
         for (uint256 i = 0; i < n; i++) {
             EvidenceConsensus.TaxonomyNode memory node = core.getTaxonomyNode(ids[i]);
             kinds[i]        = uint8(node.kind);
@@ -115,6 +117,94 @@ contract EvidenceConsensusLens {
             metaHashes[i]   = node.metaHash;
             proposers[i]    = node.proposedBy;
             endorsements[i] = node.endorsements;
+            rejections[i]   = node.rejections;
+        }
+    }
+
+    // ── Paginated variants ────────────────────────────────────────────────────
+    //
+    // The full getters above do one-or-more external reads per list element and
+    // are unbounded; as the peer / nominee / proposal sets grow they can approach
+    // the eth_call gas cap and revert.  These count getters + windowed variants
+    // let a client page through in fixed-size chunks.  A `limit` window that runs
+    // past the end is clamped, so `getXPage(offset, limit)` is always safe to call.
+
+    function peerCount()         external view returns (uint256) { return core.peerList().length; }
+    function nomineeCount()      external view returns (uint256) { return gov.nomineeList().length; }
+    function proposedNodeCount() external view returns (uint256) { return core.proposedNodeIds().length; }
+
+    /// @dev Resolve [offset, offset+limit) against `len`, clamped to `len`.
+    function _window(uint256 len, uint256 offset, uint256 limit) internal pure returns (uint256 start, uint256 count) {
+        if (offset >= len) return (len, 0);
+        uint256 end = offset + limit;
+        if (end > len) end = len;
+        return (offset, end - offset);
+    }
+
+    /// @notice A window of the active peer set (see getActivePeers).
+    function getActivePeersPage(uint256 offset, uint256 limit) external view returns (
+        address[] memory addrs,
+        string[]  memory handles,
+        bool[]    memory revActive,
+        uint32[]  memory revVotes,
+        uint48[]  memory lastActives
+    ) {
+        address[] memory all = core.peerList();
+        (uint256 start, uint256 m) = _window(all.length, offset, limit);
+        addrs = new address[](m); handles = new string[](m); revActive = new bool[](m);
+        revVotes = new uint32[](m); lastActives = new uint48[](m);
+        for (uint256 i = 0; i < m; i++) {
+            address a = all[start + i];
+            addrs[i]       = a;
+            handles[i]     = core.peerHandle(a);
+            revActive[i]   = gov.revocationActive(a);
+            revVotes[i]    = gov.revokeVoteCount(a);
+            lastActives[i] = core.lastActive(a);
+        }
+    }
+
+    /// @notice A window of pending nominees (see getNominees).
+    function getNomineesPage(uint256 offset, uint256 limit) external view returns (
+        address[] memory addrs,
+        string[]  memory handles,
+        uint32[]  memory endorsements
+    ) {
+        address[] memory all = gov.nomineeList();
+        (uint256 start, uint256 m) = _window(all.length, offset, limit);
+        addrs = new address[](m); handles = new string[](m); endorsements = new uint32[](m);
+        for (uint256 i = 0; i < m; i++) {
+            address a = all[start + i];
+            addrs[i]        = a;
+            handles[i]      = gov.nomineeHandle(a);
+            endorsements[i] = gov.nomineeEndorsements(a);
+        }
+    }
+
+    /// @notice A window of pending taxonomy proposals (see getProposedNodes).
+    function getProposedNodesPage(uint256 offset, uint256 limit) external view returns (
+        bytes32[] memory ids,
+        uint8[]   memory kinds,
+        bytes32[] memory parents,
+        bytes32[] memory metaHashes,
+        address[] memory proposers,
+        uint32[]  memory endorsements,
+        uint32[]  memory rejections
+    ) {
+        bytes32[] memory all = core.proposedNodeIds();
+        (uint256 start, uint256 m) = _window(all.length, offset, limit);
+        ids = new bytes32[](m); kinds = new uint8[](m); parents = new bytes32[](m);
+        metaHashes = new bytes32[](m); proposers = new address[](m);
+        endorsements = new uint32[](m); rejections = new uint32[](m);
+        for (uint256 i = 0; i < m; i++) {
+            bytes32 id = all[start + i];
+            EvidenceConsensus.TaxonomyNode memory node = core.getTaxonomyNode(id);
+            ids[i]          = id;
+            kinds[i]        = uint8(node.kind);
+            parents[i]      = node.parent;
+            metaHashes[i]   = node.metaHash;
+            proposers[i]    = node.proposedBy;
+            endorsements[i] = node.endorsements;
+            rejections[i]   = node.rejections;
         }
     }
 }

@@ -64,32 +64,40 @@ html { scroll-behavior: smooth; }
 }
 
 /* ---------- Hero tour thumbnail + lightbox ---------- */
-/* Thumbnail in the hero — quiet slate frame with a centred play affordance.
-   The full video opens in .h-tour-modal on click. */
+/* Thumbnail in the hero — a warm 16:9 poster card with a centred play
+   affordance. The full video opens in .h-tour-modal on click. Overrides the
+   square .h-orbit geometry (a leftover from the old orbit atom) so the 16:9
+   poster fits without cropping. */
 .h-tour {
   appearance: none;
   -webkit-appearance: none;
   padding: 0;
-  border: 1px solid var(--line-faint);
-  border-radius: 14px;
-  background: var(--bg-elev);
+  /* 16:9 to match the poster + video — never crop the wordmark / record card */
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  max-width: 580px;
+  margin: 0 auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+  background: var(--bg-card);
   cursor: pointer;
   overflow: hidden;
   isolation: isolate;
-  box-shadow: 0 12px 36px -20px rgb(0 0 0 / 0.55);
+  box-shadow: var(--shadow-card);
   transition: border-color .35s ease, box-shadow .35s ease, transform .35s ease;
 }
 .h-tour:hover,
 .h-tour:focus-visible {
   border-color: color-mix(in oklab, var(--accent) 40%, var(--line));
-  box-shadow: 0 16px 48px -20px color-mix(in oklab, var(--accent) 36%, rgb(0 0 0 / 0.55));
-  transform: translateY(-1px);
+  box-shadow: var(--shadow-lift);
+  transform: translateY(-2px);
   outline: none;
 }
 .h-tour:hover .h-tour-play,
 .h-tour:focus-visible .h-tour-play {
-  background: color-mix(in oklab, var(--accent) 22%, rgb(0 0 0 / 0.55));
-  border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
   transform: translate(-50%, -50%) scale(1.04);
 }
 .h-tour-poster {
@@ -108,14 +116,15 @@ html { scroll-behavior: smooth; }
   width: 72px; height: 72px;
   border-radius: 50%;
   border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--line));
-  background: color-mix(in oklab, var(--bg-deep) 70%, transparent);
+  background: color-mix(in oklab, var(--bg-card) 78%, transparent);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   display: grid;
   place-items: center;
-  color: var(--ink);
+  color: var(--accent-ink);
+  box-shadow: var(--shadow-chip);
   z-index: 2;
-  transition: background .3s ease, border-color .3s ease, transform .3s ease;
+  transition: background .3s ease, border-color .3s ease, transform .3s ease, color .3s ease;
 }
 .h-tour-play svg { transform: translateX(2px); /* optical centring */ }
 
@@ -123,7 +132,7 @@ html { scroll-behavior: smooth; }
 .h-tour-modal {
   position: fixed; inset: 0;
   z-index: 200;
-  background: color-mix(in oklab, var(--bg-deep) 88%, rgb(0 0 0 / 0.78));
+  background: rgba(44, 30, 20, 0.86);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   display: grid; place-items: center;
@@ -142,8 +151,8 @@ html { scroll-behavior: smooth; }
   overflow: hidden;
   background: #000;
   box-shadow:
-    0 30px 90px -20px rgb(0 0 0 / 0.7),
-    0 0 0 1px color-mix(in oklab, var(--accent) 18%, transparent);
+    var(--shadow-lift),
+    0 0 0 1px color-mix(in oklab, var(--accent) 22%, transparent);
   animation: h-tour-pop .35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes h-tour-pop {
@@ -183,7 +192,7 @@ html { scroll-behavior: smooth; }
 
 .h-orbit-ring {
   position: absolute; inset: 0;
-  border: 1px solid var(--line-faint);
+  border: 1px solid color-mix(in oklab, var(--ink-ghost) 45%, var(--line));
   border-radius: 50%;
   animation: h-rotate 80s linear infinite;
 }
@@ -199,12 +208,12 @@ html { scroll-behavior: smooth; }
   transform: translate(-50%, -50%);
   width: 26%; aspect-ratio: 1;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 40%, color-mix(in oklab, var(--accent) 32%, var(--bg-elev)), var(--bg-elev) 78%);
-  border: 1px solid var(--accent);
-  box-shadow: 0 0 0 10px var(--halo), 0 0 60px color-mix(in oklab, var(--accent) 28%, transparent);
+  background: radial-gradient(circle at 50% 38%, var(--coral-soft), var(--bg-card) 80%);
+  border: 1px solid color-mix(in oklab, var(--coral) 55%, var(--line));
+  box-shadow: 0 0 0 8px var(--coral-glow), var(--shadow-soft);
   display: grid; place-items: center;
-  font-family: var(--serif); font-style: italic; font-size: 32px;
-  color: var(--ink);
+  font-family: var(--serif); font-style: normal; font-weight: 600; font-size: 30px;
+  color: var(--accent-ink);
   letter-spacing: -0.02em;
   text-align: center;
 }
@@ -218,7 +227,8 @@ html { scroll-behavior: smooth; }
   width: 64px; height: 64px;
   border-radius: 50%;
   border: 1px solid var(--line);
-  background: var(--bg-elev);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-chip);
   display: grid; place-items: center;
   font-family: var(--mono); font-size: 10px;
   color: var(--ink-soft); letter-spacing: 0.04em;
@@ -237,17 +247,16 @@ html { scroll-behavior: smooth; }
 .h-orbit-node[data-pos="w"]  { left: 4%;  top: 38%;  transform: translate(-50%, -50%); }
 .h-orbit-plate {
   position: absolute; top: 0; right: 0;
-  border: 1px solid var(--accent);
-  background: color-mix(in oklab, var(--bg-elev) 78%, transparent);
-  backdrop-filter: blur(4px);
+  border: 1px solid color-mix(in oklab, var(--coral) 30%, var(--line));
+  background: var(--bg-card);
   padding: 10px 14px 12px;
-  border-radius: 4px;
+  border-radius: var(--r-s);
   display: grid; gap: 2px;
   text-align: right;
-  box-shadow: 0 8px 24px color-mix(in oklab, var(--accent) 16%, transparent);
+  box-shadow: var(--shadow-chip);
 }
 .h-orbit-plate .anum { font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; color: var(--ink-faint); }
-.h-orbit-plate .asym { font-family: var(--serif); font-style: italic; font-weight: 400; font-size: 34px; line-height: 1; color: var(--accent); letter-spacing: -0.02em; }
+.h-orbit-plate .asym { font-family: var(--serif); font-style: normal; font-weight: 600; font-size: 34px; line-height: 1; color: var(--accent-ink); letter-spacing: -0.02em; }
 .h-orbit-plate .aname { font-family: var(--mono); font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-soft); }
 .h-orbit-plate .amass { font-family: var(--mono); font-size: 9px; color: var(--ink-faint); letter-spacing: 0.12em; margin-top: 2px; }
 
@@ -273,8 +282,8 @@ html { scroll-behavior: smooth; }
   border-top: 1px solid var(--line-faint);
 }
 .h-three-row:first-child { border-top: 0; padding-top: 0; }
-.h-three-row .num { font-family: var(--serif); font-size: 36px; font-style: italic; color: var(--accent); line-height: 1; font-weight: 300; }
-.h-three-row h3 { font-family: var(--serif); font-size: 24px; font-weight: 400; line-height: 1.2; margin: 0 0 6px; }
+.h-three-row .num { font-family: var(--serif); font-size: 34px; font-style: normal; color: var(--accent-ink); line-height: 1; font-weight: 600; }
+.h-three-row h3 { font-family: var(--serif); font-size: 24px; font-weight: 600; line-height: 1.2; margin: 0 0 6px; }
 .h-three-row p { color: var(--ink-soft); font-size: 14.5px; line-height: 1.55; margin: 0; }
 
 /* ---------- Become a verified peer ---------- */
@@ -306,17 +315,17 @@ html { scroll-behavior: smooth; }
 .h-stat .lab { font-family: var(--mono); font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 10px; }
 .h-stat .v {
   font-family: var(--serif); font-size: clamp(48px, 5vw, 72px);
-  font-weight: 300; letter-spacing: -0.03em; line-height: 1; color: var(--ink);
+  font-weight: 600; letter-spacing: -0.03em; line-height: 1; color: var(--ink);
   display: flex; align-items: baseline; gap: 12px;
 }
 .h-stat .v .u { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); letter-spacing: 0.22em; }
 .h-stat .sub { color: var(--ink-soft); font-size: 13px; margin-top: 8px; }
 .h-stat.is-hero .v { font-size: clamp(72px, 7vw, 112px); color: var(--ink); position: relative; }
-.h-stat.is-hero .v em { font-style: normal; color: var(--accent); }
+.h-stat.is-hero .v em { font-style: normal; color: var(--accent-ink); }
 .h-stat.is-hero .v.is-ticking #hero-num::after,
 .h-stat.is-hero .v.is-ticking .num::after {
   content: "+1"; position: absolute; top: -8px; margin-left: 4px;
-  font-family: var(--mono); font-size: 13px; color: var(--accent-3);
+  font-family: var(--mono); font-size: 13px; color: var(--accent-ink);
   animation: tick-up 1.6s ease-out forwards;
 }
 
@@ -451,12 +460,12 @@ html { scroll-behavior: smooth; }
 .h-manifesto { max-width: 1480px; margin: 0 auto; padding: 120px 56px; text-align: left; }
 .h-manifesto-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 80px; align-items: start; }
 .h-quote {
-  font-family: var(--serif); font-style: italic;
-  font-size: clamp(28px, 3vw, 44px);
-  line-height: 1.25; color: var(--ink);
-  letter-spacing: -0.015em; max-width: 22ch;
+  font-family: var(--serif); font-style: normal; font-weight: 600;
+  font-size: clamp(28px, 3vw, 42px);
+  line-height: 1.22; color: var(--ink);
+  letter-spacing: -0.02em; max-width: 22ch;
 }
-.h-quote .drop { font-size: 1.6em; color: var(--accent); margin-right: 0.08em; line-height: 0.5; vertical-align: -0.05em; }
+.h-quote .drop { font-size: 1.6em; color: var(--accent-ink); margin-right: 0.08em; line-height: 0.5; vertical-align: -0.05em; }
 .h-manifesto-side p { color: var(--ink-soft); font-size: 14.5px; line-height: 1.6; margin-bottom: 1em; }
 .h-manifesto-side p strong { color: var(--ink); font-weight: 500; }
 .h-no-list { list-style: none; padding: 0; margin: 16px 0 24px; display: flex; flex-wrap: wrap; gap: 6px; }
@@ -469,11 +478,106 @@ html { scroll-behavior: smooth; }
 }
 .h-no-list li::before { content: ""; width: 12px; height: 1px; background: var(--accent); }
 
+/* ---------- Contact ---------- */
+.h-contact {
+  max-width: 1480px; margin: 0 auto;
+  padding: 96px 56px 120px;
+  scroll-margin-top: 96px;
+}
+.h-contact-card {
+  max-width: 720px; margin: 0 auto;
+  text-align: center;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-l);
+  background:
+    radial-gradient(125% 130% at 50% -16%, var(--coral-soft) 0%, transparent 55%),
+    var(--bg-card);
+  box-shadow: var(--shadow-card);
+  padding: 64px 56px 60px;
+}
+.h-contact-card .eyebrow { justify-content: center; }
+.h-contact-card .h2 { max-width: 16ch; margin-inline: auto; }
+.h-contact-card .h2 em { font-style: normal; color: var(--accent-ink); }
+.h-contact-card .lead { margin: 22px auto 0; max-width: 46ch; }
+.h-contact-actions {
+  margin-top: 36px;
+  display: flex; flex-wrap: wrap;
+  align-items: center; justify-content: center;
+  gap: 14px;
+}
+/* The primary mailto — a warm card with the address shown in full, lifting on
+   hover like the hero tour card. */
+.h-contact-mail {
+  display: inline-flex; align-items: center; gap: 16px;
+  text-align: left;
+  padding: 14px 20px;
+  border: 1px solid color-mix(in oklab, var(--accent) 32%, var(--line));
+  border-radius: var(--r-m);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-chip);
+  text-decoration: none;
+  transition: border-color .25s ease, box-shadow .25s ease, transform .25s ease;
+}
+.h-contact-mail:hover, .h-contact-mail:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-lift);
+  transform: translateY(-2px);
+  outline: none;
+}
+.h-contact-mail-icon {
+  width: 44px; height: 44px; flex: none;
+  display: grid; place-items: center;
+  border-radius: var(--r-s);
+  background: var(--coral-soft);
+  color: var(--accent-ink);
+}
+.h-contact-mail-text { display: grid; gap: 2px; min-width: 0; }
+.h-contact-mail-text .lab {
+  font-family: var(--mono); font-size: 9px;
+  letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-faint);
+}
+.h-contact-mail-text .addr {
+  font-family: var(--mono); font-size: 15px; color: var(--ink);
+  letter-spacing: 0.01em;
+}
+.h-contact-mail-go {
+  font-family: var(--serif); font-size: 20px; color: var(--accent-ink);
+  flex: none; transition: transform .25s ease;
+}
+.h-contact-mail:hover .h-contact-mail-go { transform: translateX(3px); }
+/* Secondary copy-to-clipboard, in the ghost-button idiom. */
+.h-contact-copy {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 11px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  cursor: pointer;
+  transition: color .2s ease, border-color .2s ease, background .2s ease;
+}
+.h-contact-copy svg { flex: none; opacity: 0.9; }
+.h-contact-copy:hover { color: var(--ink); border-color: var(--accent); }
+.h-contact-copy.is-copied {
+  color: var(--ok);
+  border-color: color-mix(in oklab, var(--ok) 50%, var(--line));
+  background: var(--halo-ok);
+}
+@media (prefers-reduced-motion: reduce) {
+  .h-contact-mail { transition: none; }
+  .h-contact-mail:hover, .h-contact-mail:focus-visible { transform: none; }
+  .h-contact-mail:hover .h-contact-mail-go { transform: none; }
+}
+
 /* Hero collapses at the same breakpoint + padding as Peer Review (.pr-shell /
    .pr-connect) so the two surfaces stay in lockstep across widths. */
 @media (max-width: 1100px) {
   .h-hero { padding: 120px 20px 64px; }
   .h-hero-inner { grid-template-columns: 1fr; }
+  .h-contact { padding: 72px 20px 96px; }
+  .h-contact-card { padding: 48px 24px 44px; }
 }
 @media (max-width: 980px) {
   .h-idea-grid, .h-archive-head, .h-manifesto-grid, .h-peer-grid {

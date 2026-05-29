@@ -97,8 +97,8 @@ contract EvidenceConsensus {
 
     // ── Taxonomy enums ───────────────────────────────────────────────────────
 
-    enum NodeKind  { Pillar, Topic }                     // 0, 1
-    enum NodeState { None, Proposed, Ratified, Retired } // 0, 1, 2, 3 — None is the default
+    enum NodeKind  { Pillar, Topic }                                // 0, 1
+    enum NodeState { None, Proposed, Ratified, Retired, Rejected }  // 0..4 — None is the default
 
     // ── Storage ──────────────────────────────────────────────────────────────
 
@@ -169,6 +169,7 @@ contract EvidenceConsensus {
     uint32 public   forceRenounceVotes;
     uint48 internal forceRenounceMotionAt; // internal bookkeeping (stale-restart clock)
     uint32 public   forceRenounceRound;    // vote-isolation round (read by the signer to bind a PeerVote)
+    uint32 internal forceRenounceSnapshot; // activePeerCount frozen at motion-open (ceil(2n/3) bar)
     mapping(uint32 => mapping(address => bool)) private _votedForceRenounce;
 
     // ── Challenge rate limiting ──────────────────────────────────────────────
@@ -261,6 +262,7 @@ contract EvidenceConsensus {
         address   proposedBy;
         uint48    proposedAt;
         uint32    endorsements;
+        uint32    rejections;    // dissent votes; ratify becomes impossible once high enough
     }
 
     // Non-public: read via getTaxonomyNode(); auto-getter would be redundant.
@@ -270,8 +272,17 @@ contract EvidenceConsensus {
     bytes32[] private _proposedNodeIds;                    // pending proposals
     mapping(bytes32 => uint256) private proposedIndex;     // 1-based
     mapping(bytes32 => uint32)  public nodeRound;          // bumped per (re-)proposal
-    // _endorsedNode[id][round][peer] — fresh eligibility each proposal round.
+    // _endorsedNode[id][round][peer] — one act per peer per round (endorse OR
+    // reject); fresh eligibility each proposal round.
     mapping(bytes32 => mapping(uint32 => mapping(address => bool))) private _endorsedNode;
+    // activePeerCount FROZEN per node at the moment its current motion opens:
+    //   • while Proposed — the bundle gate + the "ratify impossible" denominator;
+    //   • while Ratified under a retire motion — the ceil(2n/3) retire bar.
+    // A node is never Proposed and under a retire motion at the same time, so one
+    // slot serves both phases.  Judging against the frozen count (not the live
+    // one) means a peer-set shrink mid-vote can neither lower a gate nor let votes
+    // from since-departed peers carry it.  Mirrors the binding-review `peerSnapshot`.
+    mapping(bytes32 => uint32) private nodeSnapshot;
 
     // ── Taxonomy retirement ──────────────────────────────────────────────────
     //
@@ -288,6 +299,7 @@ contract EvidenceConsensus {
     mapping(bytes32 => uint32) public retireRound;         // bumped per motion; isolates votes
     // _votedRetire[id][round][voter] — fresh eligibility each motion.
     mapping(bytes32 => mapping(uint32 => mapping(address => bool))) private _votedRetire;
+    // (retire reuses `nodeSnapshot` to freeze its ceil(2n/3) bar — see above.)
 
     // ── Founding bundle ──────────────────────────────────────────────────────
     //
@@ -346,7 +358,9 @@ contract EvidenceConsensus {
     event PillarProposed     (bytes32 indexed id, bytes32 metaHash, address indexed proposedBy, uint256 threshold);
     event TopicProposed      (bytes32 indexed id, bytes32 indexed parent, bytes32 metaHash, address indexed proposedBy, uint256 threshold);
     event NodeEndorsed       (bytes32 indexed id, address indexed endorser, uint32 endorsements, uint256 threshold);
+    event NodeRejectVoteCast (bytes32 indexed id, address indexed rejecter, uint32 rejections, uint256 threshold);
     event ProposalLapsed     (bytes32 indexed id);
+    event NodeRejected       (bytes32 indexed id, uint32 rejections);
     event PillarRatified     (bytes32 indexed id, bytes32 metaHash);
     event TopicRatified      (bytes32 indexed id, bytes32 indexed parent, bytes32 metaHash);
 
@@ -495,9 +509,11 @@ contract EvidenceConsensus {
         forceRenounceActive   = true;
         forceRenounceMotionAt = uint48(block.timestamp);
         forceRenounceVotes    = 1;
+        forceRenounceSnapshot = uint32(activePeerCount); // freeze the 2/3 bar
         _votedForceRenounce[round][msg.sender] = true;
+        _touch();
 
-        uint256 threshold = retireThreshold();
+        uint256 threshold = _retireThresholdAt(forceRenounceSnapshot);
         emit ForceRenounceMotioned(msg.sender, threshold);
         emit ForceRenounceVoteCast(msg.sender, 1, threshold);
 
@@ -512,8 +528,9 @@ contract EvidenceConsensus {
 
         _votedForceRenounce[round][msg.sender] = true;
         forceRenounceVotes++;
+        _touch();
 
-        uint256 threshold = retireThreshold();
+        uint256 threshold = _retireThresholdAt(forceRenounceSnapshot);
         emit ForceRenounceVoteCast(msg.sender, forceRenounceVotes, threshold);
 
         _checkForceRenounce(threshold);
@@ -611,6 +628,14 @@ contract EvidenceConsensus {
         lastActive[msg.sender] = uint48(block.timestamp);
     }
 
+    /// @notice Stamp the caller's liveness clock from inside a signed peer act.
+    /// Review/challenge stamp the recovered signer directly; the taxonomy,
+    /// retire and force-renounce acts call this so that participating in
+    /// governance — not only review/challenge — keeps a peer off the prune list.
+    function _touch() internal {
+        lastActive[msg.sender] = uint48(block.timestamp);
+    }
+
     /// @notice Permissionless removal of a peer idle past INACTIVITY_WINDOW.
     /// Inactivity is objective on-chain (lastActive), so no peer vote is needed —
     /// unlike the subjective misbehaviour revoke.  Never drops the active set
@@ -625,48 +650,38 @@ contract EvidenceConsensus {
 
     // ── Threshold functions ──────────────────────────────────────────────────
 
+    /// @notice ceil(n * pct / 100), floored at 1 — the shared shape of the
+    /// canonize / expel / deprecate gates.  Factored to one helper so the
+    /// percentage thresholds are defined (and audited) in exactly one place.
+    function _ceilPct(uint256 n, uint256 pct) internal pure returns (uint256) {
+        uint256 raw = (n * pct + 99) / 100;
+        return raw < 1 ? 1 : raw;
+    }
+
     /// @notice Canonization is a TRUE MAJORITY of peers (tier1 60 / tier2 55 /
     /// tier3 51 %), so "Canon" reflects majority consensus, never a large
     /// minority.  The `*At` helper takes an explicit n so a binding can be judged
     /// against the peer count snapshotted when it entered review/challenge,
     /// keeping the outcome order-independent across membership changes.
     function _canonizeThresholdAt(uint8 tier, uint256 n) internal pure returns (uint256) {
-        uint256 pct;
-        if (tier == 1) pct = 60;
-        else if (tier == 2) pct = 55;
-        else pct = 51;
-        uint256 raw = (n * pct + 99) / 100;
-        return raw < 1 ? 1 : raw;
-    }
-
-    function canonizeThreshold(uint8 tier) public view returns (uint256) {
-        return _canonizeThresholdAt(tier, activePeerCount);
+        return _ceilPct(n, tier == 1 ? 60 : tier == 2 ? 55 : 51);
     }
 
     function _expelThresholdAt(uint256 n) internal pure returns (uint256) {
-        uint256 raw = (n * 25 + 99) / 100;
-        return raw < 1 ? 1 : raw;
-    }
-
-    function expelThreshold() public view returns (uint256) {
-        return _expelThresholdAt(activePeerCount);
+        return _ceilPct(n, 25);
     }
 
     function _deprecateThresholdAt(uint8 tier, uint256 n) internal pure returns (uint256) {
-        uint256 pct;
-        if (tier == 1) pct = 65;
-        else if (tier == 2) pct = 60;
-        else pct = 55;
-        uint256 raw = (n * pct + 99) / 100;
-        return raw < 1 ? 1 : raw;
+        return _ceilPct(n, tier == 1 ? 65 : tier == 2 ? 60 : 55);
     }
 
-    function deprecateThreshold(uint8 tier) public view returns (uint256) {
-        return _deprecateThresholdAt(tier, activePeerCount);
-    }
-
-    // Admission (nomineeThreshold) and revocation (revokeThreshold) gates live in
-    // the {PeerGovernance} contract alongside the flows that use them.
+    // The percentage gates (canonize / expel / deprecate) and the bundle gate are
+    // not exposed as standalone on-chain view getters: the frontend mirrors the
+    // exact formulas off-chain (canonizeThreshold/… in src/evidence-data.js), so a
+    // redundant getter would only cost scarce EIP-170 headroom.  The internal
+    // `_*At` helpers are the single on-chain source of truth.  Admission
+    // (nomineeThreshold) and revocation (revokeThreshold) gates live in the
+    // {PeerGovernance} contract alongside the flows that use them.
 
     /// @notice Gate to ratify a taxonomy node — a STRICT MAJORITY floor(n/2)+1,
     /// decoupled from the 1/3+1 peer-admission gate (which stays load-bearing for
@@ -674,25 +689,39 @@ contract EvidenceConsensus {
     /// it is no longer far cheaper than retiring it (ceil 2n/3): the create/retire
     /// gap narrows from 1/3→2/3 to 1/2→2/3, and a sub-majority faction can no
     /// longer spawn nodes that a supermajority must then clean up.
-    function taxonomyThreshold() public view returns (uint256) {
-        return activePeerCount / 2 + 1; // strict majority; ≥ 1 for all n ≥ 0
+    function _taxonomyThresholdAt(uint256 n) internal pure returns (uint256) {
+        return n / 2 + 1; // strict majority; ≥ 1 for all n ≥ 0
     }
 
-    /// @notice Gate to retire a ratified taxonomy node — ceil(2n/3), a strong
-    /// supermajority.  Retiring canon taxonomy must be much harder than ratifying
-    /// it, and the 2/3 bar sits above the capture line, so a sub-1/3 coalition can
-    /// neither create nor destroy nodes.
-    function retireThreshold() public view returns (uint256) {
-        uint256 raw = (activePeerCount * 2 + 2) / 3; // ceil(2n / 3)
+    function taxonomyThreshold() public view returns (uint256) {
+        return _taxonomyThresholdAt(activePeerCount);
+    }
+
+    /// @notice Gate to retire a ratified taxonomy node (and to force-renounce a
+    /// captured owner) — ceil(2n/3), a strong supermajority.  Retiring canon
+    /// taxonomy must be much harder than ratifying it, and the 2/3 bar sits above
+    /// the capture line, so a sub-1/3 coalition can neither create nor destroy
+    /// nodes.  Both flows FREEZE n at motion-open (see `retireSnapshot` /
+    /// `forceRenounceSnapshot`) so a peer-set shrink can't lower the bar — nor let
+    /// votes from since-departed peers carry a motion — mid-vote.
+    function _retireThresholdAt(uint256 n) internal pure returns (uint256) {
+        uint256 raw = (n * 2 + 2) / 3; // ceil(2n / 3)
         return raw < 1 ? 1 : raw;
+    }
+
+    function retireThreshold() public view returns (uint256) {
+        return _retireThresholdAt(activePeerCount);
     }
 
     /// @notice Effective gate to ratify a founding bundle: at least the taxonomy
     /// threshold AND at least the tier's canonize threshold, so founding evidence
-    /// is never canonized on a cheaper vote than the normal review path.
-    function bundleThreshold(uint8 tier) public view returns (uint256) {
-        uint256 t = taxonomyThreshold();
-        uint256 c = canonizeThreshold(tier);
+    /// is never canonized on a cheaper vote than the normal review path.  Judged
+    /// against an explicit n so the proposal flow can FREEZE it at propose-time
+    /// (`nodeSnapshot`) — a shrink then can't lower the bar nor burn a still-
+    /// ratifiable id on a stale tally (mirrors the binding-review `peerSnapshot`).
+    function _bundleThresholdAt(uint8 tier, uint256 n) internal pure returns (uint256) {
+        uint256 t = _taxonomyThresholdAt(n);
+        uint256 c = _canonizeThresholdAt(tier, n);
         return t > c ? t : c;
     }
 
@@ -743,8 +772,10 @@ contract EvidenceConsensus {
         topicReserved[topicId]      = true;
         evidenceReserved[evidenceId] = true;
 
-        emit PillarProposed(id, metaHash, msg.sender, bundleThreshold(tier));
-        emit NodeEndorsed(id, msg.sender, 1, bundleThreshold(tier));
+        _touch();
+        uint256 gate = _bundleThresholdAt(tier, nodeSnapshot[id]);
+        emit PillarProposed(id, metaHash, msg.sender, gate);
+        emit NodeEndorsed(id, msg.sender, 1, gate);
         _checkRatify(id);
     }
 
@@ -780,8 +811,10 @@ contract EvidenceConsensus {
         foundingBundle[id] = FoundingBundle(true, bytes32(0), bytes32(0), evidenceId, tier, contentHash);
         evidenceReserved[evidenceId] = true;
 
-        emit TopicProposed(id, parentPillar, metaHash, msg.sender, bundleThreshold(tier));
-        emit NodeEndorsed(id, msg.sender, 1, bundleThreshold(tier));
+        _touch();
+        uint256 gate = _bundleThresholdAt(tier, nodeSnapshot[id]);
+        emit TopicProposed(id, parentPillar, metaHash, msg.sender, gate);
+        emit NodeEndorsed(id, msg.sender, 1, gate);
         _checkRatify(id);
     }
 
@@ -803,9 +836,34 @@ contract EvidenceConsensus {
 
         _endorsedNode[id][round][msg.sender] = true;
         n.endorsements++;
+        _touch();
 
-        emit NodeEndorsed(id, msg.sender, n.endorsements, bundleThreshold(foundingBundle[id].tier));
+        emit NodeEndorsed(id, msg.sender, n.endorsements, _bundleThresholdAt(foundingBundle[id].tier, nodeSnapshot[id]));
         _checkRatify(id);
+    }
+
+    /// @notice Vote AGAINST a pending pillar/topic proposal (the bundle, including
+    /// its founding evidence).  A reject is the taxonomy mirror of a review
+    /// rejection: the same `Vote` typehash, taxonomy phase, but `support = false`.
+    /// One act per peer per round, so a peer either endorses or rejects, never
+    /// both.  When enough peers reject that ratification can no longer be reached —
+    /// even if every remaining peer endorsed — the proposal is settled as Rejected
+    /// (terminal) instead of waiting out the window to merely Lapse.
+    function rejectNode(bytes32 id, bytes32 noteHash, bytes calldata sig)
+        external onlyActivePeer whenNotPaused
+    {
+        TaxonomyNode storage n = taxonomyNodes[id];
+        require(n.state == NodeState.Proposed, "not proposed");
+        uint32 round = nodeRound[id];
+        require(_recoverVoter(id, _PHASE_TAXONOMY, false, round, noteHash, sig) == msg.sender, "bad sig");
+        require(!_endorsedNode[id][round][msg.sender], "already voted");
+
+        _endorsedNode[id][round][msg.sender] = true;
+        n.rejections++;
+        _touch();
+
+        emit NodeRejectVoteCast(id, msg.sender, n.rejections, _bundleThresholdAt(foundingBundle[id].tier, nodeSnapshot[id]));
+        _checkReject(id);
     }
 
     function _registerProposal(bytes32 id, NodeKind kind, bytes32 parent, bytes32 metaHash) internal {
@@ -820,9 +878,12 @@ contract EvidenceConsensus {
             metaHash:     metaHash,
             proposedBy:   msg.sender,
             proposedAt:   uint48(block.timestamp),
-            endorsements: 1
+            endorsements: 1,
+            rejections:   0
         });
         _endorsedNode[id][round][msg.sender] = true;
+        // Freeze the electorate this proposal is judged against (see nodeSnapshot).
+        nodeSnapshot[id] = uint32(activePeerCount);
 
         _proposedNodeIds.push(id);
         proposedIndex[id] = _proposedNodeIds.length; // 1-based
@@ -831,7 +892,7 @@ contract EvidenceConsensus {
     function _checkRatify(bytes32 id) internal {
         TaxonomyNode storage n = taxonomyNodes[id];
         FoundingBundle memory fb = foundingBundle[id];
-        if (n.endorsements < bundleThreshold(fb.tier)) return;
+        if (n.endorsements < _bundleThresholdAt(fb.tier, nodeSnapshot[id])) return;
 
         // A topic ratifies only while its parent pillar is still ratified.  If the
         // pillar was retired while this proposal was in flight, do NOT ratify: that
@@ -859,7 +920,8 @@ contract EvidenceConsensus {
                 metaHash:     fb.topicMetaHash,
                 proposedBy:   n.proposedBy,
                 proposedAt:   n.proposedAt,
-                endorsements: n.endorsements
+                endorsements: n.endorsements,
+                rejections:   0
             });
             _pillarTopics[id].push(fb.topicId);
             emit TopicRatified(fb.topicId, id, fb.topicMetaHash);
@@ -873,28 +935,67 @@ contract EvidenceConsensus {
         }
     }
 
+    /// @notice True once a pending node can no longer be ratified: even if every
+    /// peer in the FROZEN electorate who has not rejected endorsed, endorsements
+    /// could not reach the bundle gate (`snapshot - rejections < bundleThreshold`).
+    /// Judged against the proposal's `nodeSnapshot` — the SAME frozen count
+    /// `_checkRatify` gates on — so the two stay mutually exclusive (a node that
+    /// met the gate would have ratified) AND a peer-set shrink can never lower the
+    /// denominator to burn a still-ratifiable id on a tally of since-departed
+    /// peers.  Terminal rejection therefore requires a genuine reject majority of
+    /// the electorate as it stood at proposal time, not a churn-sensitive count.
+    function _ratifyImpossible(bytes32 id) internal view returns (bool) {
+        uint256 s = nodeSnapshot[id];
+        return uint256(taxonomyNodes[id].rejections) + _bundleThresholdAt(foundingBundle[id].tier, s) > s;
+    }
+
+    /// @notice After a reject vote, settle the proposal the moment ratification is
+    /// arithmetically impossible — the taxonomy mirror of the binding review's
+    /// early "canon impossible" expulsion.  Until then the node stays Proposed so
+    /// late endorsements can still rescue it.
+    function _checkReject(bytes32 id) internal {
+        if (_ratifyImpossible(id)) _settleNode(id, true);
+    }
+
     /// @notice Garbage-collect a taxonomy proposal that never reached its gate,
     /// freeing the node id, the reserved founding topic id, and the reserved
     /// founding evidence id so they can be proposed again.  Permissionless after
-    /// the window; the next proposal of the same id gets a fresh endorsement
-    /// round (so prior endorsers can endorse again).
+    /// the window; the next proposal of the same id gets a fresh endorsement round
+    /// (so prior endorsers can endorse again).  A timeout is always a re-filable
+    /// Lapse — never a terminal Rejected: terminal rejection comes only from an
+    /// active reject consensus (`_checkReject`), so membership churn that merely
+    /// stalls a proposal can't permanently burn its id.  This mirrors how a
+    /// peer-set shrink Lapses (not Expels) a binding in `_settleReview`.
     function lapseProposal(bytes32 id) external whenNotPaused {
         TaxonomyNode storage n = taxonomyNodes[id];
         require(n.state == NodeState.Proposed, "not proposed");
         require(block.timestamp > uint256(n.proposedAt) + PROPOSAL_WINDOW, "window still open");
+        _settleNode(id, false);
+    }
 
+    /// @notice Resolve a pending proposal that will not ratify.  Always frees the
+    /// proposer's pending slot, the proposed-node list entry, the founding bundle,
+    /// and the reserved evidence / founding-topic ids.  `reject == true` burns the
+    /// node id as terminal Rejected (a consensus rejection — the id cannot be
+    /// re-proposed, mirroring an Expelled binding); otherwise the node is deleted
+    /// so its id is free to propose again (a Lapse).
+    function _settleNode(bytes32 id, bool reject) internal {
+        TaxonomyNode storage n = taxonomyNodes[id];
         FoundingBundle memory fb = foundingBundle[id];
-        NodeKind kind     = n.kind;
-        address  proposer = n.proposedBy;
 
-        pendingProposals[proposer]--;
+        pendingProposals[n.proposedBy]--;
         _removeProposal(id);
         delete foundingBundle[id];
-        delete taxonomyNodes[id];
         evidenceReserved[fb.evidenceId] = false;
-        if (kind == NodeKind.Pillar) topicReserved[fb.topicId] = false;
+        if (n.kind == NodeKind.Pillar) topicReserved[fb.topicId] = false;
 
-        emit ProposalLapsed(id);
+        if (reject) {
+            n.state = NodeState.Rejected;
+            emit NodeRejected(id, n.rejections);
+        } else {
+            delete taxonomyNodes[id];
+            emit ProposalLapsed(id);
+        }
     }
 
     /// @notice Register the founding evidence and open its (evidence, topic)
@@ -972,9 +1073,11 @@ contract EvidenceConsensus {
         retireActive[id]                 = true;
         retireMotionAt[id]               = uint48(block.timestamp);
         retireVotes[id]                  = 1;
+        nodeSnapshot[id]                 = uint32(activePeerCount); // freeze the 2/3 bar
         _votedRetire[id][round][msg.sender] = true;
+        _touch();
 
-        uint256 threshold = retireThreshold();
+        uint256 threshold = _retireThresholdAt(nodeSnapshot[id]);
         emit NodeRetireMotioned(id, msg.sender, threshold);
         emit NodeRetireVoteCast(id, msg.sender, 1, threshold);
 
@@ -991,8 +1094,9 @@ contract EvidenceConsensus {
 
         _votedRetire[id][round][msg.sender] = true;
         retireVotes[id]++;
+        _touch();
 
-        uint256 threshold = retireThreshold();
+        uint256 threshold = _retireThresholdAt(nodeSnapshot[id]);
         emit NodeRetireVoteCast(id, msg.sender, retireVotes[id], threshold);
 
         _checkRetire(id, threshold);
@@ -1114,6 +1218,13 @@ contract EvidenceConsensus {
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _DOMAIN_SEPARATOR, structHash));
         bytes32 r; bytes32 s; uint8 v;
         assembly { r := calldataload(sig.offset) s := calldataload(add(sig.offset,32)) v := byte(0, calldataload(add(sig.offset,64))) }
+        // NB: signature malleability (high-s / alternate v) is intentionally NOT
+        // guarded here.  It is a no-op for this contract: every vote is keyed by
+        // (recovered signer, round) and idempotency-checked (`already voted`), so a
+        // malleated twin recovers the same signer and is rejected; and the off-chain
+        // layer re-recovers the signer (it never keys on the raw sig bytes).  The
+        // low-s guard IS enforced in PeerGovernance, which has EIP-170 headroom; the
+        // core sits at the byte limit, so the dead-weight guard is omitted here.
         address signer = ecrecover(digest, v, r, s);
         require(signer != address(0), "bad sig");
         return signer;

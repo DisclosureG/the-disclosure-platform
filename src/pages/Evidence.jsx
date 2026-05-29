@@ -7,6 +7,8 @@ import CopyChip from '../components/CopyChip';
 import AttestationVerifier from '../components/AttestationVerifier';
 import EvidenceDetailBody from '../components/EvidenceDetailBody';
 import WalletButton from '../components/WalletButton';
+import { BrandSigil } from '../components/Sparkle';
+import { fireConfetti } from '../lib/confetti';
 import '../styles/shared.css';
 import '../styles/evidence.css';
 
@@ -42,11 +44,11 @@ const verdictClass = (v) => (v === 'endorse' ? 'approve' : v);
 const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '');
 
 const STATUS_PILL = {
-  canon:      { label: 'Canon',      cls: 'pill--canon' },
-  approved:   { label: 'Canon',      cls: 'pill--canon' },
-  reaffirmed: { label: 'Reaffirmed', cls: 'pill--reaffirmed' },
+  canon:      { label: 'In archive', cls: 'pill--canon' },
+  approved:   { label: 'In archive', cls: 'pill--canon' },
+  reaffirmed: { label: 'Upheld',     cls: 'pill--reaffirmed' },
   contested:  { label: 'Contested',  cls: 'pill--contested' },
-  deprecated: { label: 'Deprecated', cls: 'pill--deprecated' },
+  deprecated: { label: 'Removed',    cls: 'pill--deprecated' },
   pending:    { label: 'Pending',    cls: 'pill--pending' },
 };
 
@@ -76,13 +78,14 @@ function Nav() {
   return (
     <nav className="nav">
       <div className="nav-inner">
-        <a href="/demo/" className="brand">
-          <span className="brand-text">The Disclosure Platform<small>Public archive — read freely, submit freely</small></span>
+        <a href="/" className="brand">
+          <BrandSigil />
+          <span className="brand-text">The Disclosure Platform<small>DeSci · Evidence Network</small></span>
         </a>
         <div className="nav-links">
-          <a href="/demo/">Home</a>
+          <a href="/">Home</a>
           <a href="#top" className="is-active">Evidence</a>
-          <a href="/demo/peer-review/">Peer Review</a>
+          <a href="/peer-review/">Peer Review</a>
         </div>
         <div className="nav-right">
           <WalletButton />
@@ -103,9 +106,10 @@ function Hero({ counts, contractAddr }) {
           <div className="eyebrow ev-eyebrow">Evidence · The public archive</div>
           <h1 className="ev-display">Evidence<br />for the<br /><em>record.</em></h1>
           <p className="ev-lead">
-            Sourced and verifiable. Judged by named peers. Anchored on-chain.
-            Organised by category (pillar) and subtopic, weighted by tier, open to the world.
-            <strong> Anyone can vote on submitted evidence to promote it up the peer-review queue</strong> — optimising what peers review first.
+            Sourced and checkable. Reviewed by named peers. Saved to a permanent
+            public record. Organised by category and subtopic, ranked by how strong
+            the source is, and open to the world.
+            <strong> Anyone can vote on a submission to move it up the review line</strong> — so peers look at the most-wanted evidence first.
           </p>
         </div>
 
@@ -126,14 +130,14 @@ function Hero({ counts, contractAddr }) {
         </aside>
 
         <div className="ev-hero-foot">
-          <div className="ev-onchain" aria-label="On-chain status">
-            <span><span className="k">Chain</span><span className="v v--bsc">Binance Smart Chain</span></span>
+          <div className="ev-onchain" aria-label="Public record status">
+            <span><span className="k">Network</span><span className="v v--bsc">BNB Chain</span></span>
             {short && (
-              <span><span className="k">Contract</span>
-                <a className="v" href={`https://bscscan.com/address/${contractAddr}`} target="_blank" rel="noopener noreferrer">EvidenceConsensus ↗</a>
+              <span><span className="k">Public record</span>
+                <a className="v" href={`https://bscscan.com/address/${contractAddr}`} target="_blank" rel="noopener noreferrer">View it ↗</a>
               </span>
             )}
-            <span><span className="k">Indexer</span><span className={`ev-indexer ev-indexer--${idx.state}`} title={idx.lastSuccess ? `${idx.label} · last sync ${timeAgo(idx.lastSuccess)}` : idx.label}>{idx.short}</span></span>
+            <span><span className="k">Live sync</span><span className={`ev-indexer ev-indexer--${idx.state}`} title={idx.lastSuccess ? `${idx.label} · last sync ${timeAgo(idx.lastSuccess)}` : idx.label}>{idx.short}</span></span>
           </div>
         </div>
       </div>
@@ -313,7 +317,7 @@ function EvCard({ e, onOpen, onVotes, vote, style }) {
               className="ev-btn ev-btn-ghost ev-queue-boost"
               disabled={vote.busy === e.bindingId || vote.cooldownLeft > 0}
               onClick={(ev) => { ev.stopPropagation(); vote.boost(e); }}
-              title={vote.cooldownLeft > 0 ? `Vote cooldown — try again in ${fmtCooldown(vote.cooldownLeft)}` : 'Vote to promote this evidence up the peer-review queue'}
+              title={vote.cooldownLeft > 0 ? `Please wait — vote again in ${fmtCooldown(vote.cooldownLeft)}` : 'Vote to move this evidence up the review line'}
             >
               {vote.busy === e.bindingId ? 'Voting…' : vote.cooldownLeft > 0 ? `⏳ ${fmtCooldown(vote.cooldownLeft)}` : `✦ Vote · ${vote.votesFor(e)}`}
             </button>
@@ -702,19 +706,19 @@ function EmptyArchive({ contractAddr }) {
   const short = contractAddr ? `${contractAddr.slice(0, 4)}…${contractAddr.slice(-4)}` : '0x…';
   return (
     <div className="ev-archive-empty">
-      <span className="eyebrow ev-eyebrow ev-eyebrow-plain">Fresh deploy · 0 pillars · 0 topics · 0 evidence</span>
-      <h2>The archive begins where the first peer says <em>&ldquo;file.&rdquo;</em></h2>
+      <span className="eyebrow ev-eyebrow ev-eyebrow-plain">Brand new · 0 categories · 0 topics · 0 evidence</span>
+      <h2>The archive begins where the first peer says <em>&ldquo;add it.&rdquo;</em></h2>
       <p>
-        There is no seed data — by design. Verified peers propose the first pillars (categories) and topics (subtopics);
-        once peers endorse and ratify a topic, evidence can be filed under it. Anyone can submit evidence, but verified peers decide what enters the archive.
+        Nothing is pre-loaded — by design. Peers propose the first categories and topics;
+        once the group agrees on a topic, evidence can be filed under it. Anyone can add evidence, but peers decide what enters the archive.
         You are watching the network&rsquo;s first day.
       </p>
       <div className="ev-archive-empty-cta">
-        <a className="ev-btn ev-btn-primary" href="/demo/peer-review/">Propose the first pillar in Peer Review →</a>
+        <a className="ev-btn ev-btn-primary" href="/peer-review/">Propose the first category in Peer Review →</a>
       </div>
       <div className="ev-archive-empty-meta">
-        <span>Chain · <b>Binance Smart Chain</b></span>
-        <span>Contract · <b>{short}</b></span>
+        <span>Network · <b>BNB Chain</b></span>
+        <span>Public record · <b>{short}</b></span>
       </div>
     </div>
   );
@@ -898,10 +902,10 @@ function DetailModal({ e, onClose, walletPeer, vote }) {
         {/* Vote section — only for queued evidence awaiting a review slot */}
         {isQueued && vote && (
           <div className="ev-challenge-section ev-vote-section">
-            <div className="ev-challenge-form-label">Promote into peer review</div>
+            <div className="ev-challenge-form-label">Move up the review line</div>
             <p className="ev-challenge-form-sub">
-              Anyone with a wallet can cast one vote to push this evidence up the peer-review queue.
-              A short per-wallet cooldown keeps voting fair — peers review the most-voted evidence first; votes set the order, not the verdict.
+              Anyone signed in can cast one vote to move this evidence up the review line.
+              A short wait between votes keeps it fair — peers look at the most-voted evidence first. Votes set the order, not the outcome.
             </p>
             <button
               className="ev-challenge-trigger"
@@ -921,8 +925,8 @@ function DetailModal({ e, onClose, walletPeer, vote }) {
           <div className="ev-challenge-section">
             {!walletPeer?.isPeer ? (
               <p style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em', color: 'var(--ink-faint)', margin: 0 }}>
-                <a href="/demo/peer-review/" style={{ color: 'var(--accent-2)' }}>Connect as a verified peer →</a>
-                {' '}to challenge this evidence.
+                <a href="/peer-review/" style={{ color: 'var(--accent-2)' }}>Sign in as a verified peer →</a>
+                {' '}to contest this evidence.
               </p>
             ) : walletPeer.cooldownSecs > 0 ? (
               <p style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.12em', color: 'var(--warn)', margin: 0 }}>
@@ -936,10 +940,10 @@ function DetailModal({ e, onClose, walletPeer, vote }) {
               </button>
             ) : (
               <form className="ev-challenge-form" onSubmit={handleChallenge}>
-                <div className="ev-challenge-form-label">State your grounds</div>
+                <div className="ev-challenge-form-label">State your reasons</div>
                 <p className="ev-challenge-form-sub">
-                  What specific claim is wrong, misleading, or no longer supported?
-                  Other verified peers will vote to deprecate or defend.
+                  What specific claim is wrong, misleading, or no longer holds up?
+                  Other peers will vote to remove it or keep it.
                 </p>
                 <textarea
                   autoFocus
@@ -967,8 +971,8 @@ function DetailModal({ e, onClose, walletPeer, vote }) {
 
         {challenged && (
           <div className="ev-challenge-section ev-challenge-filed">
-            Challenge filed. Verified peers will vote in{' '}
-            <a href="/demo/peer-review/">Peer Review →</a>
+            Challenge filed. Peers will vote on it in{' '}
+            <a href="/peer-review/">Peer Review →</a>
             {chainWarning && (
               <p style={{ marginTop: 8, fontSize: 11, fontFamily: 'var(--mono)', letterSpacing: '0.08em', color: 'var(--warn)', opacity: 0.85 }}>
                 ⚠ {chainWarning}
@@ -1090,8 +1094,8 @@ function SubmitModal({ open, onClose, walletPeer, pillars }) {
       ? filings
       : (form.pillar && form.topic ? [{ pillar: form.pillar, topic: form.topic }] : []);
     if (!form.title.trim() || list.length === 0) return;
-    if (!CONSENSUS_ADDR)   { setSubmitError('On-chain submission is not configured.'); return; }
-    if (!window.ethereum)  { setSubmitError('A Web3 wallet (e.g. MetaMask) is required to sign your submission.'); return; }
+    if (!CONSENSUS_ADDR)   { setSubmitError('Saving to the public record isn’t set up here yet.'); return; }
+    if (!window.ethereum)  { setSubmitError('A secure crypto wallet (like MetaMask) is needed to approve your submission.'); return; }
     setSubmitting(true);
     setSubmitError(null);
 
@@ -1146,13 +1150,14 @@ function SubmitModal({ open, onClose, walletPeer, pillars }) {
       setSubmitting(false);
       const rejected = err?.code === 4001 || /reject|denied/i.test(err?.message || '');
       setSubmitError(rejected
-        ? 'Signature rejected — your submission is saved. Sign it to enter the review queue.'
-        : `On-chain submission failed — ${err?.message || 'unknown error'}`);
+        ? 'Approval cancelled — your submission is saved. Approve it to enter the review line.'
+        : `Couldn’t save to the public record — ${err?.message || 'unknown error'}`);
       return;
     }
 
     setSubmitting(false);
     setSent(true);
+    fireConfetti();
   };
 
   if (!open) return null;
@@ -1165,13 +1170,13 @@ function SubmitModal({ open, onClose, walletPeer, pillars }) {
             <div className="check">✓</div>
             <h3 className="ev-detail-title" style={{ textAlign: 'center' }}>Filed &amp; signed.</h3>
             <p className="lead" style={{ textAlign: 'center', marginTop: 12 }}>
-              You signed your submission on-chain — it&rsquo;s now in the review queue
-              for verified peers to vote on.
+              Your submission is signed and saved to the public record — it&rsquo;s
+              now in line for peers to review and vote on.
             </p>
             <p style={{ textAlign: 'center', marginTop: 12, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>
               {newBindings.length > 1
-                ? `${newBindings.length} bindings registered on-chain.`
-                : 'On-chain registration confirmed.'}
+                ? `${newBindings.length} filings saved to the public record.`
+                : 'Saved to the public record.'}
             </p>
           </div>
         ) : (
@@ -1180,11 +1185,11 @@ function SubmitModal({ open, onClose, walletPeer, pillars }) {
               <span className="ev-type">SUBMIT</span>
             </div>
             <h3 className="ev-detail-title">Add to the archive</h3>
-            <p className="ev-detail-src">Anyone may submit evidence — you sign the submission with your own wallet. Verified peers then review and vote to approve or reject.</p>
+            <p className="ev-detail-src">Anyone can add evidence — you approve the submission with your own secure key. Peers then review it and vote to accept or turn it down.</p>
 
             <div className="ev-form-grid" style={{ marginTop: 12 }}>
               <div className="ev-form-row">
-                <label htmlFor="f-pillar">Pillar</label>
+                <label htmlFor="f-pillar">Category</label>
                 <select id="f-pillar" value={form.pillar} onChange={onPillarChange} disabled={locked}>
                   {pillars.map(p => <option key={p.id} value={p.id}>{p.n} · {p.title}</option>)}
                 </select>
@@ -1271,15 +1276,15 @@ function SubmitModal({ open, onClose, walletPeer, pillars }) {
             <div className="ev-form-foot">
               <p className="ev-form-hint">
                 {submitError
-                  ? <span style={{ color: 'var(--accent)' }}>{submitError}</span>
-                  : 'You sign each filing in your wallet — peers review for relevance.'}
+                  ? <span style={{ color: 'var(--accent-ink)' }}>{submitError}</span>
+                  : 'You approve each filing with your secure key — peers then review it for relevance.'}
               </p>
               <button type="submit" className="ev-form-submit" disabled={submitting}>
                 {submitting
-                  ? 'Signing…'
+                  ? 'Approving…'
                   : newId
-                    ? 'Sign submission →'
-                    : `Sign & file evidence${(filings.length || 1) > 1 ? ` · ${filings.length} bindings` : ''} →`}
+                    ? 'Approve submission →'
+                    : `Approve & add evidence${(filings.length || 1) > 1 ? ` · ${filings.length} filings` : ''} →`}
               </button>
             </div>
           </form>
@@ -1465,19 +1470,19 @@ export default function Evidence() {
             <LoadingSkeleton />
           ) : votePillars.length === 0 ? (
             <div className="ev-archive-empty">
-              <span className="eyebrow ev-eyebrow ev-eyebrow-plain">Vote · promote into peer review</span>
+              <span className="eyebrow ev-eyebrow ev-eyebrow-plain">Vote · move evidence up the review line</span>
               <h2>{queued.length === 0
                 ? <>Nothing is awaiting your <em>vote</em> right now.</>
-                : <>No queued evidence matches your filter.</>}</h2>
+                : <>No waiting evidence matches your filter.</>}</h2>
               <p>{queued.length === 0
-                ? 'When evidence is submitted it waits here for a review slot. Cast a vote to push the evidence you most want investigated to the front of the peer-review queue.'
+                ? 'When evidence is submitted it waits here for review. Cast a vote to move the evidence you most want looked at to the front of the line.'
                 : 'Try a different search term or tier filter.'}</p>
             </div>
           ) : (
             <>
               <div className="ev-vote-intro">
                 <span className="eyebrow ev-eyebrow">Vote · {queuedFiltered.length} awaiting review</span>
-                <p>Cast one on-chain vote per item to promote it up the peer-review queue. Anyone with a wallet can vote — one vote per item, with a short per-wallet cooldown to keep it fair. Verified peers review the most-voted evidence first; votes set the order, never the verdict.</p>
+                <p>Cast one vote per item to move it up the review line. Anyone signed in can vote — one vote per item, with a short wait between votes to keep it fair. Peers look at the most-voted evidence first; votes set the order, never the outcome.</p>
                 {vote.err && <p className="ev-queue-err">{vote.err}</p>}
               </div>
               {votePillars.map((p, i) => (

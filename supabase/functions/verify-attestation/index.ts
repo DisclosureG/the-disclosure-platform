@@ -93,6 +93,7 @@ const CONTRACT_ABI = [
   "event BindingDeprecated(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 challengeVotes)",
   "event BindingReaffirmed(bytes32 indexed bindingId, bytes32 indexed id, bytes32 topicId, uint32 defenseVotes)",
   "event NodeEndorsed(bytes32 indexed id, address indexed endorser, uint32 endorsements, uint256 threshold)",
+  "event NodeRejectVoteCast(bytes32 indexed id, address indexed rejecter, uint32 rejections, uint256 threshold)",
 ];
 
 // EIP-1271 — smart-contract wallet (Safe, Argent, etc.) signature scheme.
@@ -242,14 +243,16 @@ async function verifyTxEvent(
   );
 }
 
-// A taxonomy endorsement is the NodeEndorsed(id, endorser, …) event — a layout
-// distinct from the (evidence, topic) binding events verifyTxEvent handles
-// (id@0 is the node hash, endorser@1).  Verify the tx genuinely contains this
-// peer's endorsement of this node before recording the signed attestation.
-async function verifyNodeEndorsed(
-  txHash:   string,
-  nodeHash: string | null,
-  peerAddr: string,
+// A taxonomy vote is the NodeEndorsed(id, endorser, …) / NodeRejectVoteCast(id,
+// rejecter, …) event — both share the layout (id@0 = node hash, voter@1), distinct
+// from the (evidence, topic) binding events verifyTxEvent handles. Verify the tx
+// genuinely contains this peer's endorse/reject of this node before recording the
+// signed attestation. `eventName` is "NodeEndorsed" or "NodeRejectVoteCast".
+async function verifyNodeVoteEvent(
+  txHash:    string,
+  nodeHash:  string | null,
+  peerAddr:  string,
+  eventName: string,
 ): Promise<ethers.LogDescription> {
   if (!CONTRACT_ADDR) throw new Error("CONSENSUS_ADDR not set; cannot verify tx_hash");
   const receipt = await getProvider().getTransactionReceipt(txHash);
@@ -266,16 +269,16 @@ async function verifyNodeEndorsed(
     let parsed: ethers.LogDescription | null = null;
     try { parsed = IFACE.parseLog({ topics: [...log.topics], data: log.data }); }
     catch { continue; }
-    if (!parsed || parsed.name !== "NodeEndorsed") continue;
+    if (!parsed || parsed.name !== eventName) continue;
 
-    const idArg       = parsed.args[0];
-    const endorserArg = parsed.args[1];
+    const idArg    = parsed.args[0];
+    const voterArg = parsed.args[1];
     if (wantNode && (typeof idArg !== "string" || idArg.toLowerCase() !== wantNode)) continue;
-    if (typeof endorserArg !== "string" || endorserArg.toLowerCase() !== wantPeer) continue;
+    if (typeof voterArg !== "string" || voterArg.toLowerCase() !== wantPeer) continue;
     return parsed;
   }
   throw new Error(
-    `Receipt for ${txHash.slice(0, 10)}… does not contain a matching NodeEndorsed event`,
+    `Receipt for ${txHash.slice(0, 10)}… does not contain a matching ${eventName} event`,
   );
 }
 
@@ -397,8 +400,9 @@ Deno.serve(async (req: Request) => {
   const isFinalizeAction = action === "finalize_challenge";
   const isRegisterAction = action === "register_binding_onchain" || action === "register_evidence_onchain";
   const isEndorseAction  = action === "endorse_node";
-  // A taxonomy rejection is a signed dissent with no on-chain counterpart (the
-  // contract has no reject-node call), so it skips tx-hash verification.
+  // A taxonomy rejection is now the on-chain dissent mirror of endorse — a Vote
+  // (phase 2, support=false) recovered on-chain by rejectNode — so it is verified
+  // exactly like an endorse (only the support bool + the emitted event differ).
   const isRejectNodeAction = action === "reject_node";
   const isTaxonomyAction   = isEndorseAction || isRejectNodeAction;
 
@@ -456,15 +460,14 @@ Deno.serve(async (req: Request) => {
   // ── Signature verification ─────────────────────────────────────────────────
   // VOTE actions are authorised by the on-chain `Vote` EIP-712 typed data — the
   // SAME message the contract recovers — so the off-chain row can never carry a
-  // signature the chain would reject. This now includes taxonomy ENDORSE
-  // (endorse_node: Vote phase 2, bindingId = the node id), which is recovered
-  // on-chain by EvidenceConsensus. Only taxonomy REJECT (reject_node) remains an
-  // off-chain-only dissent that keeps the legacy `Attestation` typed data.
-  // endorse_node carries a round only when it rode an on-chain Vote (production);
-  // the dev-mode (no-contract) fallback signs a legacy Attestation with no round,
-  // so it stays on the Attestation path below.
-  const endorseAsVote = isEndorseAction && round !== null && round !== undefined;
-  const isVoteAction = action === "review_vote" || action === "open_challenge" || action === "challenge_vote" || endorseAsVote;
+  // signature the chain would reject. This includes BOTH taxonomy ENDORSE
+  // (endorse_node: Vote phase 2, support=true) and REJECT (reject_node: Vote
+  // phase 2, support=false), bindingId = the node id, both recovered on-chain by
+  // EvidenceConsensus. A taxonomy action carries a round only when it rode an
+  // on-chain Vote (production); the dev-mode (no-contract) fallback signs a legacy
+  // Attestation with no round, so it stays on the Attestation path below.
+  const taxonomyAsVote = isTaxonomyAction && round !== null && round !== undefined;
+  const isVoteAction = action === "review_vote" || action === "open_challenge" || action === "challenge_vote" || taxonomyAsVote;
 
   // The binding hash the Vote signature is bound to.  Prefer the value supplied
   // by the frontend; fall back to looking it up from the bindings table by
@@ -498,16 +501,17 @@ Deno.serve(async (req: Request) => {
       // phase / support / bindingId differ by action:
       //   review_vote      → phase 0, bindingId = the (evidence × topic) binding
       //   open/challenge   → phase 1, bindingId = the binding
-      //   endorse_node     → phase 2, bindingId = the NODE id (node_hash)
+      //   endorse_node     → phase 2, bindingId = the NODE id, support = true
+      //   reject_node      → phase 2, bindingId = the NODE id, support = false
       let votePhase: number;
       let voteSupport: boolean;
-      if (isEndorseAction) {
-        votePhase   = 2;     // taxonomy
-        voteSupport = true;  // an endorsement is always support=true
+      if (isTaxonomyAction) {
+        votePhase   = 2;                 // taxonomy
+        voteSupport = isEndorseAction;   // endorse → true, reject → false
         // The taxonomy Vote signs the node id, not the founding binding hash.
         voteBindingHash = (binding_hash as string | null) ?? (node_hash as string | null);
         if (!voteBindingHash) {
-          return json({ error: "endorse_node requires node_hash" }, 400, origin);
+          return json({ error: `${action} requires node_hash` }, 400, origin);
         }
       } else {
         // Resolve the bindingId if the frontend didn't send it.
@@ -621,9 +625,14 @@ Deno.serve(async (req: Request) => {
 
   // ── tx_hash verification ───────────────────────────────────────────────────
   let registerEventContentHash: string | null = null;
-  if (CONTRACT_ADDR && tx_hash && isEndorseAction) {
+  if (CONTRACT_ADDR && tx_hash && isTaxonomyAction) {
     try {
-      await verifyNodeEndorsed(tx_hash as string, node_hash as string | null, peerNorm);
+      await verifyNodeVoteEvent(
+        tx_hash as string,
+        node_hash as string | null,
+        peerNorm,
+        isEndorseAction ? "NodeEndorsed" : "NodeRejectVoteCast",
+      );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return json({ error: `tx_hash verification failed: ${msg}` }, 401, origin);
@@ -669,7 +678,9 @@ Deno.serve(async (req: Request) => {
       const msg = err instanceof Error ? err.message : String(err);
       return json({ error: `tx_hash verification failed: ${msg}` }, 401, origin);
     }
-  } else if (CONTRACT_ADDR && !isFinalizeAction && !isRegisterAction && !isRejectNodeAction) {
+  } else if (CONTRACT_ADDR && !isFinalizeAction && !isRegisterAction) {
+    // With a contract configured, every vote (incl. taxonomy endorse AND reject)
+    // is cast on-chain, so a missing tx_hash means the row has no chain backing.
     return json({ error: "Missing required field: tx_hash" }, 400, origin);
   } else if (CONTRACT_ADDR && isRegisterAction && !tx_hash) {
     return json({ error: "binding registration requires tx_hash" }, 400, origin);

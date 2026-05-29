@@ -23,6 +23,11 @@ const CONTRACT_ADDR = Deno.env.get("CONSENSUS_ADDR") ?? null;
 // scan BOTH addresses in one eth_getLogs (address array), and since each event's
 // topic0 is unique the merged ABI parses logs from whichever contract emitted.
 const GOVERNANCE_ADDR = Deno.env.get("GOVERNANCE_ADDR") ?? null;
+// EvidenceArchive sidecar: emits the readable strings the core only commits as
+// hashes (evidence content, node meta, note text). Scanned alongside core + gov
+// so a wipe can be rebuilt from chain. Each event's topic0 is unique, so the
+// merged ABI parses it regardless of which contract emitted.
+const CONTENT_ARCHIVE_ADDR = Deno.env.get("CONTENT_ARCHIVE_ADDR") ?? null;
 const RPC_URL       = Deno.env.get("CONSENSUS_RPC_URL") ?? "https://data-seed-prebsc-1-s1.binance.org:8545/";
 const MAX_RANGE     = 4_000; // BSC public RPCs cap eth_getLogs ranges
 const CONFIRMATIONS = Number(Deno.env.get("INDEXER_CONFIRMATIONS") ?? 12);
@@ -41,7 +46,9 @@ const ABI = [
   "event PillarProposed(bytes32 indexed id, bytes32 metaHash, address indexed proposedBy, uint256 threshold)",
   "event TopicProposed(bytes32 indexed id, bytes32 indexed parent, bytes32 metaHash, address indexed proposedBy, uint256 threshold)",
   "event NodeEndorsed(bytes32 indexed id, address indexed endorser, uint32 endorsements, uint256 threshold)",
+  "event NodeRejectVoteCast(bytes32 indexed id, address indexed rejecter, uint32 rejections, uint256 threshold)",
   "event ProposalLapsed(bytes32 indexed id)",
+  "event NodeRejected(bytes32 indexed id, uint32 rejections)",
   "event PillarRatified(bytes32 indexed id, bytes32 metaHash)",
   "event TopicRatified(bytes32 indexed id, bytes32 indexed parent, bytes32 metaHash)",
   "event NodeRetired(bytes32 indexed id, uint8 kind, bytes32 indexed parent)",
@@ -65,6 +72,10 @@ const ABI = [
   "event PeerRevoked(address indexed peer, uint256 activePeerCount)",
   "event Paused(address indexed by)",
   "event Unpaused(address indexed by)",
+  // EvidenceArchive — the readable strings behind the hashes.
+  "event EvidenceContentPublished(bytes32 indexed id, bytes32 contentHash, string canonical, string extra)",
+  "event NodeMetaPublished(bytes32 indexed id, bytes32 metaHash, string canonical)",
+  "event NotePublished(bytes32 indexed noteHash, string text)",
 ];
 
 const IFACE = new ethers.Interface(ABI);
@@ -127,20 +138,55 @@ async function resolvePeerHandle(
   return handle;
 }
 
-// Garbage-collect the pending founding evidence + binding placeholders under a
-// set of topics whose proposal lapsed.  These were inserted off-chain when the
-// node was proposed but were never submitted on-chain (an un-ratified topic
-// can't accept on-chain evidence), so flipping the pending/not-on-chain rows to
-// 'lapsed' is safe and idempotent.
-async function lapseFoundingBundle(
+// Settle the pending founding evidence + binding placeholders under a set of
+// topics whose proposal resolved without ratifying.  These were inserted
+// off-chain when the node was proposed but were never submitted on-chain (an
+// un-ratified topic can't accept on-chain evidence), so flipping the
+// pending/not-on-chain rows is safe and idempotent.  `status` is 'lapsed' for a
+// timed-out proposal (re-filable) or 'rejected' for one a consensus voted down.
+async function settleFoundingBundle(
   supabase: ReturnType<typeof createClient>,
   topicIds: string[],
+  status:   "lapsed" | "rejected",
 ): Promise<void> {
   if (!topicIds.length) return;
-  await supabase.from("bindings").update({ status: "lapsed" })
+  await supabase.from("bindings").update({ status })
     .in("topic_id", topicIds).eq("status", "pending").eq("submitted_onchain", false);
-  await supabase.from("evidence").update({ status: "lapsed" })
+  await supabase.from("evidence").update({ status })
     .in("topic_id", topicIds).eq("status", "pending").eq("submitted_onchain", false);
+}
+
+// Project a non-ratifying proposal's terminal status onto the off-chain rows.
+// The lapse / reject events carry only the node id, so resolve whether it's a
+// pillar (also flips its bundled founding topic) or a standalone topic, and flip
+// the whole founding bundle — node row + pending evidence/binding placeholders —
+// to `status` ('lapsed' for a timeout, re-filable; 'rejected' for a consensus
+// rejection, terminal).  Guards keep it idempotent.  Returns true if it flipped.
+async function settleProposalNode(
+  supabase: ReturnType<typeof createClient>,
+  nodeHash: string,
+  status:   "lapsed" | "rejected",
+): Promise<boolean> {
+  const { data: pillarRow } = await supabase
+    .from("pillars").select("id").eq("node_hash", nodeHash).eq("status", "proposed").maybeSingle();
+  if (pillarRow) {
+    const pillarId = (pillarRow as { id: string }).id;
+    const { data: topicRows } = await supabase
+      .from("topics").select("id").eq("pillar_id", pillarId).eq("status", "proposed");
+    await settleFoundingBundle(supabase, (topicRows ?? []).map((t) => (t as { id: string }).id), status);
+    await supabase.from("topics").update({ status }).eq("pillar_id", pillarId).eq("status", "proposed");
+    await supabase.from("pillars").update({ status }).eq("id", pillarId).eq("status", "proposed");
+    return true;
+  }
+  const { data: topicRow } = await supabase
+    .from("topics").select("id").eq("node_hash", nodeHash).eq("status", "proposed").maybeSingle();
+  if (topicRow) {
+    const topicId = (topicRow as { id: string }).id;
+    await settleFoundingBundle(supabase, [topicId], status);
+    await supabase.from("topics").update({ status }).eq("id", topicId).eq("status", "proposed");
+    return true;
+  }
+  return false;
 }
 
 type Decoded = {
@@ -148,6 +194,13 @@ type Decoded = {
   peer_addr:   string | null;
   payload:     Record<string, unknown>;
 };
+
+// Parse a canonical JSON string emitted by EvidenceArchive; null on garbage so a
+// malformed publish can never crash the indexer run.
+function safeJson(s: string | undefined | null): Record<string, unknown> | null {
+  if (!s) return null;
+  try { const v = JSON.parse(s); return v && typeof v === "object" ? v : null; } catch { return null; }
+}
 
 function project(name: string, args: ethers.Result): Decoded {
   const out: Decoded = { evidence_id: null, peer_addr: null, payload: {} };
@@ -158,6 +211,27 @@ function project(name: string, args: ethers.Result): Decoded {
       out.payload     = {
         tier:         Number(args[1]),
         content_hash: (args[3] as string).toLowerCase(),
+      };
+      break;
+    case "EvidenceContentPublished":
+      out.evidence_id = bytes32ToUuid(args[0] as string);
+      out.payload = {
+        content_hash: (args[1] as string).toLowerCase(),
+        canonical:    args[2] as string,
+        extra:        args[3] as string,
+      };
+      break;
+    case "NodeMetaPublished":
+      out.payload = {
+        node_hash: (args[0] as string).toLowerCase(),
+        meta_hash: (args[1] as string).toLowerCase(),
+        canonical: args[2] as string,
+      };
+      break;
+    case "NotePublished":
+      out.payload = {
+        note_hash: (args[0] as string).toLowerCase(),
+        text:      args[1] as string,
       };
       break;
     case "BindingSubmitted":
@@ -190,8 +264,15 @@ function project(name: string, args: ethers.Result): Decoded {
       out.peer_addr = (args[1] as string).toLowerCase();
       out.payload   = { node_hash: (args[0] as string).toLowerCase(), endorser: (args[1] as string).toLowerCase(), endorsements: Number(args[2]), threshold: Number(args[3]) };
       break;
+    case "NodeRejectVoteCast":
+      out.peer_addr = (args[1] as string).toLowerCase();
+      out.payload   = { node_hash: (args[0] as string).toLowerCase(), rejecter: (args[1] as string).toLowerCase(), rejections: Number(args[2]), threshold: Number(args[3]) };
+      break;
     case "ProposalLapsed":
       out.payload = { node_hash: (args[0] as string).toLowerCase() };
+      break;
+    case "NodeRejected":
+      out.payload = { node_hash: (args[0] as string).toLowerCase(), rejections: Number(args[1]) };
       break;
     case "RevocationCancelled":
     case "NomineeLapsed":
@@ -368,7 +449,7 @@ Deno.serve(async (req: Request) => {
       // eth_getLogs accepts an address ARRAY, so a single call covers both the
       // core and the PeerGovernance contracts. Topic0 is unique per event, so
       // the merged Interface parses each log regardless of which one emitted it.
-      const scanAddrs = [CONTRACT_ADDR, GOVERNANCE_ADDR].filter(Boolean) as string[];
+      const scanAddrs = [CONTRACT_ADDR, GOVERNANCE_ADDR, CONTENT_ARCHIVE_ADDR].filter(Boolean) as string[];
       logs = await provider.getLogs({ address: scanAddrs, fromBlock: from, toBlock: to });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -485,6 +566,67 @@ Deno.serve(async (req: Request) => {
           .eq("submitted_onchain", false);
       }
 
+      // ── EvidenceArchive: the readable strings behind the hashes ──────────
+      // Project published content / node meta / note text back into the tables
+      // so the chain is a complete backup and a wiped DB can be rebuilt. Purely
+      // additive UPSERTs: they create the row on a from-empty replay and
+      // fill/confirm it in normal operation, and never touch lifecycle status
+      // (status is owned by the proposal/ratify/binding events above).
+      if (parsed.name === "EvidenceContentPublished" && decoded.evidence_id) {
+        const p = decoded.payload as { content_hash?: string; canonical?: string; extra?: string };
+        const c = safeJson(p.canonical);
+        if (c) {
+          const x = safeJson(p.extra);
+          const row: Record<string, unknown> = {
+            id:                decoded.evidence_id,
+            title:             String(c.title ?? ""),
+            source:            (c.source as string) || null,
+            year:              (c.year as string) || null,
+            excerpt:           (c.excerpt as string) || null,
+            link:              (c.link as string) || null,
+            tier:              Number(c.tier),
+            content_hash:      p.content_hash ?? null,
+            submitted_onchain: true,
+          };
+          if (x && "type" in x)            row.type = (x.type as string) ?? null;
+          if (x && Array.isArray(x.tags))  row.tags = x.tags;
+          await supabase.from("evidence").upsert(row, { onConflict: "id" });
+          reconciled++;
+        }
+      } else if (parsed.name === "NodeMetaPublished") {
+        const p = decoded.payload as { node_hash?: string; meta_hash?: string; canonical?: string };
+        const m = safeJson(p.canonical);
+        if (m && p.node_hash) {
+          if (m.kind === "pillar") {
+            await supabase.from("pillars").upsert({
+              id: String(m.slug), node_hash: p.node_hash,
+              title: String(m.title ?? ""), tag: (m.tag as string) || null, blurb: (m.blurb as string) || null,
+              meta_hash: p.meta_hash ?? null,
+            }, { onConflict: "id" });
+            reconciled++;
+          } else if (m.kind === "topic") {
+            await supabase.from("topics").upsert({
+              id: String(m.slug), pillar_id: (m.parent as string) || null, node_hash: p.node_hash,
+              title: String(m.title ?? ""), blurb: (m.blurb as string) || null,
+              meta_hash: p.meta_hash ?? null,
+            }, { onConflict: "id" });
+            reconciled++;
+          }
+        }
+      } else if (parsed.name === "NotePublished") {
+        const p = decoded.payload as { note_hash?: string; text?: string };
+        if (p.note_hash && p.text) {
+          await supabase.from("archive_notes").upsert(
+            { note_hash: p.note_hash, note: p.text },
+            { onConflict: "note_hash", ignoreDuplicates: true },
+          );
+          // Best-effort fill of the human-facing note columns that join by hash
+          // (only attestations + gov_votes carry note_hash).
+          await supabase.from("attestations").update({ note: p.text }).eq("note_hash", p.note_hash).is("note", null);
+          await supabase.from("gov_votes").update({ note: p.text }).eq("note_hash", p.note_hash).is("note", null);
+        }
+      }
+
       // BindingSubmitted / BindingQueued reconcile the (evidence × topic) binding
       // row: resolve the on-chain topic node_hash → slug + pillar, then bind the
       // row to chain.  A submission enters review immediately when a slot is free
@@ -578,34 +720,16 @@ Deno.serve(async (req: Request) => {
           if (!e) reconciled++;
         }
       } else if (parsed.name === "ProposalLapsed") {
-        // A stalled proposal was garbage-collected on-chain.  The event carries
-        // only the node id, so resolve whether it's a pillar or a topic and flip
-        // the whole founding bundle to 'lapsed' (a pillar also carries a founding
-        // topic; both carry a pending founding evidence + binding that were never
-        // submitted on-chain).  Guards keep this idempotent.
+        // A stalled proposal was garbage-collected on-chain (timeout) → re-filable
+        // Lapse for the whole founding bundle.
         const p = decoded.payload as { node_hash?: string };
-        if (p.node_hash) {
-          const { data: pillarRow } = await supabase
-            .from("pillars").select("id").eq("node_hash", p.node_hash).eq("status", "proposed").maybeSingle();
-          if (pillarRow) {
-            const pillarId = (pillarRow as { id: string }).id;
-            const { data: topicRows } = await supabase
-              .from("topics").select("id").eq("pillar_id", pillarId).eq("status", "proposed");
-            await lapseFoundingBundle(supabase, (topicRows ?? []).map((t) => (t as { id: string }).id));
-            await supabase.from("topics").update({ status: "lapsed" }).eq("pillar_id", pillarId).eq("status", "proposed");
-            await supabase.from("pillars").update({ status: "lapsed" }).eq("id", pillarId).eq("status", "proposed");
-            reconciled++;
-          } else {
-            const { data: topicRow } = await supabase
-              .from("topics").select("id").eq("node_hash", p.node_hash).eq("status", "proposed").maybeSingle();
-            if (topicRow) {
-              const topicId = (topicRow as { id: string }).id;
-              await lapseFoundingBundle(supabase, [topicId]);
-              await supabase.from("topics").update({ status: "lapsed" }).eq("id", topicId).eq("status", "proposed");
-              reconciled++;
-            }
-          }
-        }
+        if (p.node_hash && await settleProposalNode(supabase, p.node_hash, "lapsed")) reconciled++;
+      } else if (parsed.name === "NodeRejected") {
+        // A proposal a peer consensus voted down on-chain — rejections made
+        // ratification impossible, so the node is terminal Rejected. Flip the
+        // whole founding bundle to 'rejected' (mirrors the lapse path).
+        const p = decoded.payload as { node_hash?: string };
+        if (p.node_hash && await settleProposalNode(supabase, p.node_hash, "rejected")) reconciled++;
       }
 
       // ── Status reconciliation ────────────────────────────────────────────

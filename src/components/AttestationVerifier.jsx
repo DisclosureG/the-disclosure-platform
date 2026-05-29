@@ -9,10 +9,11 @@ const explorerBase = CONSENSUS_CHAIN_ID === 56 ? 'https://bscscan.com' : 'https:
 const SHORT = (a) => (a ? `${a.slice(0, 10)}…${a.slice(-8)}` : '');
 
 // Most peer acts are authorised by an EIP-712 *Vote* recovered on-chain:
-// review (phase 0), challenge (phase 1), and now taxonomy ENDORSE (phase 2, whose
-// Vote signs the NODE id). Taxonomy REJECT (and the dev-mode endorse fallback)
-// stay off-chain *Attestation*-typed. So the proof modal recovers a Vote when the
-// row carries the Vote-digest fields and an Attestation otherwise.
+// review (phase 0), challenge (phase 1), and taxonomy ENDORSE / REJECT (phase 2,
+// whose Vote signs the NODE id — support=true for endorse, false for reject).
+// Only the dev-mode (no-contract) taxonomy fallback stays off-chain
+// *Attestation*-typed. So the proof modal recovers a Vote when the row carries
+// the Vote-digest fields and an Attestation otherwise.
 
 // The Vote message a row commits to, or null when it's an Attestation row (or a
 // vote row missing its digest fields). review/challenge sign the binding hash;
@@ -29,10 +30,11 @@ function voteMessage(a) {
     const phase   = a.phase === 'challenge' ? 1 : 0;
     return { bindingId, phase, support, round: Number(round), noteHash };
   }
-  if (a.phase === 'taxonomy' && a.verdict === 'endorse') {
+  if (a.phase === 'taxonomy' && (a.verdict === 'endorse' || a.verdict === 'reject')) {
     const bindingId = a.node_hash ?? a.nodeHash ?? null;
-    if (!bindingId) return null;          // dev-mode endorse → Attestation fallback
-    return { bindingId, phase: 2, support: true, round: Number(round), noteHash };
+    if (!bindingId) return null;          // dev-mode → Attestation fallback
+    // endorse signs support=true, reject signs support=false (same node-id Vote).
+    return { bindingId, phase: 2, support: a.verdict === 'endorse', round: Number(round), noteHash };
   }
   // Node/owner governance: retire (phase 3) + force-renounce (phase 4). Both sign
   // the node id / sentinel in node_hash, support = true.
@@ -45,15 +47,15 @@ function voteMessage(a) {
 }
 
 // Whether this row's signature can be recovered client-side. review/challenge are
-// ONLY recoverable as a Vote (they need the digest fields); taxonomy endorse is a
-// Vote when node_hash/round/note_hash are present, else an Attestation; taxonomy
-// reject is always an Attestation. When a vote row lacks its digest fields we
-// show the chain-only proof (tx) instead of a recovery that can't succeed.
+// ONLY recoverable as a Vote (they need the digest fields); taxonomy endorse/reject
+// are a Vote when node_hash/round/note_hash are present, else (dev mode) an
+// Attestation. When a vote row lacks its digest fields we show the chain-only
+// proof (tx) instead of a recovery that can't succeed.
 function canRecoverRow(a) {
   if (!a?.eip712_sig) return false;
   // Vote-only rows are recoverable solely via their Vote digest fields.
   if (['review', 'challenge', 'retire', 'renounce'].includes(a.phase)) return !!voteMessage(a);
-  return true; // taxonomy endorse (Vote or Attestation) / reject (Attestation)
+  return true; // taxonomy endorse/reject (Vote when digest fields present, else Attestation)
 }
 
 // Reconstruct the exact EIP-712 Attestation message that was signed (taxonomy
@@ -215,11 +217,8 @@ function ContentProofBody({ a, onStatus }) {
 // Derivation panel — renders the underlying signed-peer tally that produced a
 // Network outcome. Used inside step 1 of the verifier modal for any Network row
 // (chain-emitted canonized / expelled / lapsed / deprecated / reaffirmed /
-// ratified / retired, plus the off-chain-only consensus-reject). Takes either:
-//   • `precomputed`: stats already on the row (the consensus-reject case,
-//     computed client-side in useDerivedConsensusRejects), OR
-//   • `descriptor` + `peers`: a descriptor from getVoteLogDerivation, which the
-//     panel resolves into a tally via fetchDerivationTally on mount.
+// ratified / retired / rejected). Takes a `descriptor` from getVoteLogDerivation,
+// which the panel resolves into a tally via fetchDerivationTally on mount.
 // `onLinkback` (optional) — when present, the panel renders a "View signed
 // votes" button that calls back with the descriptor's filterTerm so the host
 // log can filter to the contributing rows.
@@ -299,7 +298,7 @@ function SignersList({ groups, handleMap }) {
   );
 }
 
-export function DerivationPanel({ descriptor, precomputed, onLinkback, handleMap }) {
+export function DerivationPanel({ descriptor, onLinkback, handleMap }) {
   const [tally, setTally] = useState(null);
   const [moment, setMoment] = useState(null);   // { peers, blockNumber, threshold }
   const [chain, setChain] = useState(null);     // { count, threshold, payload } from chain_events payload
@@ -310,25 +309,6 @@ export function DerivationPanel({ descriptor, precomputed, onLinkback, handleMap
     let cancelled = false;
     setState('loading');
     (async () => {
-      // Taxonomy-reject precomputed path: signers are the off-chain signed
-      // dissents (attestations with phase='taxonomy', verdict='reject' for this
-      // founding binding's node_hash), since there's no on-chain reject event
-      // for the chain_events query to read.
-      if (precomputed) {
-        const signers = precomputed.filterTerm
-          ? await fetchSigners({
-              table: 'attestations',
-              match: { node_hash: precomputed.filterTerm, phase: 'taxonomy', verdict: 'reject' },
-              peerFrom: 'peer_addr',
-              handleFrom: 'peer_handle',
-              sigFrom: 'eip712_sig',
-            })
-          : [];
-        if (cancelled) return;
-        setSignerGroups([{ label: 'Signed dissenters', signers }]);
-        setState('ok');
-        return;
-      }
       if (!descriptor) { setState('ok'); return; }
       const [t, m, c] = await Promise.all([
         fetchDerivationTally(descriptor),
@@ -357,29 +337,7 @@ export function DerivationPanel({ descriptor, precomputed, onLinkback, handleMap
       setState('ok');
     })().catch(() => { if (!cancelled) setState('error'); });
     return () => { cancelled = true; };
-  }, [descriptor, precomputed]);
-
-  if (precomputed) {
-    return (
-      <>
-        <div className="av-kv">
-          <div className="av-row"><span className="k">Signed dissents</span><span className="v"><b>{precomputed.dissents}</b> peers signed a reject on this proposal</span></div>
-          {precomputed.peers != null && <div className="av-row"><span className="k">Active peers (at the time)</span><span className="v">{precomputed.peers}</span></div>}
-          {precomputed.need != null && <div className="av-row"><span className="k">Endorses needed to ratify</span><span className="v">{precomputed.need}</span></div>}
-          {precomputed.peers != null && precomputed.need != null && (
-            <div className="av-row"><span className="k">Eligible endorsers left</span><span className="v">{Math.max(0, precomputed.peers - precomputed.dissents)} — below the {precomputed.need} threshold</span></div>
-          )}
-          <p className="av-verdict">
-            Once dissents exceed <code>peers − threshold</code>, fewer than the required number of peers
-            remain available to endorse — ratification becomes impossible regardless of how many of them
-            later vote yes. This row marks that crossing.
-          </p>
-        </div>
-        {state === 'loading' && <p className="av-step-note">Loading signed dissents…</p>}
-        <SignersList groups={signerGroups} handleMap={handleMap} />
-      </>
-    );
-  }
+  }, [descriptor]);
 
   if (!descriptor) {
     return (
@@ -452,19 +410,12 @@ function VerifierModal({ a, onClose, handle, onLinkback, handleMap }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const isDerived = !!a.derived;
-  // A "Network" row is the contract's projection of underlying signed peer
-  // votes (canonized / expelled / lapsed / deprecated / reaffirmed / ratified
-  // / retired) OR the off-chain consensus-reject projection. For these the
-  // step 1 body renders a DerivationPanel instead of signature recovery.
-  const isNetwork = (!a.peer_addr && a.peer_handle === 'Network') || isDerived;
-  const descriptor = isNetwork && !isDerived ? getVoteLogDerivation(a) : null;
-  const precomputed = isDerived ? {
-    dissents: a.derived_dissents,
-    peers: a.derived_peers,
-    need: a.derived_need,
-    filterTerm: a.node_hash || null,
-  } : null;
+  // A "Network" row is the contract's projection of underlying signed peer votes
+  // (canonized / expelled / lapsed / deprecated / reaffirmed / ratified / retired
+  // / rejected). For these the step 1 body renders a DerivationPanel (which
+  // recounts the on-chain votes) instead of signature recovery.
+  const isNetwork = !a.peer_addr && a.peer_handle === 'Network';
+  const descriptor = isNetwork ? getVoteLogDerivation(a) : null;
   const rawSig = a.eip712_sig || '';
   const vote = voteMessage(a);
   const canRecoverVote = !!vote;
@@ -501,7 +452,7 @@ function VerifierModal({ a, onClose, handle, onLinkback, handleMap }) {
   const authChip  = isNetwork ? 'Derived' : !sig ? 'Not archived' : status === 'ok' ? 'Authentic ✓' : status === 'bad' ? 'Mismatch ✗' : null;
 
   const txState = a.tx_hash ? 'idle' : 'na';
-  const txChip  = isDerived ? 'Off-chain by design' : a.tx_hash ? 'On-chain' : 'No tx';
+  const txChip  = a.tx_hash ? 'On-chain' : 'No tx';
 
   const contentState = !a.content_hash ? 'na'
     : contentStatus === 'ok' ? 'ok'
@@ -517,19 +468,10 @@ function VerifierModal({ a, onClose, handle, onLinkback, handleMap }) {
       <div className="av-modal" onClick={(e) => e.stopPropagation()}>
         <button className="av-close" onClick={onClose} aria-label="Close">×</button>
 
-        <span className="av-eyebrow">Independent verification</span>
-        <h3 className="av-title">{isNetwork ? 'How this consensus outcome was derived' : 'Prove this vote yourself'}</h3>
+        <span className="av-eyebrow">Check it yourself</span>
+        <h3 className="av-title">{isNetwork ? 'How this result was reached' : 'Check this vote is real'}</h3>
         <p className="av-lead">
-          {isDerived ? (
-            <>
-              The contract has no on-chain reject for taxonomy proposals — by design, a node either
-              ratifies at endorsement threshold or sits Proposed until its window lapses. This row
-              is a <b>projection</b> of the signed peer dissents that, together, made ratification
-              arithmetically impossible. Nothing here is invented: each dissent has its own row in
-              this log, signed by its peer and independently verifiable. The steps below explain the
-              math and how to inspect the underlying signatures.
-            </>
-          ) : isNetwork ? (
+          {isNetwork ? (
             <>
               The contract emitted this outcome when the underlying signed peer votes crossed
               threshold. This row is a <b>projection</b> of those votes: <b>Step 1</b> shows the
@@ -539,10 +481,10 @@ function VerifierModal({ a, onClose, handle, onLinkback, handleMap }) {
             </>
           ) : (
             <>
-              This vote stands on three independent proofs — <b>who</b> cast it, <b>that</b> it was
-              recorded on-chain, and <b>what</b> it was cast on. Each one re-checks in your own
-              browser, with no server in the loop — you never have to trust this page. Work through
-              the steps.
+              This vote rests on three independent proofs — <b>who</b> cast it, <b>that</b> it was
+              saved to the permanent public record, and <b>what</b> it was cast on. Each one re-checks
+              right here in your own browser, with no server in the loop — you never have to trust this
+              page. Work through the steps.
             </>
           )}
         </p>
@@ -562,7 +504,6 @@ function VerifierModal({ a, onClose, handle, onLinkback, handleMap }) {
             {isNetwork ? (
               <DerivationPanel
                 descriptor={descriptor}
-                precomputed={precomputed}
                 onLinkback={onLinkback}
                 handleMap={handleMap}
               />
@@ -648,12 +589,6 @@ function VerifierModal({ a, onClose, handle, onLinkback, handleMap }) {
                   View the vote transaction <span className="mono">{SHORT(a.tx_hash)}</span> <span aria-hidden="true">↗</span>
                 </a>
               </>
-            ) : isDerived ? (
-              <p className="av-step-note">
-                No transaction — taxonomy reject is off-chain by design. The on-chain anchor is in
-                the underlying dissents: each signed reject_node Attestation is its own row in this
-                log, and each one's signer is recoverable in your browser.
-              </p>
             ) : (
               <p className="av-step-note">No transaction hash is recorded on this row.</p>
             )}
@@ -690,7 +625,7 @@ function VerifierModal({ a, onClose, handle, onLinkback, handleMap }) {
 export default function AttestationVerifier({ a, handle, onLinkback, handleMap }) {
   const [open, setOpen] = useState(false);
   const hasSig = canRecoverRow(a);
-  const isNetwork = (!a.peer_addr && a.peer_handle === 'Network') || !!a.derived;
+  const isNetwork = !a.peer_addr && a.peer_handle === 'Network';
   return (
     <>
       <button

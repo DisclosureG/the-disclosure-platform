@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import WalletButton from '../components/WalletButton';
 import AttestationVerifier from '../components/AttestationVerifier';
+import { BrandSigil } from '../components/Sparkle';
 import { useTierCounts, useTaxonomy, useRecentVotes, usePeerHandleMap, fetchBindingPreview } from '../evidence-data';
 import metamaskFox from '../assets/metamask-fox.svg';
 
@@ -76,12 +77,13 @@ function Nav() {
     <nav className="nav">
       <div className="nav-inner">
         <a href="#top" className="brand">
-          <span className="brand-text">The Disclosure Platform<small>The DeSci Network</small></span>
+          <BrandSigil />
+          <span className="brand-text">The Disclosure Platform<small>DeSci · Evidence Network</small></span>
         </a>
         <div className="nav-links">
           <a href="#top" className="is-active">Home</a>
-          <a href="/demo/evidence/">Evidence</a>
-          <a href="/demo/peer-review/">Peer Review</a>
+          <a href="/evidence/">Evidence</a>
+          <a href="/peer-review/">Peer Review</a>
         </div>
         <div className="nav-right">
           <WalletButton />
@@ -122,7 +124,7 @@ function HeroOrbit() {
       >
         <img
           className="h-tour-poster"
-          src="/demo/artefacts/tour-poster.jpg"
+          src="/artefacts/tour-poster.jpg"
           alt=""
           aria-hidden="true"
         />
@@ -144,8 +146,8 @@ function HeroOrbit() {
             <video
               ref={videoRef}
               className="h-tour-modal-video"
-              src="/demo/artefacts/tour.mp4"
-              poster="/demo/artefacts/tour-poster.jpg"
+              src="/artefacts/tour.mp4"
+              poster="/artefacts/tour-poster.jpg"
               controls
               playsInline
               preload="metadata"
@@ -163,21 +165,21 @@ function Hero() {
     <section id="top" className="h-hero">
       <div className="h-hero-inner">
         <div className="h-hero-left">
-          <span className="eyebrow">Public · On-chain · Peer-reviewed</span>
+          <span className="eyebrow">Public · Permanent · Peer-reviewed</span>
           <h1 className="display">Evidence,<br /><em>verified</em><br />by peers.</h1>
           <p className="lead">
             The truth the mainstream won't host — no data harvesting, no likes,
-            no ads, no status. Every claim is filed against the record that
-            supports it, judged in public by named peers, anchored on the
-            blockchain.
+            no ads, no status. Every claim is filed against the source that
+            backs it, checked in the open by named reviewers, and saved to a
+            permanent public record anyone can inspect.
           </p>
           <p className="lead-link">
-            <a href="/demo/artefacts/labour-of-love.pdf" target="_blank" rel="noopener noreferrer">
+            <a href="/artefacts/labour-of-love.pdf" target="_blank" rel="noopener noreferrer">
               Read the philosophy — A Labour of Love <span aria-hidden="true">→</span>
             </a>
           </p>
           <div className="h-hero-cta">
-            <a className="btn btn--primary" href="/demo/evidence/">Explore evidence <span>→</span></a>
+            <a className="btn btn--primary" href="/evidence/">Explore evidence <span>→</span></a>
             <a className="btn" href="#become-a-peer">Become a peer</a>
           </div>
         </div>
@@ -193,16 +195,16 @@ function Hero() {
 
 function SimpleIdea() {
   const rows = [
-    ['I', 'Every claim reaches a verdict.', 'No claim sits unjudged. Peer review canonizes, expels, or lapses every filing inside its review window — and a lapsed filing can be re-filed when fresh evidence arrives.'],
-    ['II', 'Every verdict is signed by named peers.', 'Verdicts are cast by wallet-identified peers and signed EIP-712, recovered on-chain. Every vote is accountable, every signer is recorded, every dissent is preserved.'],
-    ['III', 'Every verdict can be reopened.', 'Consensus is never frozen. Peers challenge canon, defend it, retire stale topics, and grow the archive wider (new pillars) and deeper (new topics) — all by signed consensus alone.'],
+    ['I', 'Every claim reaches an outcome.', 'No submission sits in limbo. Peers accept it into the archive, turn it away, or set it aside if they don’t reach a decision in time — and anything set aside can be re-submitted when fresh evidence arrives.'],
+    ['II', 'Every decision is signed by a named peer.', 'Each vote is cast by a named reviewer and signed with their own secure key, so anyone can confirm who decided what. Every vote is on the record, every signer is named, every disagreement is kept.'],
+    ['III', 'Every decision can be reopened.', 'Nothing is ever locked. Peers can re-open a past decision, defend it, retire topics that no longer hold up, and grow the archive wider (new categories) and deeper (new topics) — all by agreement among named peers.'],
   ];
   return (
     <section className="h-idea">
       <div className="h-idea-grid">
         <div>
           <span className="eyebrow">The simple idea</span>
-          <h2 className="h2" style={{ marginTop: 20 }}>A living consensus — reached by named peers, kept by an open ledger, reopened the moment the evidence changes.</h2>
+          <h2 className="h2" style={{ marginTop: 20 }}>A living agreement — reached by named peers, kept on an open public record.</h2>
         </div>
         <div className="h-three">
           {rows.map(([num, h, p]) => (
@@ -294,10 +296,10 @@ function LiveArchive({ counts, pillarCount, topicCount, peerCount, votes, handle
           <h2 className="h2" style={{ marginTop: 20 }}>A public record — of the people,<br /><em>by the people.</em></h2>
         </div>
         <p className="lead">
-          Every count is live — the tally moves the instant a new attestation
-          lands. Each verdict below is a named peer's vote, signed EIP-712 and
-          settled on BNB Smart Chain. Click any signature to verify it yourself.
-          No trust required.
+          Every count is live — it updates the instant a new vote lands. Each
+          decision below is a named peer's signed vote, saved to a permanent
+          public record. Click any signature to check it yourself. No trust
+          required.
         </p>
       </header>
 
@@ -309,7 +311,7 @@ function LiveArchive({ counts, pillarCount, topicCount, peerCount, votes, handle
           </div>
         </div>
         <div className="h-stat">
-          <div className="lab">Pillars</div>
+          <div className="lab">Categories</div>
           <div className="v">{pillarCount}<span className="u">wide</span></div>
         </div>
         <div className="h-stat">
@@ -324,8 +326,8 @@ function LiveArchive({ counts, pillarCount, topicCount, peerCount, votes, handle
 
       <div className="h-votes">
         <div className="h-votes-head">
-          <span className="h-votes-label"><span className="dot" /> Live consensus · every vote signed &amp; on-chain</span>
-          <a className="h-votes-link" href="/demo/peer-review/?observe=1">Open the full vote history <span aria-hidden="true">→</span></a>
+          <span className="h-votes-label"><span className="dot" /> Live decisions · every vote signed &amp; on the public record</span>
+          <a className="h-votes-link" href="/peer-review/?observe=1">Open the full vote history <span aria-hidden="true">→</span></a>
         </div>
         <div className="h-votes-table" role="table" aria-label="Recent on-chain peer votes">
           <div className="h-vote-row is-head" role="row">
@@ -337,7 +339,7 @@ function LiveArchive({ counts, pillarCount, topicCount, peerCount, votes, handle
             <span role="columnheader">Proof</span>
           </div>
           {votes.length === 0 ? (
-            <div className="h-votes-empty">No votes yet — the ledger opens with the first signed attestation.</div>
+            <div className="h-votes-empty">No votes yet — the record opens with the first signed vote.</div>
           ) : votes.map((v, i) => (
             <VoteRow key={v.id} v={v} isNew={i === 0} onOpen={openPreview} handleMap={handleMap} />
           ))}
@@ -354,10 +356,10 @@ function LiveArchive({ counts, pillarCount, topicCount, peerCount, votes, handle
 
 function BecomePeer({ peerCount }) {
   const steps = [
-    ['I', 'Connect your wallet', 'Bring a MetaMask wallet on BNB Smart Chain — no email, no profile. Your wallet is your identity. Reading the archive and submitting evidence stay open to everyone; verification is what unlocks reviewing, challenging, and proposing taxonomy.'],
-    ['II', 'Get nominated by a peer', 'An existing verified peer nominates your wallet with a handle. The named network vouches for who joins — there are no anonymous moderators and no application form.'],
-    ['III', 'Earn endorsements', 'Other verified peers endorse your nomination. The number needed scales with the network — one endorsement for every ten active peers, capped at 10 once the network passes 100. Reach that count and the contract verifies you automatically. No admin in the loop.'],
-    ['IV', 'Verify the record', 'As a verified peer you canonize evidence, file and defend challenges, and propose new pillars and topics. Every action is EIP-712 signed and anchored on a single BSC contract.'],
+    ['I', 'Sign in securely', 'Use a secure crypto wallet (like MetaMask) — no email, no profile. Your wallet is your identity. Reading the archive and submitting evidence stay open to everyone; becoming a peer is what unlocks voting, contesting, and proposing new topics.'],
+    ['II', 'Get nominated by a peer', 'An existing peer nominates you with a display name. The named network vouches for who joins — there are no anonymous moderators and no application form.'],
+    ['III', 'Earn support from peers', 'Other peers back your nomination. The number needed grows with the network — one for every ten active peers, capped at 10 once it passes 100. Reach that count and you’re approved automatically. No admin in the loop.'],
+    ['IV', 'Help verify the record', 'As a peer you accept evidence into the archive, raise and answer challenges, and propose new categories and topics. Every action is signed with your key and saved to one permanent public record.'],
   ];
   return (
     <section id="become-a-peer" className="h-peer">
@@ -366,13 +368,13 @@ function BecomePeer({ peerCount }) {
           <span className="eyebrow">Become a verified peer</span>
           <h2 className="h2" style={{ marginTop: 20 }}>Join the named network that verifies the record.</h2>
           <p className="lead">
-            Membership is governed entirely on-chain by the peers themselves —
-            nominated, endorsed, and ratified by consensus, never by an
+            Membership is run entirely by the peers themselves — you're
+            nominated, supported, and approved by the group, never by an
             administrator.{peerCount != null ? ` ${peerCount} verified peers today.` : ''}
           </p>
           <div className="h-peer-cta">
-            <a className="btn btn--primary" href="/demo/peer-review/"><WalletIcon /> Open Peer Review <span>→</span></a>
-            <a className="btn" href="/demo/artefacts/peer-review-engineering.pdf" target="_blank" rel="noopener noreferrer">Read the engineering paper <span aria-hidden="true">↗</span></a>
+            <a className="btn btn--primary" href="/peer-review/"><WalletIcon /> Open Peer Review <span>→</span></a>
+            <a className="btn" href="/artefacts/peer-review-engineering.pdf" target="_blank" rel="noopener noreferrer">Read the engineering paper <span aria-hidden="true">↗</span></a>
           </div>
         </div>
         <div className="h-three">
@@ -401,7 +403,7 @@ function Manifesto() {
   return (
     <section className="h-manifesto">
       <div className="h-manifesto-grid">
-        <p className="h-quote"><span className="drop">&ldquo;</span>A feed forgets. A record remembers.<span style={{ color: 'var(--accent)' }}>&rdquo;</span></p>
+        <p className="h-quote"><span className="drop">&ldquo;</span>A feed forgets. A record remembers.<span style={{ color: 'var(--accent-ink)' }}>&rdquo;</span></p>
         <div className="h-manifesto-side">
           <span className="eyebrow">What this is not</span>
           <ul className="h-no-list">
@@ -414,10 +416,60 @@ function Manifesto() {
             engagement loop. Peers carry handles and signatures, not vanity.
           </p>
           <p>
-            Submissions are public the instant they land. The contract is the only
-            gatekeeper, and the contract is open. Anyone may read; named peers
-            verify; the public watches.
+            Submissions are public the instant they land. The rules are enforced
+            by open code, not a company. Anyone may read; named peers verify;
+            the public watches.
           </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// Direct line to the people behind the record — no ticket queue, no form that
+// vanishes. A prominent mailto card with a copy-to-clipboard affordance, in
+// keeping with the "verify it yourself" ethos of the rest of the page.
+const CONTACT_EMAIL = 'genesis@thedisclosureplatform.com';
+function Contact() {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(CONTACT_EMAIL);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch { /* clipboard blocked — the mailto link still works */ }
+  };
+  return (
+    <section id="contact" className="h-contact">
+      <div className="h-contact-card">
+        <span className="eyebrow">Get in touch</span>
+        <h2 className="h2" style={{ marginTop: 18 }}>Questions or evidence?<br /><em>Write to us directly.</em></h2>
+        <p className="lead">
+          No ticket queue, no chatbot, no form that vanishes into a void — one
+          inbox, read by the people who keep the record.
+        </p>
+        <div className="h-contact-actions">
+          <a className="h-contact-mail" href={`mailto:${CONTACT_EMAIL}`}>
+            <span className="h-contact-mail-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22"><rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.6" /><path d="M4 7.5l8 5.2 8-5.2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </span>
+            <span className="h-contact-mail-text">
+              <span className="lab">Email the team</span>
+              <span className="addr">{CONTACT_EMAIL}</span>
+            </span>
+            <span className="h-contact-mail-go" aria-hidden="true">→</span>
+          </a>
+          <button
+            type="button"
+            className={`h-contact-copy${copied ? ' is-copied' : ''}`}
+            onClick={copy}
+            aria-label={copied ? 'Address copied' : `Copy ${CONTACT_EMAIL} to clipboard`}
+          >
+            {copied
+              ? <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M5 12.5l4 4 10-10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              : <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>}
+            {copied ? 'Copied' : 'Copy address'}
+          </button>
         </div>
       </div>
     </section>
@@ -460,6 +512,7 @@ export default function Home() {
       </Reveal>
       <Reveal><BecomePeer peerCount={peerCount} /></Reveal>
       <Reveal><Manifesto /></Reveal>
+      <Reveal><Contact /></Reveal>
     </div>
   );
 }

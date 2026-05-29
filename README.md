@@ -64,7 +64,7 @@ src/                    React frontend
   evidence/  peer-review/  index.html entry points (multi-page build)
 blockchain/             Hardhat project
   contracts/            EvidenceConsensus.sol
-  scripts/              deploy-consensus.js, precheck.js, consensus-args.js
+  scripts/              deploy-consensus.js, precheck.js, _preflight.js
   test/                 EvidenceConsensus.test.js
 supabase/
   migrations/           single consolidated schema migration

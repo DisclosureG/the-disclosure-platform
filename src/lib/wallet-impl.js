@@ -12,6 +12,7 @@ import { AbiCoder, BrowserProvider, Contract, Interface, JsonRpcProvider, keccak
 import {
   CONSENSUS_ADDR, CONSENSUS_ABI, CONSENSUS_CHAIN_ID,
   CONSENSUS_LENS_ADDR, CONSENSUS_LENS_ABI,
+  CONTENT_ARCHIVE_ADDR, ARCHIVE_ABI,
   CONSENSUS_GOVERNANCE_ADDR, GOVERNANCE_ABI,
   MULTICALL3_ADDR, MULTICALL3_ABI,
   ATTESTATION_DOMAIN, ATTESTATION_TYPES, VOTE_TYPES, VOTE_PHASE, FORCE_RENOUNCE_ID,
@@ -100,8 +101,11 @@ export function bytes32ToUuid(hex32) {
 // deliberately NOT part of the canonical payload.  Must stay byte-identical with
 // the `audit-content-hash` / `verify-attestation` edge functions.
 
-export function computeContentHash({ title, source, year, excerpt, link, tier }) {
-  const canon = JSON.stringify({
+// The canonical content string is the SINGLE source of truth for both the hash
+// and what gets published on-chain to EvidenceArchive — publish this exact string
+// (not a re-stringify) so `keccak256(string) == contentHash` holds on-chain.
+export function canonicalContentJSON({ title, source, year, excerpt, link, tier }) {
+  return JSON.stringify({
     title:   String(title ?? '').trim(),
     source:  String(source ?? '').trim(),
     year:    String(year ?? '').trim(),
@@ -109,7 +113,9 @@ export function computeContentHash({ title, source, year, excerpt, link, tier })
     link:    String(link ?? '').trim(),
     tier:    Number(tier),
   });
-  return keccak256(toUtf8Bytes(canon));
+}
+export function computeContentHash(content) {
+  return keccak256(toUtf8Bytes(canonicalContentJSON(content)));
 }
 
 // ── Attestation signature recovery ───────────────────────────────────────────
@@ -146,8 +152,10 @@ export function slugToBytes32(slug) {
   return keccak256(toUtf8Bytes(String(slug)));
 }
 
-export function computeMetaHash({ kind, slug, parent, title, blurb, tag }) {
-  const canon = JSON.stringify({
+// As with content: this exact string is both hashed AND published on-chain to
+// EvidenceArchive, so a wipe can recover the readable node metadata verbatim.
+export function canonicalMetaJSON({ kind, slug, parent, title, blurb, tag }) {
+  return JSON.stringify({
     kind:   String(kind),
     slug:   String(slug ?? '').trim(),
     parent: String(parent ?? '').trim(),
@@ -155,7 +163,9 @@ export function computeMetaHash({ kind, slug, parent, title, blurb, tag }) {
     blurb:  String(blurb ?? '').trim(),
     tag:    String(tag ?? '').trim(),
   });
-  return keccak256(toUtf8Bytes(canon));
+}
+export function computeMetaHash(meta) {
+  return keccak256(toUtf8Bytes(canonicalMetaJSON(meta)));
 }
 
 // ── Wallet ──────────────────────────────────────────────────────────────────
@@ -373,7 +383,7 @@ export async function getTopicsAggregated(pillarId) {
 // Pending pillar/topic proposals with live endorsement counts (Lens view).
 export async function getProposedNodesAggregated() {
   try {
-    const [ids, kinds, parents, metaHashes, proposers, endorsements] = await lensContract().getProposedNodes();
+    const [ids, kinds, parents, metaHashes, proposers, endorsements, rejections] = await lensContract().getProposedNodes();
     return ids.map((id, i) => ({
       id:           id.toLowerCase(),
       kind:         Number(kinds[i]),               // 0 = pillar, 1 = topic
@@ -381,6 +391,7 @@ export async function getProposedNodesAggregated() {
       metaHash:     (metaHashes[i] ?? '').toLowerCase(),
       proposer:     (proposers[i] ?? '').toLowerCase(),
       endorsements: Number(endorsements[i] ?? 0),
+      rejections:   Number(rejections?.[i] ?? 0),
     }));
   } catch { return []; }
 }
@@ -546,6 +557,19 @@ export async function endorseNodeOnChain(id, note = '') {
   const tx = await c.endorseNode(id, noteHash, sig);
   return { txHash: tx.hash, sig, noteHash, round };
 }
+// Reject is the dissent mirror of endorse: the SAME Vote (phase 2, current round)
+// but support=false. The moment rejections make ratification impossible the
+// contract settles the node as terminal Rejected; otherwise it just adds to the
+// dissent tally. Returns { txHash, sig, noteHash, round } so the off-chain record
+// persists the same note + signature the chain recovered.
+export async function rejectNodeOnChain(id, note = '') {
+  const round    = Number(await readContract().nodeRound(id));
+  const noteHash = noteHashOf(note);
+  const sig      = await signVote({ bindingId: id, phase: VOTE_PHASE.taxonomy, support: false, round, noteHash });
+  const c  = await writeContract();
+  const tx = await c.rejectNode(id, noteHash, sig);
+  return { txHash: tx.hash, sig, noteHash, round };
+}
 
 // Taxonomy retirement (ratified-node governance). `id` is the bytes32 node id.
 // Vote-by-signature (phase 3); motion mints round+1, vote signs current round.
@@ -569,6 +593,53 @@ export async function cancelStaleRetireOnChain(id)                  { return sen
 
 export async function submitEvidenceOnChain(uuid, tier, topicId, ch) { return sendTx('submitEvidence', [uuidToBytes32(uuid), tier, topicId, ch]); }
 export async function fileBindingOnChain(uuid, topicId)        { return sendTx('fileBinding', [uuidToBytes32(uuid), topicId]); }
+
+// ── EvidenceArchive: publish readable strings on-chain ───────────────────────
+//
+// The core commits only hashes; these push the actual content / metadata / note
+// text to the EvidenceArchive sidecar (each verified on-chain against the core's
+// hash) so the chain is a complete backup and Supabase is a disposable
+// projection. All are permissionless and idempotent — safe to retry / backfill.
+async function archiveWriteContract() {
+  if (!CONTENT_ARCHIVE_ADDR) throw new Error('VITE_CONTENT_ARCHIVE_ADDR not set');
+  const signer = await getBrowserProvider().getSigner();
+  return new Contract(CONTENT_ARCHIVE_ADDR, ARCHIVE_ABI, signer);
+}
+
+// `content` = { title, source, year, excerpt, link, tier } (hash-bound);
+// `extra`   = { type, tags } (not hash-bound, stored as-is for a full rebuild).
+export async function publishEvidenceContentOnChain(uuid, content, extra = {}) {
+  const c  = await archiveWriteContract();
+  const tx = await c.publishEvidenceContent(uuidToBytes32(uuid), canonicalContentJSON(content), JSON.stringify(extra ?? {}));
+  return tx.hash;
+}
+
+// `nodeId` is the bytes32 slug hash (slugToBytes32(slug)); `meta` =
+// { kind, slug, parent, title, blurb, tag }.
+export async function publishNodeMetaOnChain(nodeId, meta) {
+  const c  = await archiveWriteContract();
+  const tx = await c.publishNodeMeta(nodeId, canonicalMetaJSON(meta));
+  return tx.hash;
+}
+
+// Publishes a deliberation note's text, keyed on-chain by keccak256(text) — the
+// same noteHash the signed vote committed. Empty notes have no recoverable text
+// (their noteHash is the ZeroHash sentinel), so this no-ops on them.
+export async function publishNoteOnChain(text) {
+  const s = String(text ?? '');
+  if (!s.length) return null;
+  const c  = await archiveWriteContract();
+  const tx = await c.publishNote(s);
+  return tx.hash;
+}
+
+export async function publishNotesOnChain(texts) {
+  const list = (texts || []).map(t => String(t ?? '')).filter(s => s.length);
+  if (!list.length) return null;
+  const c  = await archiveWriteContract();
+  const tx = await c.publishNotes(list);
+  return tx.hash;
+}
 // Vote writes are by-signature: they sign the EIP-712 Vote (bound to the
 // binding's current round + the note hash) and submit it. They return
 // { txHash, sig, noteHash, round, bindingHash } so the off-chain writer can

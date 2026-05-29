@@ -65,7 +65,7 @@ export default function EvidenceDetailBody({ e, statusLabel }) {
         <div className="ev-contested-notice">
           <div className="ev-contested-notice-label">Under challenge</div>
           <p>{e.challenge_reason}</p>
-          <a href="/demo/peer-review/" className="ev-contested-notice-link">
+          <a href="/peer-review/" className="ev-contested-notice-link">
             Vote in Peer Review →
           </a>
         </div>

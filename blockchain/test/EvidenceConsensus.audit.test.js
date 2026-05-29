@@ -2,8 +2,14 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time }   = require("@nomicfoundation/hardhat-toolbox/network-helpers");
 
-const NodeState = { None: 0, Proposed: 1, Ratified: 2, Retired: 3 };
+const NodeState = { None: 0, Proposed: 1, Ratified: 2, Retired: 3, Rejected: 4 };
 const State = { None: 0, Submitted: 1, Canon: 2, Expelled: 3, Lapsed: 4, Contested: 5, Deprecated: 6, Reaffirmed: 7 };
+
+// JS mirrors of the contract's internal threshold formulas (the standalone
+// percentage getters were dropped from the core for EIP-170 headroom).
+const ceilPct = (n, pct) => Math.max(1, Math.ceil((n * pct) / 100));
+const canonT  = (tier, n) => ceilPct(n, tier === 1 ? 60 : tier === 2 ? 55 : 51);
+const deprecT = (tier, n) => ceilPct(n, tier === 1 ? 65 : tier === 2 ? 60 : 55);
 
 const DAY = 24 * 60 * 60;
 const PENDING_WINDOW   = 30 * DAY;
@@ -310,7 +316,7 @@ describe("HARDENING E — review outcome is judged against a peer-count snapshot
 
     for (let k = 0; k < 6; k++) await c.addPeer(ethers.Wallet.createRandom().address, "p");
     expect(await c.activePeerCount()).to.equal(10n);
-    expect(await c.canonizeThreshold(3)).to.equal(6n); // live threshold is now 6
+    expect(canonT(3, 10)).to.equal(6); // live threshold is now 6
 
     for (let i = 0; i < 3; i++) await reviewVote(c, peers[i], id, nodeId("seed-topic"), true);
     expect((await c.getBinding(id, nodeId("seed-topic"))).state).to.equal(State.Canon); // snapshot bar = 3
@@ -358,7 +364,7 @@ describe("HARDENING E — review outcome is judged against a peer-count snapshot
 describe("HARDENING — challenge deprecate vs reaffirm math", () => {
   async function canonize(c, peers, id, tier, TOPIC) {
     await c.connect(peers[0]).submitEvidence(id, tier, TOPIC, ch("e" + id));
-    const need = Number(await c.canonizeThreshold(tier));
+    const need = canonT(tier, Number(await c.activePeerCount()));
     for (let i = 0; i < need; i++) await reviewVote(c, peers[i], id, TOPIC, true);
   }
 
@@ -432,7 +438,7 @@ describe("AUDIT FIX F1b — canon evidence needs a live supermajority to depreca
 
     await openChallengeSigned(c, peers[0], id, TOPIC); // challengeVotes = 1 (snapshot 4)
     for (let k = 4; k < 10; k++) await c.connect(peers[0]).addPeer(signers[k].address, "p" + k);
-    expect(await c.deprecateThreshold(1)).to.equal(7n); // live supermajority
+    expect(deprecT(1, 10)).to.equal(7); // live supermajority
 
     // challenger + 2 = 3 votes: would have deprecated on the stale snapshot, now must NOT
     await challengeVote(c, peers[1], id, TOPIC, true);

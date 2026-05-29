@@ -67,3 +67,7 @@ verify_jwt = false
 [functions.gov-note]
 enabled = true
 verify_jwt = false
+
+[functions.archive-flush]
+enabled = true
+verify_jwt = false

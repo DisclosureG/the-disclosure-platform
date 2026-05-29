@@ -79,6 +79,9 @@ contract PeerGovernance {
             s := calldataload(add(sig.offset, 32))
             v := byte(0, calldataload(add(sig.offset, 64)))
         }
+        // Reject non-canonical (malleable) signatures: enforce low-s and v∈{27,28}.
+        require(uint256(s) <= 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0, "bad s");
+        require(v == 27 || v == 28, "bad v");
         address signer = ecrecover(digest, v, r, s);
         require(signer != address(0), "bad sig");
         return signer;
@@ -102,6 +105,10 @@ contract PeerGovernance {
     mapping(address => uint32)  public nomineeRound;      // bumped per (re-)nomination; isolates endorsements
     // _endorsedNominee[nominee][round][endorser] — fresh eligibility each nomination.
     mapping(address => mapping(uint32 => mapping(address => bool))) private _endorsedNominee;
+    // activePeerCount FROZEN at nomination: the 1/3+1 admission gate is judged
+    // against this, not the live count, so peers leaving mid-nomination can't
+    // lower the bar nor let endorsements from since-departed peers admit a nominee.
+    mapping(address => uint32) private nomineeSnapshot;
 
     // ── Revocation state ─────────────────────────────────────────────────────
 
@@ -111,6 +118,9 @@ contract PeerGovernance {
     mapping(address => uint32) public revokeRound;        // bumped per motion; isolates votes
     // _votedRevoke[peer][round][voter] — fresh eligibility each motion.
     mapping(address => mapping(uint32 => mapping(address => bool))) private _votedRevoke;
+    // activePeerCount FROZEN at motion-open: the majority bar is judged against
+    // this, so a shrink can't lower it (nor let departed peers' votes carry it).
+    mapping(address => uint32) private revokeSnapshot;
 
     // ── Events ───────────────────────────────────────────────────────────────
 
@@ -138,15 +148,29 @@ contract PeerGovernance {
 
     // ── Threshold / gate helpers ──────────────────────────────────────────────
 
-    /// @notice Admission / taxonomy gate — floor(n/3) + 1, i.e. STRICTLY more
-    /// than one third of peers.
-    function nomineeThreshold() public view returns (uint256) {
-        return core.activePeerCount() / 3 + 1; // ≥ 1 for all n ≥ 0
+    /// @notice Admission gate — floor(n/3) + 1, i.e. STRICTLY more than one third
+    /// of peers.  The `*At` helper takes an explicit n so a nomination/motion can
+    /// be judged against the peer count FROZEN when it opened (see nomineeSnapshot
+    /// / revokeSnapshot), keeping the outcome independent of churn during the vote.
+    function _nomineeThresholdAt(uint256 n) internal pure returns (uint256) {
+        return n / 3 + 1; // ≥ 1 for all n ≥ 0
     }
 
-    function revokeThreshold() public view returns (uint256) {
-        uint256 raw = (core.activePeerCount() + 1) / 2; // ceiling(n / 2)
+    /// @notice The live admission gate (display of a fresh nomination).  An open
+    /// nomination is judged against its frozen `nomineeSnapshot`, not this.
+    function nomineeThreshold() public view returns (uint256) {
+        return _nomineeThresholdAt(core.activePeerCount());
+    }
+
+    function _revokeThresholdAt(uint256 n) internal pure returns (uint256) {
+        uint256 raw = (n + 1) / 2; // ceiling(n / 2)
         return raw < 1 ? 1 : raw;
+    }
+
+    /// @notice The live majority gate (display of a fresh motion).  An open
+    /// revocation is judged against its frozen `revokeSnapshot`, not this.
+    function revokeThreshold() public view returns (uint256) {
+        return _revokeThresholdAt(core.activePeerCount());
     }
 
     /// @notice Community nomination is open once the seed phase is reached.  If
@@ -180,11 +204,12 @@ contract PeerGovernance {
         nomineeBy[nominee]           = msg.sender;
         nomineeAt[nominee]           = uint48(block.timestamp);
         nomineeEndorsements[nominee] = 0;
+        nomineeSnapshot[nominee]     = uint32(core.activePeerCount()); // freeze the 1/3+1 bar
 
         _nomineeList.push(nominee);
         nomineeIndex[nominee] = _nomineeList.length; // 1-based
 
-        emit PeerNominated(nominee, handle, msg.sender, nomineeThreshold());
+        emit PeerNominated(nominee, handle, msg.sender, _nomineeThresholdAt(nomineeSnapshot[nominee]));
     }
 
     function endorseNominee(address nominee, bytes32 noteHash, bytes calldata sig)
@@ -198,7 +223,7 @@ contract PeerGovernance {
         _endorsedNominee[nominee][round][msg.sender] = true;
         nomineeEndorsements[nominee]++;
 
-        uint256 threshold = nomineeThreshold();
+        uint256 threshold = _nomineeThresholdAt(nomineeSnapshot[nominee]);
         emit PeerEndorsed(nominee, msg.sender, nomineeEndorsements[nominee], threshold);
         _checkNominee(nominee, threshold);
     }
@@ -207,6 +232,13 @@ contract PeerGovernance {
         if (nomineeEndorsements[nominee] >= threshold) {
             string memory handle = nomineeHandle[nominee];
             _removeNominee(nominee);
+            // A re-admitted peer must start with a clean revocation slate: a prior
+            // membership may have left an active motion / non-zero tally that the
+            // core's `pruneInactivePeer` removal path never cleared (only a
+            // successful gRemovePeer here does).  Without this, a stale near-quorum
+            // could finalize on a single fresh vote after re-admission.
+            revocationActive[nominee] = false;
+            revokeVoteCount[nominee]  = 0;
             core.gAddPeer(nominee, handle);
             emit NomineeVerified(nominee, handle, core.activePeerCount());
         }
@@ -264,9 +296,10 @@ contract PeerGovernance {
         revocationActive[peer]              = true;
         revokeMotionAt[peer]                = uint48(block.timestamp);
         revokeVoteCount[peer]               = 1;
+        revokeSnapshot[peer]                = uint32(core.activePeerCount()); // freeze the majority bar
         _votedRevoke[peer][round][msg.sender] = true;
 
-        uint256 threshold = revokeThreshold();
+        uint256 threshold = _revokeThresholdAt(revokeSnapshot[peer]);
         emit RevocationMotioned(peer, msg.sender, threshold);
         emit RevocationVoteCast(peer, msg.sender, 1, threshold);
 
@@ -284,7 +317,7 @@ contract PeerGovernance {
         _votedRevoke[peer][round][msg.sender] = true;
         revokeVoteCount[peer]++;
 
-        uint256 thresh = revokeThreshold();
+        uint256 thresh = _revokeThresholdAt(revokeSnapshot[peer]);
         emit RevocationVoteCast(peer, msg.sender, revokeVoteCount[peer], thresh);
 
         _checkRevocation(peer, thresh);
@@ -301,6 +334,14 @@ contract PeerGovernance {
         emit RevocationCancelled(peer);
     }
 
+    // NB: revocation is deliberately NOT floored at seedPhaseK (only the core's
+    // automatic pruneInactivePeer is).  A revoke is a majority consensus act and
+    // must be able to shrink the set below the seed floor to remove a bad actor —
+    // the network is explicitly built for the resulting small state (the owner may
+    // re-seed in seed phase, and nominationsOpen() stays true post-renounce so the
+    // set can re-grow).  The residual small-network capture risk is inherent to
+    // the honest-majority trust model (a majority coalition that could revoke-to-
+    // capture already controls every other vote) and is accepted, not gated here.
     function _checkRevocation(address peer, uint256 thresh) internal {
         if (revokeVoteCount[peer] >= thresh) {
             revocationActive[peer] = false;
